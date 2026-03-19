@@ -1,0 +1,20 @@
+{
+  "name": "ai-village",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A pixel world where AI agents live",
+  "scripts": {
+    "dev:client": "pnpm --filter @ai-village/client dev",
+    "dev:server": "pnpm --filter @ai-village/server dev",
+    "dev": "pnpm run --parallel dev:client dev:server",
+    "build": "pnpm run --recursive build",
+    "lint": "pnpm run --recursive lint",
+    "test": "pnpm run --recursive test",
+    "spawn": "pnpm --filter @ai-village/server spawn"
+  },
+  "keywords": ["ai", "agents", "simulation", "generative-agents", "pixel-art", "mmo"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
