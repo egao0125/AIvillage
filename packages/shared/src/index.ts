@@ -17,8 +17,9 @@ export interface AgentConfig {
   age: number;
   occupation: string;
   personality: AgentPersonality;
-  backstory: string;
-  goal: string;
+  soul: string;        // Free-form personality description (Moltbook SOUL.md style)
+  backstory: string;   // Legacy — prefer soul
+  goal: string;        // Legacy — prefer soul
   spriteId: string;
 }
 
@@ -28,6 +29,7 @@ export interface Agent {
   position: Position;
   state: AgentState;
   currentAction: string;
+  currency: number;
   createdAt: number;
   ownerId: string;
 }
@@ -106,3 +108,50 @@ export type ClientEvent =
   | { type: "viewport:update"; bounds: { x: number; y: number; width: number; height: number } }
   | { type: "agent:select"; agentId: string }
   | { type: "tip:send"; agentId: string; item: string; message?: string };
+
+// --- Game Time & Planning ---
+
+export interface GameTime {
+  day: number;
+  hour: number;
+  minute: number;
+  totalMinutes: number;
+}
+
+export interface DayPlanItem {
+  time: number;
+  duration: number;
+  activity: string;
+  location: string;
+  emoji?: string;
+}
+
+export interface DayPlan {
+  agentId: string;
+  day: number;
+  items: DayPlanItem[];
+}
+
+// --- Village Board ---
+
+export type BoardPostType = 'decree' | 'rule' | 'announcement' | 'rumor' | 'threat' | 'alliance' | 'bounty';
+
+export interface BoardPost {
+  id: string;
+  authorId: string;
+  authorName: string;
+  type: BoardPostType;
+  content: string;
+  timestamp: number;
+  day: number;
+  targetIds?: string[];   // agents this post is about
+  revoked?: boolean;      // if a rule/decree was revoked
+}
+
+export interface WorldSnapshot {
+  time: GameTime;
+  agents: Agent[];
+  conversations: Conversation[];
+  areas: MapArea[];
+  board: BoardPost[];
+}
