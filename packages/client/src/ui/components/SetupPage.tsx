@@ -68,6 +68,17 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
   const [goal, setGoal] = useState('');
   const [startingGold, setStartingGold] = useState(100);
   const [soul, setSoul] = useState('');
+  const [personality, setPersonality] = useState({
+    openness: 50, conscientiousness: 50, extraversion: 50,
+    agreeableness: 50, neuroticism: 50,
+  });
+  const [showPersonality, setShowPersonality] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [fears, setFears] = useState('');
+  const [desires, setDesires] = useState('');
+  const [coreValues, setCoreValues] = useState('');
+  const [contradictions, setContradictions] = useState('');
+  const [speechPattern, setSpeechPattern] = useState('');
   const [createdAgents, setCreatedAgents] = useState<CreatedAgent[]>([]);
   const [addingAgent, setAddingAgent] = useState(false);
   const [deletingAgent, setDeletingAgent] = useState<string | null>(null);
@@ -213,6 +224,18 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
           soul: soul.trim(),
           apiKey: apiKey.trim(),
           model,
+          personality: {
+            openness: personality.openness / 100,
+            conscientiousness: personality.conscientiousness / 100,
+            extraversion: personality.extraversion / 100,
+            agreeableness: personality.agreeableness / 100,
+            neuroticism: personality.neuroticism / 100,
+          },
+          fears: fears.trim() ? fears.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+          desires: desires.trim() ? desires.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+          coreValues: coreValues.trim() ? coreValues.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+          contradictions: contradictions.trim() || undefined,
+          speechPattern: speechPattern.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -241,6 +264,14 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       setGoal('');
       setStartingGold(100);
       setSoul('');
+      setPersonality({ openness: 50, conscientiousness: 50, extraversion: 50, agreeableness: 50, neuroticism: 50 });
+      setShowPersonality(false);
+      setShowAdvanced(false);
+      setFears('');
+      setDesires('');
+      setCoreValues('');
+      setContradictions('');
+      setSpeechPattern('');
       nameInputRef.current?.focus();
     } catch {
       setError('Cannot reach server');
@@ -719,6 +750,138 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                 className="s-input"
                 style={inputStyle}
               />
+            </div>
+
+            {/* Personality */}
+            <div style={{ marginBottom: 14 }}>
+              <button
+                type="button"
+                onClick={() => setShowPersonality(!showPersonality)}
+                style={{
+                  fontFamily: FONTS.pixel,
+                  fontSize: 6,
+                  color: showPersonality ? ACCENT : LABEL_COLOR,
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  letterSpacing: 1,
+                  transition: 'color 0.15s',
+                }}
+              >
+                {showPersonality ? '▾' : '▸'} PERSONALITY
+              </button>
+              {showPersonality && (
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {([
+                    { key: 'openness' as const, low: 'Conventional', high: 'Creative' },
+                    { key: 'conscientiousness' as const, low: 'Spontaneous', high: 'Organized' },
+                    { key: 'extraversion' as const, low: 'Reserved', high: 'Outgoing' },
+                    { key: 'agreeableness' as const, low: 'Competitive', high: 'Cooperative' },
+                    { key: 'neuroticism' as const, low: 'Calm', high: 'Anxious' },
+                  ]).map(({ key, low, high }) => (
+                    <div key={key}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                        <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: LABEL_COLOR, textTransform: 'uppercase', letterSpacing: 1 }}>{key}</span>
+                        <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM }}>{personality[key]}%</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM, width: 70, textAlign: 'right' }}>{low}</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={personality[key]}
+                          onChange={(e) => setPersonality(prev => ({ ...prev, [key]: parseInt(e.target.value) }))}
+                          style={{ flex: 1, accentColor: ACCENT }}
+                        />
+                        <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM, width: 70 }}>{high}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Advanced Identity */}
+            <div style={{ marginBottom: 14 }}>
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                style={{
+                  fontFamily: FONTS.pixel,
+                  fontSize: 6,
+                  color: showAdvanced ? ACCENT : LABEL_COLOR,
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                  letterSpacing: 1,
+                  transition: 'color 0.15s',
+                }}
+              >
+                {showAdvanced ? '▾' : '▸'} DEEP IDENTITY
+              </button>
+              {showAdvanced && (
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div>
+                    <label style={labelStyle}>FEARS</label>
+                    <input
+                      type="text"
+                      value={fears}
+                      onChange={(e) => setFears(e.target.value.slice(0, 300))}
+                      placeholder="abandonment, being exposed as a fraud"
+                      className="s-input"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>DESIRES</label>
+                    <input
+                      type="text"
+                      value={desires}
+                      onChange={(e) => setDesires(e.target.value.slice(0, 300))}
+                      placeholder="respect, a family, to be remembered"
+                      className="s-input"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>CORE VALUES</label>
+                    <input
+                      type="text"
+                      value={coreValues}
+                      onChange={(e) => setCoreValues(e.target.value.slice(0, 300))}
+                      placeholder="loyalty, honesty, freedom"
+                      className="s-input"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>CONTRADICTIONS</label>
+                    <input
+                      type="text"
+                      value={contradictions}
+                      onChange={(e) => setContradictions(e.target.value.slice(0, 200))}
+                      placeholder="Preaches honesty but lies to protect people"
+                      className="s-input"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>SPEECH PATTERN</label>
+                    <input
+                      type="text"
+                      value={speechPattern}
+                      onChange={(e) => setSpeechPattern(e.target.value.slice(0, 200))}
+                      placeholder="Talks in short bursts, uses old slang"
+                      className="s-input"
+                      style={inputStyle}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Divider */}

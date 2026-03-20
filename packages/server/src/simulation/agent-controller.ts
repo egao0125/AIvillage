@@ -355,26 +355,20 @@ export class AgentController {
           this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
         }
-      } else if (atFoodLocation && this.agent.currency >= 5) {
-        // Buy food at commercial location
-        this.world.updateAgentCurrency(this.agent.id, -5);
-        if (this.agent.vitals) {
-          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
-          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
-        }
-        this.broadcaster.agentCurrency(this.agent.id, this.agent.currency, -5, `bought food at ${this.currentAreaId}`);
-        console.log(`[Agent] ${this.agent.config.name} bought food at ${this.currentAreaId} for 5g`);
-      } else if (this.agent.vitals) {
-        // No food and no gold — still reduces hunger slightly from location ambiance
-        this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 10);
       }
     }
 
-    // Healing at hospital
+    // Healing at hospital — requires consuming a medicine/herb item
     const isHealingActivity = lowerActivity.includes('heal') || lowerActivity.includes('medicine') || lowerActivity.includes('treat') || lowerActivity.includes('doctor') || lowerActivity.includes('clinic');
     if ((this.currentAreaId === 'hospital' || isHealingActivity) && this.agent.vitals) {
-      this.agent.vitals.health = Math.min(100, this.agent.vitals.health + 20);
-      console.log(`[Agent] ${this.agent.config.name} healed at hospital (health: ${this.agent.vitals.health})`);
+      const medicineItem = this.agent.inventory.find(i =>
+        i.type === 'food' && (i.name.toLowerCase().includes('herb') || i.name.toLowerCase().includes('medicine') || i.name.toLowerCase().includes('potion'))
+      );
+      if (medicineItem) {
+        this.world.removeItem(medicineItem.id);
+        this.agent.vitals.health = Math.min(100, this.agent.vitals.health + 20);
+        console.log(`[Agent] ${this.agent.config.name} used ${medicineItem.name} to heal (health: ${this.agent.vitals.health})`);
+      }
     }
 
     // Auto-gather food at gathering locations

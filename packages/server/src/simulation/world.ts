@@ -43,10 +43,6 @@ export class World {
       { areaId: 'lake', material: 'clay', respawnMinutes: 60 },
       { areaId: 'garden', material: 'herbs', respawnMinutes: 35 },
       { areaId: 'garden', material: 'flowers', respawnMinutes: 35 },
-      // Food spawns at commercial locations
-      { areaId: 'cafe', material: 'coffee', respawnMinutes: 20 },
-      { areaId: 'bakery', material: 'bread', respawnMinutes: 20 },
-      { areaId: 'tavern', material: 'stew', respawnMinutes: 25 },
     ];
   }
 

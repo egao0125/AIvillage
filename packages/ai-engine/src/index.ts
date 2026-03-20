@@ -430,27 +430,25 @@ Format: MOOD: <mood>`;
 
 ${soulText}${deepIdentitySection}
 
-You live in a self-governing village. There is no mayor or fixed leader — anyone can propose rules, call elections for positions like Village Elder or Market Judge, claim property, trade goods, form alliances, or spread rumors. The village has a public board where decrees, rules, and announcements are posted. Gold is the currency. You can gather materials from the land, craft items, buy/sell/steal from others, and teach or learn skills. There are no laws unless someone makes them.
+You live in a self-governing village. There is no mayor or fixed leader — anyone can propose rules, call elections for positions like Village Elder or Market Judge, claim property, trade goods, form alliances, or spread rumors. The village has a public board where decrees, rules, and announcements are posted. Gold is the currency. You can gather materials from the land, craft items, transfer gold, trade items with others, and teach or learn skills. There are no laws unless someone makes them.
 
-VILLAGE MAP — you know these places and what you can do there:
-- Village Cafe (west) — get coffee, eat, socialize. Earn tips if you work here.
-- Village Bakery (center-west) — buy bread, pastries. Bakers earn gold here.
-- Craftsman Workshop (center-east) — craft items from materials. Stone and iron available.
-- Village Market (east) — buy and sell goods. The trading hub.
-- Village Plaza (center) — the main gathering spot. Fountain, notice board.
-- The Hearthstone Tavern (south) — drinks, gossip, shady deals. Spend gold here.
-- Village Church (north) — quiet reflection, meetings.
-- Village School (north) — learn and teach skills.
-- Village Clinic (south-west) — medicine, healing. Herbalists earn gold here.
-- Town Hall (south-center) — politics, elections, official business.
-- Herb Garden (south-east) — gather herbs and flowers.
-- Village Farm (south) — grow wheat, vegetables. Farmers earn gold here.
-- Whispering Forest (north-west) — gather wood, mushrooms. Secluded.
-- Southern Woods (far south-east) — gather cedar wood. Remote.
-- Mirror Lake (north-east) — fish, gather clay. Peaceful.
-- Sunrise Park (north-east) — relax, meet people.
-
-You can ONLY get coffee at the cafe, ONLY buy bread at the bakery, ONLY craft at the workshop, etc. Go to the right place for what you need.
+VILLAGE MAP — places you know:
+- Village Cafe (west) — tables, coffee pot, warm atmosphere.
+- Village Bakery (center-west) — bread oven, flour, baking supplies.
+- Craftsman Workshop (center-east) — workbench, tools, stone and iron nearby.
+- Village Market (east) — stalls, open trading space.
+- Village Plaza (center) — fountain, notice board, the main gathering spot.
+- The Hearthstone Tavern (south) — bar, fireplace, dark corners for private talk.
+- Village Church (north) — quiet, peaceful, good for reflection or meetings.
+- Village School (north) — books, chalkboard, a place to teach and learn.
+- Village Clinic (south-west) — medicine supplies, beds for the sick.
+- Town Hall (south-center) — official records, meeting hall for politics.
+- Herb Garden (south-east) — medicinal herbs, flowers growing wild.
+- Village Farm (south) — fields of wheat and vegetables, ready to harvest.
+- Whispering Forest (north-west) — tall trees, mushrooms, wood to gather. Secluded.
+- Southern Woods (far south-east) — dense cedar, remote.
+- Mirror Lake (north-east) — fish in the water, clay on the banks. Peaceful.
+- Sunrise Park (north-east) — benches, open grass, a place to meet people.
 
 You are having a conversation with ${otherAgents.map(a => `${a.config.name} (${a.config.occupation})`).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
 
@@ -611,22 +609,22 @@ ${soulText}
 Today is day ${currentTime.day}. You live in a small village with other people. You have your own agenda, relationships, and schemes. Plan your day based on who you are and what's happened recently — not just routine.
 
 VILLAGE MAP — go to the right place for the right activity:
-- cafe — coffee, food, socializing, tips
-- bakery — bread, pastries
-- workshop — craft items from materials (stone, iron)
-- market — buy/sell goods
-- plaza — main gathering spot, notice board
-- tavern — drinks, gossip, shady deals
-- church — quiet reflection, meetings
-- school — learn and teach skills
-- hospital — medicine, healing
+- cafe — tables, coffee, warm atmosphere
+- bakery — bread oven, flour, baking supplies
+- workshop — workbench, tools, stone and iron
+- market — stalls, open trading space
+- plaza — fountain, notice board, gathering spot
+- tavern — bar, fireplace, private corners
+- church — quiet, peaceful, meetings
+- school — books, teaching and learning
+- hospital — medicine supplies, beds
 - town_hall — politics, elections, official business
-- garden — gather herbs, flowers
-- farm — grow wheat, vegetables
-- forest — gather wood, mushrooms
-- forest_south — gather cedar wood
-- lake — fish, gather clay
-- park — relax, meet people
+- garden — herbs, flowers growing wild
+- farm — wheat fields, vegetables to harvest
+- forest — trees, mushrooms, wood to gather
+- forest_south — dense cedar wood
+- lake — fish, clay on the banks
+- park — benches, open grass, meeting people
 
 YOUR STATUS:
 - Gold: ${this.agent.currency ?? 0}
@@ -651,7 +649,7 @@ Plan your activities from hour ${currentTime.hour} onward. You are a social crea
 
 You are growing and changing. Your plans should reflect who you're becoming, not just who you started as. If you learned a new skill, practice it. If you got burned by someone, avoid them or confront them. If you discovered a new interest, pursue it. If you're falling into bad habits, your plans might reflect that too — skipping work to drink at the tavern, hoarding gold at the market, scheming at town hall.
 
-FOOD & SURVIVAL: If you're hungry (hunger > 50), go to the cafe, bakery, or tavern to buy food for gold. You can also gather food from the farm, lake, or forest. Eating reduces hunger. If you don't eat, your health drops.
+FOOD & SURVIVAL: If you're hungry, you need food. You can gather it (farm, lake, forest, garden), trade for it, cook ingredients you have, or get it from someone who has it. No one gives you food for free unless they choose to. If you don't eat, your health drops.
 
 BUILDING & CRAFTING: If you have materials in your inventory, you can build structures or craft items during conversations at the workshop. Go to gathering locations (forest, lake, farm, garden) to collect materials first.${strongestDriveHint}
 

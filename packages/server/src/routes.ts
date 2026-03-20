@@ -209,6 +209,21 @@ export function createRouter(engine: SimulationEngine): Router {
         backstory: safeBackstory,
         goal: safeGoal,
         spriteId: 'default',
+        fears: Array.isArray(req.body.fears)
+          ? req.body.fears.map((s: any) => sanitizeText(String(s), 100)).filter(Boolean).slice(0, 5)
+          : undefined,
+        desires: Array.isArray(req.body.desires)
+          ? req.body.desires.map((s: any) => sanitizeText(String(s), 100)).filter(Boolean).slice(0, 5)
+          : undefined,
+        coreValues: Array.isArray(req.body.coreValues)
+          ? req.body.coreValues.map((s: any) => sanitizeText(String(s), 100)).filter(Boolean).slice(0, 5)
+          : undefined,
+        contradictions: req.body.contradictions
+          ? sanitizeText(String(req.body.contradictions), 200)
+          : undefined,
+        speechPattern: req.body.speechPattern
+          ? sanitizeText(String(req.body.speechPattern), 200)
+          : undefined,
       };
 
       // Validate sanitized name isn't empty
