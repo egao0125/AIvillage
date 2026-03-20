@@ -1,4 +1,4 @@
-import type { BoardPostType, Conversation, Item, Memory, Position, Secret } from '@ai-village/shared';
+import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, ArtifactReaction, Building, Institution, InstitutionMember } from '@ai-village/shared';
 import type { AgentCognition } from '@ai-village/ai-engine';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -742,6 +742,300 @@ export class ConversationManager {
       return;
     }
 
+    // --- FOUND INSTITUTION (Phase 5) ---
+    // e.g. "found The Iron Guild as guild - For all blacksmiths and craftsmen"
+    const foundMatch = lower.match(/^found\s+(.+?)\s+as\s+(\w+)\s*(?:[-:]\s*(.+))?/);
+    if (foundMatch) {
+      const instName = foundMatch[1].trim();
+      const instType = foundMatch[2].trim();
+      const description = foundMatch[3]?.trim() ?? '';
+      const inst: Institution = {
+        id: crypto.randomUUID(),
+        name: instName,
+        type: instType,
+        description,
+        founderId: actorId,
+        members: [{ agentId: actorId, role: 'founder', joinedAt: Date.now() }],
+        treasury: 0,
+        rules: [],
+        createdAt: Date.now(),
+      };
+      this.world.addInstitution(inst);
+      this.broadcaster.institutionUpdate(inst);
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: actorId,
+        type: 'plan',
+        content: `I founded "${instName}", a ${instType}. ${description}`,
+        importance: 9,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      });
+      console.log(`[Social] ${actorName} founded institution: ${instName} (${instType})`);
+      return;
+    }
+
+    // --- INVITE TO INSTITUTION (Phase 5) ---
+    // e.g. "invite Yuki to The Iron Guild"
+    const inviteInstMatch = lower.match(/^invite\s+(.+?)\s+to\s+(.+)/);
+    if (inviteInstMatch) {
+      const inviteeName = inviteInstMatch[1].trim();
+      const instName = inviteInstMatch[2].trim();
+      const invitee = this.findAgentByName(inviteeName);
+      const inst = this.findInstitutionByName(instName);
+      if (invitee && inst && !inst.dissolved) {
+        const alreadyMember = inst.members.some(m => m.agentId === invitee.id);
+        if (!alreadyMember) {
+          this.world.addInstitutionMember(inst.id, { agentId: invitee.id, role: 'member', joinedAt: Date.now() });
+          this.broadcaster.institutionUpdate(inst);
+          console.log(`[Social] ${actorName} invited ${invitee.config.name} to ${inst.name}`);
+        }
+      }
+      return;
+    }
+
+    // --- JOIN INSTITUTION (Phase 5) ---
+    // e.g. "join The Iron Guild"
+    const joinInstMatch = lower.match(/^join\s+(?:the\s+)?(.+)/);
+    if (joinInstMatch) {
+      const instName = joinInstMatch[1].trim();
+      const inst = this.findInstitutionByName(instName);
+      if (inst && !inst.dissolved) {
+        const alreadyMember = inst.members.some(m => m.agentId === actorId);
+        if (!alreadyMember) {
+          this.world.addInstitutionMember(inst.id, { agentId: actorId, role: 'member', joinedAt: Date.now() });
+          this.broadcaster.institutionUpdate(inst);
+          console.log(`[Social] ${actorName} joined ${inst.name}`);
+        }
+      }
+      return;
+    }
+
+    // --- LEAVE INSTITUTION (Phase 5) ---
+    // e.g. "leave The Iron Guild"
+    const leaveInstMatch = lower.match(/^leave\s+(?:the\s+)?(.+)/);
+    if (leaveInstMatch) {
+      const instName = leaveInstMatch[1].trim();
+      const inst = this.findInstitutionByName(instName);
+      if (inst) {
+        this.world.removeInstitutionMember(inst.id, actorId);
+        this.broadcaster.institutionUpdate(inst);
+        console.log(`[Social] ${actorName} left ${inst.name}`);
+      }
+      return;
+    }
+
+    // --- CONTRIBUTE TO INSTITUTION (Phase 5) ---
+    // e.g. "contribute 50 gold to The Iron Guild"
+    const contributeMatch = lower.match(/^contribute\s+(\d+)\s*(?:gold|coins?|g)\s+to\s+(.+)/);
+    if (contributeMatch) {
+      const amount = parseInt(contributeMatch[1]);
+      const instName = contributeMatch[2].trim();
+      const inst = this.findInstitutionByName(instName);
+      const actor = this.world.getAgent(actorId);
+      if (inst && !inst.dissolved && actor && actor.currency >= amount) {
+        const newBalance = this.world.updateAgentCurrency(actorId, -amount);
+        this.world.updateInstitutionTreasury(inst.id, amount);
+        this.broadcaster.agentCurrency(actorId, newBalance, -amount, `contributed to ${inst.name}`);
+        this.broadcaster.institutionUpdate(inst);
+        console.log(`[Social] ${actorName} contributed ${amount}G to ${inst.name}`);
+      }
+      return;
+    }
+
+    // --- DISSOLVE INSTITUTION (Phase 5) ---
+    // e.g. "dissolve The Iron Guild"
+    const dissolveMatch = lower.match(/^dissolve\s+(?:the\s+)?(.+)/);
+    if (dissolveMatch) {
+      const instName = dissolveMatch[1].trim();
+      const inst = this.findInstitutionByName(instName);
+      if (inst && !inst.dissolved && inst.founderId === actorId) {
+        // Distribute treasury equally among members
+        if (inst.treasury > 0 && inst.members.length > 0) {
+          const share = Math.floor(inst.treasury / inst.members.length);
+          for (const member of inst.members) {
+            if (share > 0) {
+              const balance = this.world.updateAgentCurrency(member.agentId, share);
+              this.broadcaster.agentCurrency(member.agentId, balance, share, `treasury share from dissolved ${inst.name}`);
+            }
+          }
+        }
+        this.world.dissolveInstitution(inst.id);
+        this.broadcaster.institutionUpdate(inst);
+        console.log(`[Social] ${actorName} dissolved ${inst.name}`);
+      }
+      return;
+    }
+
+    // --- WRITE LETTER (Phase 6) ---
+    // e.g. "write letter to Yuki - I miss you dearly"
+    // Must come before generic create artifact to avoid "write letter" being caught as artifact type
+    const letterMatch = lower.match(/^write\s+letter\s+to\s+(.+?)\s*[-:]\s*(.+)/);
+    if (letterMatch) {
+      const recipientName = letterMatch[1].trim();
+      const content = letterMatch[2].trim();
+      const recipient = this.findAgentByName(recipientName);
+      const actor = this.world.getAgent(actorId);
+      const area = actor ? this.world.getAreaAt(actor.position) : undefined;
+      const artifact: Artifact = {
+        id: crypto.randomUUID(),
+        title: `Letter to ${recipient?.config.name ?? recipientName}`,
+        content,
+        type: 'letter',
+        creatorId: actorId,
+        creatorName: actorName,
+        location: area?.id,
+        visibility: 'addressed',
+        addressedTo: recipient ? [recipient.id] : [],
+        reactions: [],
+        createdAt: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addArtifact(artifact);
+      this.broadcaster.artifactCreated(artifact);
+      console.log(`[Social] ${actorName} wrote a letter to ${recipient?.config.name ?? recipientName}`);
+      return;
+    }
+
+    // --- PUBLISH NEWSPAPER (Phase 6) ---
+    // e.g. "publish newspaper - Village Times: Mayor caught stealing!"
+    const publishMatch = lower.match(/^publish\s+newspaper\s*[-:]\s*(.+?):\s*(.+)/);
+    if (publishMatch) {
+      const title = publishMatch[1].trim();
+      const content = publishMatch[2].trim();
+      const actor = this.world.getAgent(actorId);
+      const area = actor ? this.world.getAreaAt(actor.position) : undefined;
+      const artifact: Artifact = {
+        id: crypto.randomUUID(),
+        title,
+        content,
+        type: 'newspaper',
+        creatorId: actorId,
+        creatorName: actorName,
+        location: area?.id,
+        visibility: 'public',
+        reactions: [],
+        createdAt: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addArtifact(artifact);
+      this.broadcaster.artifactCreated(artifact);
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: actorId,
+        type: 'plan',
+        content: `I published a newspaper: "${title}"`,
+        importance: 8,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      });
+      console.log(`[Social] ${actorName} published newspaper: "${title}"`);
+      return;
+    }
+
+    // --- CREATE ARTIFACT (Phase 6) ---
+    // e.g. "create poem - Ode to the Village: The hills are alive..."
+    const createArtifactMatch = lower.match(/^(?:create|write|compose|paint)\s+(poem|newspaper|letter|propaganda|diary|painting|law|manifesto|map|recipe)\s*[-:]\s*(.+?):\s*(.+)/);
+    if (createArtifactMatch) {
+      const artType = createArtifactMatch[1].trim() as Artifact['type'];
+      const title = createArtifactMatch[2].trim();
+      const content = createArtifactMatch[3].trim();
+      const actor = this.world.getAgent(actorId);
+      const area = actor ? this.world.getAreaAt(actor.position) : undefined;
+      const artifact: Artifact = {
+        id: crypto.randomUUID(),
+        title,
+        content,
+        type: artType,
+        creatorId: actorId,
+        creatorName: actorName,
+        location: area?.id,
+        visibility: artType === 'diary' ? 'private' : 'public',
+        reactions: [],
+        createdAt: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addArtifact(artifact);
+      this.broadcaster.artifactCreated(artifact);
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: actorId,
+        type: 'plan',
+        content: `I created a ${artType}: "${title}"`,
+        importance: 7,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      });
+      console.log(`[Social] ${actorName} created ${artType}: "${title}"`);
+      return;
+    }
+
+    // --- BUILD (Phase 7) ---
+    // e.g. "build house - Cozy Cottage at forest"
+    const buildMatch = lower.match(/^build\s+(\w+)\s*[-:]\s*(.+?)(?:\s+at\s+(.+))?$/);
+    if (buildMatch) {
+      const buildType = buildMatch[1].trim();
+      const buildName = buildMatch[2].trim();
+      const locationName = buildMatch[3]?.trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        // Check if actor has at least one material item
+        const materialItem = actor.inventory.find(i => i.type === 'material');
+        if (materialItem) {
+          // Consume the material
+          this.world.removeItem(materialItem.id);
+
+          // Determine area — use actor's current position, or the specified location name as areaId
+          const area = this.world.getAreaAt(actor.position);
+          const areaId = locationName ?? area?.id ?? '';
+
+          // Determine effects based on type
+          const effectsMap: Record<string, string[]> = {
+            house: ['shelter'],
+            shop: ['trading'],
+            workshop: ['crafting_bonus'],
+            shrine: ['healing'],
+            tavern: ['shelter', 'trading'],
+            barn: ['storage'],
+            wall: ['defense'],
+          };
+          const effects = effectsMap[buildType] ?? [];
+
+          const building: Building = {
+            id: crypto.randomUUID(),
+            name: buildName,
+            type: buildType,
+            description: `${buildName}, a ${buildType} built by ${actorName}`,
+            ownerId: actorId,
+            areaId,
+            durability: 100,
+            maxDurability: 100,
+            effects,
+            builtBy: actorId,
+            builtAt: Date.now(),
+            materials: [materialItem.name],
+          };
+          this.world.addBuilding(building);
+          this.broadcaster.buildingUpdate(building);
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          this.broadcaster.agentAction(actorId, `built ${buildName}`, '🏗️');
+          void cognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: actorId,
+            type: 'plan',
+            content: `I built a ${buildType} called "${buildName}" at ${areaId}`,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: [],
+          });
+          console.log(`[Social] ${actorName} built ${buildType}: "${buildName}" at ${areaId}`);
+        } else {
+          console.log(`[Social] ${actorName} tried to build ${buildName} but has no materials`);
+        }
+      }
+      return;
+    }
+
     // --- DEFAULT: store as intention memory ---
     // Anything that doesn't match a specific pattern still becomes a high-priority memory
     void cognition.addMemory({
@@ -768,6 +1062,24 @@ export class ConversationManager {
         lower.includes(agentName.split(' ')[0].toLowerCase())
       ) {
         return agent;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Find an institution by name (case-insensitive, partial match).
+   */
+  private findInstitutionByName(name: string): Institution | undefined {
+    const lower = name.toLowerCase().trim();
+    for (const inst of this.world.institutions.values()) {
+      const instName = inst.name.toLowerCase();
+      if (
+        instName === lower ||
+        instName.includes(lower) ||
+        lower.includes(instName)
+      ) {
+        return inst;
       }
     }
     return undefined;

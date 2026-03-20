@@ -11,6 +11,13 @@ import type {
   WorldEvent,
   Election,
   Property,
+  DriveState,
+  VitalState,
+  Weather,
+  Institution,
+  Artifact,
+  Building,
+  Technology,
 } from '@ai-village/shared';
 
 let socket: Socket | null = null;
@@ -38,6 +45,11 @@ export function connectSocket(): Socket {
     if (snapshot.elections) gameStore.setElections(snapshot.elections);
     if (snapshot.properties) gameStore.setProperties(snapshot.properties);
     if (snapshot.reputation) gameStore.setReputation(snapshot.reputation);
+    if (snapshot.weather) gameStore.setWeather(snapshot.weather);
+    if (snapshot.institutions) gameStore.setInstitutions(snapshot.institutions);
+    if (snapshot.artifacts) gameStore.setArtifacts(snapshot.artifacts);
+    if (snapshot.buildings) gameStore.setBuildings(snapshot.buildings);
+    if (snapshot.technologies) gameStore.setTechnologies(snapshot.technologies);
     eventBus.emit('world:snapshot', snapshot);
   });
 
@@ -164,6 +176,76 @@ export function connectSocket(): Socket {
 
   socket.on('reputation:change', (data: { fromId: string; toId: string; score: number }) => {
     gameStore.updateReputation(data.fromId, data.toId, data.score);
+  });
+
+  // --- Phase 2-7 event listeners ---
+
+  socket.on('agent:thought', (data: { agentId: string; thought: string }) => {
+    const agent = gameStore.getState().agents.get(data.agentId);
+    if (agent) {
+      gameStore.addThought({
+        id: crypto.randomUUID(),
+        agentId: data.agentId,
+        agentName: agent.config.name,
+        thought: data.thought,
+        timestamp: Date.now(),
+      });
+    }
+    eventBus.emit('agent:thought', data);
+  });
+
+  socket.on('agent:drives', (data: { agentId: string; drives: DriveState }) => {
+    gameStore.updateAgentDrives(data.agentId, data.drives);
+  });
+
+  socket.on('agent:vitals', (data: { agentId: string; vitals: VitalState }) => {
+    gameStore.updateAgentVitals(data.agentId, data.vitals);
+  });
+
+  socket.on('agent:death', (data: { agentId: string; cause: string }) => {
+    gameStore.markAgentDead(data.agentId, data.cause);
+    const agent = gameStore.getState().agents.get(data.agentId);
+    if (agent) {
+      gameStore.addChatEntry({
+        id: crypto.randomUUID(),
+        agentId: data.agentId,
+        agentName: agent.config.name,
+        message: `*${agent.config.name} has died: ${data.cause}*`,
+        timestamp: Date.now(),
+        conversationId: '',
+      });
+    }
+    eventBus.emit('agent:death', data);
+  });
+
+  socket.on('agent:leave', (data: { agentId: string }) => {
+    gameStore.removeAgent(data.agentId);
+    eventBus.emit('agent:leave', data);
+  });
+
+  socket.on('world:weather', (weather: Weather) => {
+    gameStore.setWeather(weather);
+    eventBus.emit('world:weather', weather);
+  });
+
+  socket.on('institution:update', (institution: Institution) => {
+    gameStore.updateInstitution(institution);
+    eventBus.emit('institution:update', institution);
+  });
+
+  socket.on('artifact:created', (artifact: Artifact) => {
+    gameStore.addArtifact(artifact);
+    eventBus.emit('artifact:created', artifact);
+  });
+
+  socket.on('building:update', (building: Building) => {
+    gameStore.updateBuilding(building);
+    eventBus.emit('building:update', building);
+  });
+
+  socket.on('technology:discovered', (technology: Technology) => {
+    gameStore.addTechnology(technology);
+    eventBus.emit('technology:discovered', technology);
   });
 
   return socket;

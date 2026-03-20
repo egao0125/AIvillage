@@ -8,6 +8,13 @@ import type {
   ReputationEntry,
   Item,
   Skill,
+  DriveState,
+  VitalState,
+  Weather,
+  Institution,
+  Artifact,
+  Building,
+  Technology,
 } from '@ai-village/shared';
 
 interface GameState {
@@ -22,6 +29,12 @@ interface GameState {
   elections: Election[];
   properties: Property[];
   reputation: ReputationEntry[];
+  thoughts: ThoughtEntry[];
+  weather: Weather;
+  institutions: Institution[];
+  artifacts: Artifact[];
+  buildings: Building[];
+  technologies: Technology[];
 }
 
 export interface ChatEntry {
@@ -31,6 +44,14 @@ export interface ChatEntry {
   message: string;
   timestamp: number;
   conversationId: string;
+}
+
+export interface ThoughtEntry {
+  id: string;
+  agentId: string;
+  agentName: string;
+  thought: string;
+  timestamp: number;
 }
 
 class GameStore {
@@ -46,6 +67,12 @@ class GameStore {
     elections: [],
     properties: [],
     reputation: [],
+    thoughts: [],
+    weather: { current: 'clear', season: 'spring', temperature: 50, seasonDay: 0 },
+    institutions: [],
+    artifacts: [],
+    buildings: [],
+    technologies: [],
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -286,6 +313,136 @@ class GameStore {
     const newAgents = new Map(this.state.agents);
     newAgents.set(agentId, { ...agent, skills: newSkills });
     this.state = { ...this.state, agents: newAgents };
+    this.notify();
+  }
+
+  // --- Thoughts ---
+
+  addThought(entry: ThoughtEntry): void {
+    this.state = {
+      ...this.state,
+      thoughts: [...this.state.thoughts.slice(-100), entry],
+    };
+    this.notify();
+  }
+
+  // --- Agent drives ---
+
+  updateAgentDrives(agentId: string, drives: DriveState): void {
+    const agent = this.state.agents.get(agentId);
+    if (!agent) return;
+    const newAgents = new Map(this.state.agents);
+    newAgents.set(agentId, { ...agent, drives });
+    this.state = { ...this.state, agents: newAgents };
+    this.notify();
+  }
+
+  // --- Agent vitals ---
+
+  updateAgentVitals(agentId: string, vitals: VitalState): void {
+    const agent = this.state.agents.get(agentId);
+    if (!agent) return;
+    const newAgents = new Map(this.state.agents);
+    newAgents.set(agentId, { ...agent, vitals });
+    this.state = { ...this.state, agents: newAgents };
+    this.notify();
+  }
+
+  // --- Agent death ---
+
+  markAgentDead(agentId: string, cause: string): void {
+    const agent = this.state.agents.get(agentId);
+    if (!agent) return;
+    const newAgents = new Map(this.state.agents);
+    newAgents.set(agentId, { ...agent, alive: false, causeOfDeath: cause, state: 'dead' as any });
+    this.state = { ...this.state, agents: newAgents };
+    this.notify();
+  }
+
+  // --- Agent leave ---
+
+  removeAgent(agentId: string): void {
+    const newAgents = new Map(this.state.agents);
+    newAgents.delete(agentId);
+    this.state = { ...this.state, agents: newAgents };
+    if (this.state.selectedAgentId === agentId) {
+      this.state = { ...this.state, selectedAgentId: null };
+    }
+    this.notify();
+  }
+
+  // --- Weather ---
+
+  setWeather(weather: Weather): void {
+    this.state = { ...this.state, weather };
+    this.notify();
+  }
+
+  // --- Institutions ---
+
+  setInstitutions(institutions: Institution[]): void {
+    this.state = { ...this.state, institutions };
+    this.notify();
+  }
+
+  updateInstitution(institution: Institution): void {
+    const existing = this.state.institutions.findIndex(i => i.id === institution.id);
+    if (existing >= 0) {
+      const newInst = [...this.state.institutions];
+      newInst[existing] = institution;
+      this.state = { ...this.state, institutions: newInst };
+    } else {
+      this.state = { ...this.state, institutions: [...this.state.institutions, institution] };
+    }
+    this.notify();
+  }
+
+  // --- Artifacts ---
+
+  setArtifacts(artifacts: Artifact[]): void {
+    this.state = { ...this.state, artifacts };
+    this.notify();
+  }
+
+  addArtifact(artifact: Artifact): void {
+    this.state = {
+      ...this.state,
+      artifacts: [...this.state.artifacts.slice(-200), artifact],
+    };
+    this.notify();
+  }
+
+  // --- Buildings ---
+
+  setBuildings(buildings: Building[]): void {
+    this.state = { ...this.state, buildings };
+    this.notify();
+  }
+
+  updateBuilding(building: Building): void {
+    const existing = this.state.buildings.findIndex(b => b.id === building.id);
+    if (existing >= 0) {
+      const newBuildings = [...this.state.buildings];
+      newBuildings[existing] = building;
+      this.state = { ...this.state, buildings: newBuildings };
+    } else {
+      this.state = { ...this.state, buildings: [...this.state.buildings, building] };
+    }
+    this.notify();
+  }
+
+  // --- Technologies ---
+
+  setTechnologies(technologies: Technology[]): void {
+    this.state = { ...this.state, technologies };
+    this.notify();
+  }
+
+  addTechnology(technology: Technology): void {
+    this.state = {
+      ...this.state,
+      technologies: [...this.state.technologies, technology],
+    };
     this.notify();
   }
 }

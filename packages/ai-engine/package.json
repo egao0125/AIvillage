@@ -9,9 +9,10 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@ai-village/shared": "workspace:*",
     "@anthropic-ai/sdk": "^0.39.0",
-    "openai": "^4.77.0",
-    "@ai-village/shared": "workspace:*"
+    "@supabase/supabase-js": "^2.99.3",
+    "openai": "^4.77.0"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

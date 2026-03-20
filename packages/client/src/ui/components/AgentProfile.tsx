@@ -60,6 +60,24 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         borderBottom: `1px solid ${COLORS.border}`,
       }}
     >
+      {/* Dead state indicator */}
+      {agent.alive === false && (
+        <div style={{
+          padding: '8px 12px',
+          marginBottom: 10,
+          background: '#1a0000',
+          border: '1px solid #4a0000',
+          borderRadius: 4,
+          fontFamily: FONTS.pixel,
+          fontSize: '9px',
+          color: '#ff4444',
+          textAlign: 'center',
+          letterSpacing: 1,
+        }}>
+          DECEASED — {agent.causeOfDeath || 'unknown cause'}
+        </div>
+      )}
+
       {/* Header */}
       <div
         style={{
@@ -147,6 +165,80 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </div>
       </div>
 
+      {/* Vitals */}
+      {agent.vitals && agent.alive !== false && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={sectionLabel}>VITALS</div>
+          {(['health', 'hunger', 'energy'] as const).map(vital => {
+            const value = agent.vitals![vital];
+            const colors = {
+              health: { bar: '#ef4444', bg: '#3b1111' },
+              hunger: { bar: '#f59e0b', bg: '#3b2e11' },
+              energy: { bar: '#3b82f6', bg: '#11213b' },
+            };
+            const labels = { health: 'HP', hunger: 'Hunger', energy: 'Energy' };
+            const c = colors[vital];
+            return (
+              <div key={vital} style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                  <span style={{ color: COLORS.textDim, fontSize: '11px' }}>{labels[vital]}</span>
+                  <span style={{ color: c.bar, fontSize: '11px', fontFamily: FONTS.pixel }}>{Math.round(value)}</span>
+                </div>
+                <div style={{ width: '100%', height: 6, background: c.bg, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${value}%`,
+                    height: '100%',
+                    background: vital === 'hunger' && value > 80 ? '#ef4444' : c.bar,
+                    borderRadius: 3,
+                    transition: 'width 0.3s',
+                  }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Drives */}
+      {agent.drives && agent.alive !== false && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={sectionLabel}>DRIVES</div>
+          {(['survival', 'safety', 'belonging', 'status', 'meaning'] as const).map(drive => {
+            const value = agent.drives![drive];
+            const driveColors: Record<string, string> = {
+              survival: '#ef4444',
+              safety: '#f59e0b',
+              belonging: '#ec4899',
+              status: '#a855f7',
+              meaning: '#06b6d4',
+            };
+            const driveEmojis: Record<string, string> = {
+              survival: '\u{2764}\u{FE0F}',
+              safety: '\u{1F6E1}\u{FE0F}',
+              belonging: '\u{1F91D}',
+              status: '\u{1F451}',
+              meaning: '\u{2B50}',
+            };
+            return (
+              <div key={drive} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: '11px', width: 16 }}>{driveEmojis[drive]}</span>
+                <span style={{ color: COLORS.textDim, fontSize: '10px', width: 62, textTransform: 'capitalize' }}>{drive}</span>
+                <div style={{ flex: 1, height: 4, background: COLORS.border, borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${value}%`,
+                    height: '100%',
+                    background: driveColors[drive],
+                    borderRadius: 2,
+                    transition: 'width 0.3s',
+                  }} />
+                </div>
+                <span style={{ color: COLORS.textDim, fontSize: '10px', width: 24, textAlign: 'right', fontFamily: FONTS.pixel }}>{Math.round(value)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Soul */}
       {agent.config.soul && (
         <div style={{ marginBottom: 14 }}>
@@ -164,6 +256,36 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
           {agent.currentAction || agent.state}
         </div>
       </div>
+
+      {/* Mental Models */}
+      {agent.mentalModels && agent.mentalModels.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={sectionLabel}>MIND ({agent.mentalModels.length})</div>
+          {agent.mentalModels.map(model => (
+            <div key={model.targetId} style={{
+              padding: '6px 10px',
+              marginBottom: 3,
+              background: COLORS.bgCard,
+              borderRadius: 4,
+              border: `1px solid ${COLORS.border}`,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                <span style={{ color: COLORS.text, fontSize: '11px' }}>{model.targetId.slice(0, 8)}</span>
+                <span style={{
+                  color: model.trust > 20 ? '#4ade80' : model.trust < -20 ? '#ef4444' : COLORS.textDim,
+                  fontSize: '11px',
+                  fontFamily: FONTS.pixel,
+                }}>
+                  {model.trust > 0 ? '+' : ''}{model.trust} trust
+                </span>
+              </div>
+              <div style={{ color: COLORS.textDim, fontSize: '11px' }}>
+                {model.emotionalStance} — thinks: "{model.predictedGoal}"
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Inventory */}
       {agent.inventory && agent.inventory.length > 0 && (

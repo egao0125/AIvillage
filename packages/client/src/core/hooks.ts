@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { gameStore, type ChatEntry } from './GameStore';
+import { gameStore, type ChatEntry, type ThoughtEntry } from './GameStore';
 import type {
   Agent,
   BoardPost,
@@ -8,6 +8,11 @@ import type {
   Election,
   Property,
   ReputationEntry,
+  Weather,
+  Institution,
+  Artifact,
+  Building,
+  Technology,
 } from '@ai-village/shared';
 
 export function useAgents(): Agent[] {
@@ -83,5 +88,47 @@ export function useReputation(): ReputationEntry[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().reputation
+  );
+}
+
+export function useThoughts(): ThoughtEntry[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().thoughts
+  );
+}
+
+export function useWeather(): Weather {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().weather
+  );
+}
+
+export function useInstitutions(): Institution[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().institutions
+  );
+}
+
+export function useArtifacts(): Artifact[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().artifacts
+  );
+}
+
+export function useBuildings(): Building[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().buildings
+  );
+}
+
+export function useTechnologies(): Technology[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().technologies
   );
 }

@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { useAgents, useSelectedAgent, useBoard, useWorldEvents } from '../../core/hooks';
+import { useAgents, useSelectedAgent, useBoard, useWorldEvents, useArtifacts } from '../../core/hooks';
 import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
 import { AgentProfile } from './AgentProfile';
 import { ChatLog } from './ChatLog';
+import { ArtifactGallery } from './ArtifactGallery';
 import { VillageBoard } from './VillageBoard';
 import { WorldEvents } from './WorldEvents';
 import { COLORS, FONTS, SIZES } from '../styles';
 
-type Tab = 'villagers' | 'chat' | 'board' | 'events';
+type Tab = 'villagers' | 'chat' | 'board' | 'artifacts' | 'events';
 
 export const Sidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('villagers');
@@ -16,6 +17,7 @@ export const Sidebar: React.FC = () => {
   const selectedAgent = useSelectedAgent();
   const board = useBoard();
   const events = useWorldEvents();
+  const artifacts = useArtifacts();
 
   const tabLabel = (tab: Tab): string => {
     switch (tab) {
@@ -25,6 +27,8 @@ export const Sidebar: React.FC = () => {
         return 'Chat';
       case 'board':
         return `Board${board.length > 0 ? ` (${board.length})` : ''}`;
+      case 'artifacts':
+        return `Media${artifacts.length > 0 ? ` (${artifacts.length})` : ''}`;
       case 'events':
         return `Events${events.filter((e) => e.active).length > 0 ? ` (${events.filter((e) => e.active).length})` : ''}`;
     }
@@ -64,7 +68,7 @@ export const Sidebar: React.FC = () => {
           borderBottom: `1px solid ${COLORS.border}`,
         }}
       >
-        {(['villagers', 'chat', 'board', 'events'] as Tab[]).map((tab) => (
+        {(['villagers', 'chat', 'board', 'artifacts', 'events'] as Tab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -113,6 +117,8 @@ export const Sidebar: React.FC = () => {
           </>
         ) : activeTab === 'board' ? (
           <VillageBoard />
+        ) : activeTab === 'artifacts' ? (
+          <ArtifactGallery />
         ) : activeTab === 'events' ? (
           <WorldEvents />
         ) : (

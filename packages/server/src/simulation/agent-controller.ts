@@ -1,4 +1,4 @@
-import type { Agent, DayPlan, GameTime, Mood, Position } from '@ai-village/shared';
+import type { Agent, DayPlan, DriveState, GameTime, Mood, Position, VitalState } from '@ai-village/shared';
 import type { AgentCognition } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
@@ -14,18 +14,6 @@ export type ControllerState =
   | 'conversing'
   | 'reflecting'
   | 'idle';
-
-// Location-based economics: where agents earn or spend coins
-const LOCATION_ECONOMICS: Record<string, { type: 'earn' | 'spend'; min: number; max: number }> = {
-  cafe:     { type: 'earn',  min: 5,  max: 12 },
-  bakery:   { type: 'earn',  min: 6,  max: 14 },
-  workshop: { type: 'earn',  min: 8,  max: 18 },
-  farm:     { type: 'earn',  min: 4,  max: 10 },
-  hospital: { type: 'earn',  min: 10, max: 20 },
-  school:   { type: 'earn',  min: 6,  max: 12 },
-  market:   { type: 'spend', min: 3,  max: 15 },
-  tavern:   { type: 'spend', min: 5,  max: 12 },
-};
 
 export class AgentController {
   state: ControllerState = 'idle';
@@ -60,6 +48,17 @@ export class AgentController {
     this.wakeHour = wakeHour;
     this.sleepHour = sleepHour;
     this.homeArea = homeArea;
+
+    // Initialize drives and vitals if not set
+    if (!this.agent.drives) {
+      this.agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
+    }
+    if (!this.agent.vitals) {
+      this.agent.vitals = { health: 100, hunger: 0, energy: 100 };
+    }
+    if (this.agent.alive === undefined) {
+      this.agent.alive = true;
+    }
   }
 
   get isAvailable(): boolean {
@@ -71,6 +70,17 @@ export class AgentController {
   }
 
   tick(time: GameTime): void {
+    // Dead agents don't tick
+    if (this.agent.alive === false) return;
+
+    // Vitals decay every tick (1 game minute)
+    this.tickVitals();
+
+    // Recalculate drives every 60 ticks (~1 game hour)
+    if (this.world.time.minute === 0) {
+      this.recalculateDrives();
+    }
+
     if (this.conversationCooldown > 0) this.conversationCooldown--;
 
     switch (this.state) {
@@ -103,7 +113,6 @@ export class AgentController {
       case 'performing': {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
-          this.processActivityCurrency();
           this.followNextPlanItem();
         }
         break;
@@ -226,6 +235,14 @@ export class AgentController {
     const areaId = this.resolveLocation(item.location);
     const targetPos = getRandomPositionInArea(areaId);
 
+    // Inner monologue — what are they REALLY thinking?
+    void this.cognition.innerMonologue(
+      `about to ${item.activity}`,
+      `Going to ${item.location}. Mood: ${this.agent.mood}. Gold: ${this.agent.currency}.`
+    ).then(thought => {
+      if (thought) this.broadcaster.agentThought(this.agent.id, thought);
+    }).catch(() => {});
+
     console.log(
       `[Agent] ${this.agent.config.name} → ${item.activity} at ${item.location}${item.emoji ? ' ' + item.emoji : ''}`,
     );
@@ -291,35 +308,27 @@ export class AgentController {
     this.state = 'performing';
     this.activityTimer = duration;
     this.world.updateAgentState(this.agent.id, 'active', activity);
-    // Track which area the agent is in for currency processing
     this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
+
+    // Eating reduces hunger
+    const lowerActivity = activity.toLowerCase();
+    if (lowerActivity.includes('eat') || lowerActivity.includes('food') || lowerActivity.includes('meal') || lowerActivity.includes('lunch') || lowerActivity.includes('dinner') || lowerActivity.includes('breakfast')) {
+      const foodItem = this.agent.inventory.find(i => i.type === 'food');
+      if (foodItem) {
+        this.world.removeItem(foodItem.id);
+        if (this.agent.vitals) {
+          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
+          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
+        }
+      } else if (this.agent.vitals) {
+        // Even without food items, visiting food locations reduces hunger slightly
+        this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 15);
+      }
+    }
+
     console.log(
       `[Agent] ${this.agent.config.name} starts: ${activity} (${duration} min)`,
     );
-  }
-
-  private processActivityCurrency(): void {
-    if (!this.currentAreaId) return;
-    const econ = LOCATION_ECONOMICS[this.currentAreaId];
-    if (!econ) return; // neutral location, no currency change
-
-    const amount = econ.min + Math.floor(Math.random() * (econ.max - econ.min + 1));
-
-    if (econ.type === 'earn') {
-      const newBalance = this.world.updateAgentCurrency(this.agent.id, amount);
-      this.broadcaster.agentCurrency(this.agent.id, newBalance, amount, `worked at ${this.currentAreaId}`);
-      console.log(`[Currency] ${this.agent.config.name} earned ${amount} coins at ${this.currentAreaId} (balance: ${newBalance})`);
-    } else {
-      // Only spend if agent has enough; if not, spend what they have
-      const current = this.agent.currency;
-      const spend = Math.min(amount, current);
-      if (spend > 0) {
-        const newBalance = this.world.updateAgentCurrency(this.agent.id, -spend);
-        this.broadcaster.agentCurrency(this.agent.id, newBalance, -spend, `spent at ${this.currentAreaId}`);
-        console.log(`[Currency] ${this.agent.config.name} spent ${spend} coins at ${this.currentAreaId} (balance: ${newBalance})`);
-      }
-    }
-    this.currentAreaId = null;
   }
 
   /**
@@ -331,6 +340,14 @@ export class AgentController {
     this.pathIndex = 0;
     this.state = 'conversing';
     this.world.updateAgentState(this.agent.id, 'active', 'conversing');
+
+    // Think before speaking
+    void this.cognition.innerMonologue(
+      'entering a conversation',
+      `About to talk to someone. Mood: ${this.agent.mood}.`
+    ).then(thought => {
+      if (thought) this.broadcaster.agentThought(this.agent.id, thought);
+    }).catch(() => {});
   }
 
   /**
@@ -399,6 +416,11 @@ export class AgentController {
     try {
       const result = await this.cognition.reflect();
 
+      // Update mental models from reflection
+      if (result.mentalModels) {
+        this.agent.mentalModels = result.mentalModels;
+      }
+
       // Use mood from LLM response, fall back to keyword parsing
       const mood = result.mood || this.parseMoodFromReflection(result.reflection);
       if (mood) {
@@ -412,6 +434,98 @@ export class AgentController {
       this.reflectingInProgress = false;
       this.goToSleep();
     }
+  }
+
+  private tickVitals(): void {
+    const v = this.agent.vitals;
+    if (!v) return;
+
+    // Hunger increases slowly (1 per 4 game hours)
+    if (this.world.time.minute === 0 && this.world.time.hour % 4 === 0) {
+      v.hunger = Math.min(100, v.hunger + 1);
+    }
+
+    // Energy depletes during activity, restores during sleep
+    if (this.state === 'performing' || this.state === 'moving') {
+      v.energy = Math.max(0, v.energy - 0.05);
+    } else if (this.state === 'sleeping') {
+      v.energy = Math.min(100, v.energy + 0.5);
+      v.hunger = Math.max(0, v.hunger - 0.1);
+    }
+
+    // Vitals affect mood but never kill — health floors at 10
+    if (v.hunger >= 80) {
+      v.health = Math.max(10, v.health - 0.05);
+    }
+    if (v.energy <= 5) {
+      v.health = Math.max(10, v.health - 0.03);
+    }
+    // Passive health regen when not starving/exhausted
+    if (v.hunger < 60 && v.energy > 20) {
+      v.health = Math.min(100, v.health + 0.02);
+    }
+
+    // Broadcast vitals every 30 ticks
+    if (this.world.time.totalMinutes % 30 === 0) {
+      this.broadcaster.agentVitals(this.agent.id, v);
+    }
+  }
+
+  private recalculateDrives(): void {
+    const d = this.agent.drives;
+    const v = this.agent.vitals;
+    if (!d || !v) return;
+
+    // Survival: inverse of health and hunger satisfaction
+    d.survival = Math.max(0, Math.min(100,
+      (100 - v.health) * 0.4 + v.hunger * 0.6
+    ));
+
+    // Safety: based on reputation (are people hostile?) and world events
+    const reputations = this.world.reputation.filter(r => r.toAgentId === this.agent.id);
+    const avgRep = reputations.length > 0
+      ? reputations.reduce((sum, r) => sum + r.score, 0) / reputations.length
+      : 0;
+    d.safety = Math.max(0, Math.min(100, 50 - avgRep * 0.5));
+
+    // Belonging: decreases with social activity, increases with isolation
+    const recentConvos = this.conversationCooldown > 0 ? 1 : 0;
+    d.belonging = Math.max(0, Math.min(100,
+      d.belonging + (recentConvos > 0 ? -5 : 2)
+    ));
+
+    // Status: based on currency relative to average, and skills
+    const allAgents = Array.from(this.world.agents.values()).filter(a => a.alive !== false);
+    const avgCurrency = allAgents.length > 0
+      ? allAgents.reduce((sum, a) => sum + a.currency, 0) / allAgents.length
+      : 100;
+    const wealthRatio = avgCurrency > 0 ? this.agent.currency / avgCurrency : 1;
+    d.status = Math.max(0, Math.min(100,
+      100 - (wealthRatio * 50) - (this.agent.skills.length * 5)
+    ));
+
+    // Meaning: high when agent has created things, holds positions, has purpose
+    const hasInstitution = (this.agent.institutionIds?.length ?? 0) > 0;
+    const hasSkills = this.agent.skills.length > 0;
+    d.meaning = Math.max(0, Math.min(100,
+      70 - (hasInstitution ? 20 : 0) - (hasSkills ? 10 : 0) - (this.agent.config.goal ? 10 : 0)
+    ));
+
+    this.broadcaster.agentDrives(this.agent.id, d);
+  }
+
+  private die(cause: string): void {
+    console.log(`[Agent] ${this.agent.config.name} has DIED: ${cause}`);
+    this.agent.alive = false;
+    this.agent.causeOfDeath = cause;
+    this.agent.state = 'dead';
+    this.state = 'idle'; // Stop all controller activity
+
+    // Drop items — they become unclaimed
+    const droppedItems = this.world.killAgent(this.agent.id, cause);
+
+    this.broadcaster.agentDeath(this.agent.id, cause);
+    this.broadcaster.agentAction(this.agent.id, `died: ${cause}`, '\u{1F480}');
   }
 
   /**

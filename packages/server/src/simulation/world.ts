@@ -1,4 +1,4 @@
-import type { Agent, AgentState, BoardPost, BoardPostType, Conversation, Election, GameTime, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Secret, Skill, WorldEvent, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldEvent, WorldSnapshot } from '@ai-village/shared';
 import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
 
 export class World {
@@ -13,6 +13,11 @@ export class World {
   properties: Map<string, Property> = new Map();
   reputation: ReputationEntry[] = [];
   materialSpawns: MaterialSpawn[] = [];
+  institutions: Map<string, Institution> = new Map();
+  artifacts: Artifact[] = [];
+  buildings: Map<string, Building> = new Map();
+  technologies: Technology[] = [];
+  weather: Weather;
 
   constructor() {
     this.time = {
@@ -20,6 +25,13 @@ export class World {
       hour: 5,
       minute: 0,
       totalMinutes: 5 * 60,
+    };
+
+    this.weather = {
+      current: 'clear',
+      season: 'spring',
+      temperature: 50,
+      seasonDay: 0,
     };
 
     this.materialSpawns = [
@@ -140,6 +152,11 @@ export class World {
       elections: Array.from(this.elections.values()),
       properties: Array.from(this.properties.values()),
       reputation: this.reputation,
+      weather: { ...this.weather },
+      institutions: Array.from(this.institutions.values()).filter(i => !i.dissolved),
+      artifacts: this.artifacts.slice(-100),
+      buildings: Array.from(this.buildings.values()),
+      technologies: this.technologies,
     };
   }
 
@@ -360,5 +377,199 @@ export class World {
       agent.skills.push({ ...skill });
     }
     console.log(`[World] ${agent.config.name} skill update: ${skill.name} (level ${existing?.level ?? skill.level})`);
+  }
+
+  // --- Agent Death (Phase 3) ---
+
+  killAgent(id: string, cause: string): Item[] {
+    const agent = this.agents.get(id);
+    if (!agent) return [];
+
+    agent.state = 'dead';
+    agent.alive = false;
+    agent.causeOfDeath = cause;
+
+    // Drop all items — set ownerId to 'unclaimed'
+    const droppedItems: Item[] = [];
+    for (const item of agent.inventory) {
+      item.ownerId = 'unclaimed';
+      droppedItems.push(item);
+    }
+    agent.inventory = [];
+
+    console.log(`[World] ${agent.config.name} died: ${cause}. Dropped ${droppedItems.length} items.`);
+    return droppedItems;
+  }
+
+  // --- Institutions (Phase 5) ---
+
+  addInstitution(inst: Institution): void {
+    this.institutions.set(inst.id, inst);
+    console.log(`[World] Institution created: ${inst.name} (${inst.type})`);
+  }
+
+  getInstitution(id: string): Institution | undefined {
+    return this.institutions.get(id);
+  }
+
+  dissolveInstitution(id: string): void {
+    const inst = this.institutions.get(id);
+    if (inst) {
+      inst.dissolved = true;
+      console.log(`[World] Institution dissolved: ${inst.name}`);
+    }
+  }
+
+  addInstitutionMember(instId: string, member: InstitutionMember): void {
+    const inst = this.institutions.get(instId);
+    if (!inst) return;
+    inst.members.push(member);
+    // Track on the agent as well
+    const agent = this.agents.get(member.agentId);
+    if (agent) {
+      if (!agent.institutionIds) agent.institutionIds = [];
+      agent.institutionIds.push(instId);
+    }
+    console.log(`[World] ${member.agentId} joined ${inst.name} as ${member.role}`);
+  }
+
+  removeInstitutionMember(instId: string, agentId: string): void {
+    const inst = this.institutions.get(instId);
+    if (!inst) return;
+    inst.members = inst.members.filter(m => m.agentId !== agentId);
+    // Remove from agent tracking
+    const agent = this.agents.get(agentId);
+    if (agent && agent.institutionIds) {
+      agent.institutionIds = agent.institutionIds.filter(id => id !== instId);
+    }
+    console.log(`[World] ${agentId} left ${inst.name}`);
+  }
+
+  updateInstitutionTreasury(instId: string, delta: number): number {
+    const inst = this.institutions.get(instId);
+    if (!inst) return 0;
+    inst.treasury = Math.max(0, inst.treasury + delta);
+    console.log(`[World] ${inst.name} treasury ${delta > 0 ? '+' : ''}${delta} → ${inst.treasury}`);
+    return inst.treasury;
+  }
+
+  // --- Artifacts (Phase 6) ---
+
+  addArtifact(artifact: Artifact): void {
+    this.artifacts.push(artifact);
+    // Cap at 200
+    if (this.artifacts.length > 200) {
+      this.artifacts = this.artifacts.slice(-200);
+    }
+    console.log(`[World] Artifact created: "${artifact.title}" by ${artifact.creatorName} (${artifact.type})`);
+  }
+
+  getArtifactsAt(areaId: string): Artifact[] {
+    return this.artifacts.filter(a => a.location === areaId);
+  }
+
+  getPublicArtifacts(): Artifact[] {
+    return this.artifacts.filter(a => a.visibility === 'public');
+  }
+
+  addArtifactReaction(artifactId: string, reaction: ArtifactReaction): void {
+    const artifact = this.artifacts.find(a => a.id === artifactId);
+    if (artifact) {
+      artifact.reactions.push(reaction);
+      console.log(`[World] ${reaction.agentName} reacted to "${artifact.title}": ${reaction.reaction}`);
+    }
+  }
+
+  // --- Buildings (Phase 7) ---
+
+  addBuilding(building: Building): void {
+    this.buildings.set(building.id, building);
+    console.log(`[World] Building constructed: ${building.name} (${building.type}) at ${building.areaId}`);
+  }
+
+  getBuilding(id: string): Building | undefined {
+    return this.buildings.get(id);
+  }
+
+  getBuildingsAt(areaId: string): Building[] {
+    return Array.from(this.buildings.values()).filter(b => b.areaId === areaId);
+  }
+
+  damageBuilding(id: string, amount: number): Building | undefined {
+    const building = this.buildings.get(id);
+    if (!building) return undefined;
+    building.durability = Math.max(0, building.durability - amount);
+    console.log(`[World] ${building.name} damaged by ${amount} → durability ${building.durability}/${building.maxDurability}`);
+    return building;
+  }
+
+  repairBuilding(id: string, amount: number): void {
+    const building = this.buildings.get(id);
+    if (!building) return;
+    building.durability = Math.min(building.maxDurability, building.durability + amount);
+    console.log(`[World] ${building.name} repaired by ${amount} → durability ${building.durability}/${building.maxDurability}`);
+  }
+
+  // --- Technology (Phase 7) ---
+
+  addTechnology(tech: Technology): void {
+    this.technologies.push(tech);
+    console.log(`[World] Technology discovered: ${tech.name} by ${tech.inventorName}`);
+  }
+
+  getTechnologies(): Technology[] {
+    return this.technologies;
+  }
+
+  hasTechnology(name: string): boolean {
+    return this.technologies.some(t => t.name === name);
+  }
+
+  // --- Weather & Seasons (Phase 7) ---
+
+  advanceSeason(): void {
+    const seasonOrder: Season[] = ['spring', 'summer', 'autumn', 'winter'];
+    const currentIndex = seasonOrder.indexOf(this.weather.season);
+    this.weather.season = seasonOrder[(currentIndex + 1) % 4];
+    this.weather.seasonDay = 0;
+
+    // Update temperature range based on season
+    const temperatureRanges: Record<Season, { min: number; max: number }> = {
+      spring: { min: 35, max: 65 },
+      summer: { min: 60, max: 95 },
+      autumn: { min: 30, max: 60 },
+      winter: { min: 5, max: 35 },
+    };
+    const range = temperatureRanges[this.weather.season];
+    this.weather.temperature = Math.round((range.min + range.max) / 2);
+    console.log(`[World] Season changed to ${this.weather.season} (temp: ${this.weather.temperature})`);
+  }
+
+  updateWeather(): string {
+    const seasonWeather: Record<Season, string[]> = {
+      spring: ['rain', 'clear', 'fog'],
+      summer: ['clear', 'heatwave', 'storm'],
+      autumn: ['rain', 'fog', 'clear'],
+      winter: ['snow', 'storm', 'clear', 'fog'],
+    };
+
+    const options = seasonWeather[this.weather.season];
+    this.weather.current = options[Math.floor(Math.random() * options.length)];
+
+    // Adjust temperature slightly based on weather
+    const tempAdjust: Record<string, number> = {
+      heatwave: 10,
+      storm: -5,
+      snow: -10,
+      rain: -3,
+      fog: -2,
+      clear: 2,
+    };
+    this.weather.temperature = Math.max(0, Math.min(100,
+      this.weather.temperature + (tempAdjust[this.weather.current] ?? 0),
+    ));
+
+    console.log(`[World] Weather: ${this.weather.current} (${this.weather.temperature}°)`);
+    return this.weather.current;
   }
 }

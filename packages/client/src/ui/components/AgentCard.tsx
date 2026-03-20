@@ -21,7 +21,10 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     routine: COLORS.routine,
     idle: COLORS.idle,
     sleeping: COLORS.sleeping,
+    dead: '#4a0000',
   };
+
+  const isDead = agent.alive === false;
 
   return (
     <div
@@ -54,7 +57,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           width: 40,
           height: 40,
           borderRadius: '50%',
-          background: color,
+          background: isDead ? '#333' : color,
           border: '2px solid rgba(255,255,255,0.2)',
           display: 'flex',
           alignItems: 'center',
@@ -62,6 +65,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           fontSize: '16px',
           fontWeight: 'bold',
           flexShrink: 0,
+          opacity: isDead ? 0.5 : 1,
         }}
       >
         {agent.config.name[0]}
@@ -79,7 +83,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
             whiteSpace: 'nowrap',
           }}
         >
-          {agent.config.name}
+          {isDead ? '\u{1F480} ' : ''}{agent.config.name}
         </div>
         <div
           style={{

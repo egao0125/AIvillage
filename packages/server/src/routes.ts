@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import type { SimulationEngine } from './simulation/engine.js';
+import { requireAuth } from './auth.js';
 
 // =============================================================================
 // Security: Rate Limiting (in-memory, per-IP)
@@ -75,22 +76,10 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 }
 
 // =============================================================================
-// Security: API Key Authentication
-// Mutating operations require the server's API key to be configured
-// (Moltbook: anyone could take control of any agent by bypassing auth)
+// Security: BYOK (Bring Your Own Key)
+// Each agent carries its own API key — no global server key required.
+// Keys are stored per-agent in Supabase, never exposed to clients.
 // =============================================================================
-
-function requireConfigured(engine: SimulationEngine) {
-  return (_req: Request, res: Response, next: NextFunction): void => {
-    if (!engine.isConfigured) {
-      res.status(403).json({
-        error: 'Server not configured. Set API key via POST /api/config first.',
-      });
-      return;
-    }
-    next();
-  };
-}
 
 // =============================================================================
 // Routes
@@ -135,47 +124,40 @@ export function createRouter(engine: SimulationEngine): Router {
   router.get('/api/config/status', (_req, res) => {
     const snapshot = engine.getSnapshot();
     res.json({
-      configured: engine.isConfigured,
+      configured: true, // BYOK — always ready, each agent carries its own key
       running: engine.isRunning,
       agentCount: snapshot.agents.length,
       agents: snapshot.agents.map(a => ({
+        id: a.id,
         name: a.config.name,
         occupation: a.config.occupation,
         personality: a.config.personality,
+        currency: a.currency,
       })),
     });
   });
 
   // --- Mutating endpoints (rate limited + validated) ---
 
-  // POST /api/config — set API key
-  // Rate limit: 5 requests per minute per IP
-  router.post('/api/config', rateLimit(5, 60_000), (req, res) => {
-    const { apiKey, model } = req.body;
-
-    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
-      res.status(400).json({ error: 'Valid API key required' });
-      return;
-    }
-
-    // Validate model name if provided (prevent injection through model field)
-    const safeModel = typeof model === 'string'
-      ? model.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 100)
-      : undefined;
-
-    engine.updateApiKey(apiKey.trim(), safeModel);
-    res.json({ success: true, model: safeModel || 'claude-sonnet-4-6' });
-  });
-
-  // POST /api/agents — spawn new agent
+  // POST /api/agents — spawn new agent (requires auth + BYOK API key)
   // Rate limit: 10 agents per 10 minutes per IP (prevents mass spawning)
-  // Requires server to be configured (API key set)
   router.post(
     '/api/agents',
     rateLimit(10, 10 * 60_000),
-    requireConfigured(engine),
+    requireAuth,
     (req, res) => {
-      const { name, age, occupation, soul, wakeHour, sleepHour } = req.body;
+      const { name, age, occupation, soul, backstory, goal, wakeHour, sleepHour, startingGold, apiKey, model } = req.body;
+
+      // Validate API key — required for agent to think
+      if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
+        res.status(400).json({ error: 'Valid API key required — your key powers your agent\'s thinking' });
+        return;
+      }
+
+      // Sanitize model name if provided (prevent injection)
+      const safeModel = typeof model === 'string'
+        ? model.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 100)
+        : undefined;
 
       // Validate required fields
       if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -198,6 +180,19 @@ export function createRouter(engine: SimulationEngine): Router {
       }
 
       // Sanitize all user-provided text to prevent prompt injection
+      const safeBackstory = sanitizeText(backstory || '', 500);
+      const safeGoal = sanitizeText(goal || '', 200);
+      const safeSoul = sanitizeText(soul || '', 2000);
+
+      // If no soul written, compose from backstory + goal
+      let finalSoul = safeSoul;
+      if (!finalSoul && (safeBackstory || safeGoal)) {
+        const parts: string[] = [];
+        if (safeBackstory) parts.push(safeBackstory);
+        if (safeGoal) parts.push(`My goal: ${safeGoal}`);
+        finalSoul = parts.join('\n\n');
+      }
+
       const config = {
         name: sanitizeText(name, 50),
         age: clampNumber(age, 1, 120, 30),
@@ -209,9 +204,9 @@ export function createRouter(engine: SimulationEngine): Router {
           agreeableness: clampNumber(req.body.personality?.agreeableness, 0, 1, 0.5),
           neuroticism: clampNumber(req.body.personality?.neuroticism, 0, 1, 0.5),
         },
-        soul: sanitizeText(soul || '', 2000),
-        backstory: '',
-        goal: '',
+        soul: finalSoul,
+        backstory: safeBackstory,
+        goal: safeGoal,
         spriteId: 'default',
       };
 
@@ -222,10 +217,46 @@ export function createRouter(engine: SimulationEngine): Router {
       }
 
       const safeWakeHour = clampNumber(wakeHour, 0, 23, 7);
-      const safeSlleepHour = clampNumber(sleepHour, 0, 23, 23);
+      const safeSleepHour = clampNumber(sleepHour, 0, 23, 23);
+      const safeCurrency = clampNumber(startingGold, 0, 10000, 100);
 
-      const agent = engine.addAgent(config, safeWakeHour, safeSlleepHour);
+      const agent = engine.addAgent(config, safeWakeHour, safeSleepHour, safeCurrency, apiKey.trim(), safeModel, req.userId!);
       res.json({ agent: { id: agent.id, name: agent.config.name } });
+    },
+  );
+
+  // DELETE /api/agents/:id — remove an agent (requires ownership)
+  // Rate limit: 5 deletes per minute per IP
+  router.delete(
+    '/api/agents/:id',
+    rateLimit(5, 60_000),
+    requireAuth,
+    (req, res) => {
+      const { id } = req.params;
+      if (!id || typeof id !== 'string') {
+        res.status(400).json({ error: 'Agent ID is required' });
+        return;
+      }
+
+      // Check ownership
+      const snapshot = engine.getSnapshot();
+      const agent = snapshot.agents.find(a => a.id === id);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      if (agent.ownerId !== req.userId) {
+        res.status(403).json({ error: 'You can only delete your own agents' });
+        return;
+      }
+
+      const removed = engine.removeAgent(id);
+      if (!removed) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+
+      res.json({ success: true });
     },
   );
 

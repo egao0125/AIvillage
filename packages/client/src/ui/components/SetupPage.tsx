@@ -11,6 +11,7 @@ interface CreatedAgent {
   name: string;
   occupation: string;
   soul: string;
+  startingGold: number;
 }
 
 interface SetupPageProps {
@@ -34,39 +35,56 @@ const INPUT_BG = '#1a1a2e';
 const LABEL_COLOR = '#8888aa';
 const BORDER_DIM = '#2a2a4a';
 
-const SOUL_PLACEHOLDER = `Describe who this person is. Write freely — this text becomes their inner voice.
+const SOUL_PLACEHOLDER = `Write their inner voice. This is who they are — how they think, speak, and act.
 
 Example:
-"I'm warm but guarded. I moved here after losing my restaurant in the city. I pour everything into my small cafe because it's my second chance. I talk to everyone but rarely share what I'm actually feeling. I admire people who are honest about their struggles. My biggest fear is failing again."
-
-You can include:
-- Personality and temperament
-- Values and beliefs
-- Communication style
-- Fears, desires, contradictions
-- How they relate to others`;
+"I'm warm but guarded. I moved here after losing my restaurant in the city. I pour everything into my small cafe because it's my second chance. I talk to everyone but rarely share what I'm actually feeling. I want to become the most trusted person in the village, but I'm terrified of being vulnerable again."`;
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
+// --- Auth helpers ---
+function getToken(): string | null {
+  return localStorage.getItem('ai-village-token');
+}
+function setToken(token: string) {
+  localStorage.setItem('ai-village-token', token);
+}
+function clearToken() {
+  localStorage.removeItem('ai-village-token');
+}
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
+  // --- Auth state ---
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('signup');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [user, setUser] = useState<{ id: string; email: string } | null>(null);
+
   // --- Config state ---
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [model, setModel] = useState('claude-sonnet-4-6');
-  const [configured, setConfigured] = useState(false);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
 
   // --- Agent creator state ---
   const [name, setName] = useState('');
   const [age, setAge] = useState(30);
   const [occupation, setOccupation] = useState('');
+  const [backstory, setBackstory] = useState('');
+  const [goal, setGoal] = useState('');
+  const [startingGold, setStartingGold] = useState(100);
   const [soul, setSoul] = useState('');
   const [createdAgents, setCreatedAgents] = useState<CreatedAgent[]>([]);
   const [addingAgent, setAddingAgent] = useState(false);
+  const [deletingAgent, setDeletingAgent] = useState<string | null>(null);
 
   // --- Stars ---
   const [stars] = useState(() =>
@@ -82,31 +100,93 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
   const nameInputRef = useRef<HTMLInputElement>(null);
   const soulRef = useRef<HTMLTextAreaElement>(null);
 
-  // --- Check server status on mount ---
+  // --- Check server status + existing auth on mount ---
   useEffect(() => {
-    fetch('/api/config/status')
-      .then((r) => r.json())
-      .then((data) => {
-        setConfigured(data.configured);
+    const init = async () => {
+      // Check if we have a valid token
+      const token = getToken();
+      if (token) {
+        try {
+          const authRes = await fetch('/api/auth/me', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (authRes.ok) {
+            const authData = await authRes.json();
+            setUser(authData.user);
+          } else {
+            clearToken();
+          }
+        } catch {
+          clearToken();
+        }
+      }
+
+      // Load existing agents
+      try {
+        const res = await fetch('/api/config/status');
+        const data = await res.json();
         if (data.agents && data.agents.length > 0) {
           setCreatedAgents(
             data.agents.map((a: any, i: number) => ({
-              id: `existing-${i}`,
+              id: a.id || `existing-${i}`,
               name: a.name,
               occupation: a.occupation,
               soul: '',
+              startingGold: a.currency ?? 100,
             })),
           );
         }
-        setChecking(false);
-      })
-      .catch(() => {
-        setChecking(false);
+      } catch {
         setError('Server not running. Start with: pnpm dev:server');
-      });
+      }
+      setChecking(false);
+    };
+    init();
   }, []);
 
   // --- Handlers ---
+
+  const handleAuth = async () => {
+    if (!authEmail.trim() || !authPassword) {
+      setError('Email and password required');
+      return;
+    }
+    setAuthLoading(true);
+    setError('');
+    try {
+      const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail.trim(), password: authPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Authentication failed');
+        setAuthLoading(false);
+        return;
+      }
+      if (data.token) {
+        setToken(data.token);
+        setUser(data.user);
+      } else {
+        // Signup succeeded but no token — switch to login
+        setAuthMode('login');
+        setError('Account created. Please log in.');
+      }
+    } catch {
+      setError('Cannot reach server');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    clearToken();
+    setUser(null);
+    setAuthEmail('');
+    setAuthPassword('');
+  };
 
   const handleAddAgent = async () => {
     if (!name.trim()) {
@@ -118,19 +198,33 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       setError('Give your agent an occupation');
       return;
     }
+    if (!user) {
+      setError('Sign in first to create an agent');
+      return;
+    }
+    if (!apiKey.trim()) {
+      setError('Enter your API key — it powers your agent\'s thinking');
+      return;
+    }
 
     setAddingAgent(true);
     setError('');
 
     try {
+      // BYOK: send API key + model with each agent creation (auth required)
       const res = await fetch('/api/agents', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           name: name.trim(),
           age,
           occupation: occupation.trim(),
+          backstory: backstory.trim(),
+          goal: goal.trim(),
+          startingGold,
           soul: soul.trim(),
+          apiKey: apiKey.trim(),
+          model,
         }),
       });
       const data = await res.json();
@@ -147,6 +241,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
           name: name.trim(),
           occupation: occupation.trim(),
           soul: soul.trim(),
+          startingGold,
         },
       ]);
 
@@ -154,6 +249,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       setName('');
       setAge(30);
       setOccupation('');
+      setBackstory('');
+      setGoal('');
+      setStartingGold(100);
       setSoul('');
       nameInputRef.current?.focus();
     } catch {
@@ -163,32 +261,31 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
     }
   };
 
-  const handleEnter = async () => {
-    setLoading(true);
-    setError('');
+  const handleEnter = () => {
+    onEnter();
+  };
 
+  const handleDeleteAgent = async (agentId: string) => {
+    if (deletingAgent) return;
+    if (!confirm('Remove this villager from the world?')) return;
+
+    setDeletingAgent(agentId);
     try {
-      if (apiKey.trim()) {
-        const res = await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiKey: apiKey.trim(), model }),
-        });
+      const res = await fetch(`/api/agents/${agentId}`, { method: 'DELETE', headers: authHeaders() });
+      if (res.ok) {
+        setCreatedAgents((prev) => prev.filter((a) => a.id !== agentId));
+      } else {
         const data = await res.json();
-        if (!res.ok) {
-          setError(data.error || 'Configuration failed');
-          setLoading(false);
-          return;
-        }
+        setError(data.error || 'Failed to delete agent');
       }
-      onEnter();
     } catch {
       setError('Cannot reach server');
-      setLoading(false);
+    } finally {
+      setDeletingAgent(null);
     }
   };
 
-  const canEnter = createdAgents.length > 0 && (apiKey.trim().length > 0 || configured);
+  const canEnter = createdAgents.length > 0;
 
   // --- Loading state ---
   if (checking) {
@@ -321,8 +418,130 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
           </p>
         </div>
 
-        {/* ── API Config ──────────────────────────────────────── */}
+        {/* ── Auth ───────────────────────────────────────────── */}
         <div style={{ marginTop: 48, animation: 'slideIn 0.6s ease-out 0.1s backwards' }}>
+          {user ? (
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '10px 16px',
+                background: CARD_BG,
+                border: `1px solid ${BORDER_DIM}`,
+                borderRadius: 4,
+              }}
+            >
+              <span style={{ fontFamily: FONTS.pixel, fontSize: 7, color: COLORS.text }}>
+                {user.email}
+              </span>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="s-show"
+                style={{
+                  fontFamily: FONTS.pixel,
+                  fontSize: 5,
+                  color: BORDER_DIM,
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  transition: 'color 0.15s',
+                }}
+              >
+                SIGN OUT
+              </button>
+            </div>
+          ) : (
+            <div
+              style={{
+                background: CARD_BG,
+                border: `1px solid ${BORDER_DIM}`,
+                borderRadius: 6,
+                padding: 20,
+              }}
+            >
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('signup'); setError(''); }}
+                  style={{
+                    fontFamily: FONTS.pixel,
+                    fontSize: 7,
+                    color: authMode === 'signup' ? ACCENT : BORDER_DIM,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    borderBottom: authMode === 'signup' ? `1px solid ${ACCENT}` : '1px solid transparent',
+                    paddingBottom: 4,
+                  }}
+                >
+                  SIGN UP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('login'); setError(''); }}
+                  style={{
+                    fontFamily: FONTS.pixel,
+                    fontSize: 7,
+                    color: authMode === 'login' ? ACCENT : BORDER_DIM,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    borderBottom: authMode === 'login' ? `1px solid ${ACCENT}` : '1px solid transparent',
+                    paddingBottom: 4,
+                  }}
+                >
+                  LOG IN
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="email"
+                  className="s-input"
+                  style={{ ...inputStyle, flex: 1 }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+                />
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="password"
+                  className="s-input"
+                  style={{ ...inputStyle, flex: 1 }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleAuth}
+                disabled={authLoading}
+                className="s-btn"
+                style={{
+                  width: '100%',
+                  padding: '10px 0',
+                  fontFamily: FONTS.pixel,
+                  fontSize: 8,
+                  color: authLoading ? BORDER_DIM : ACCENT,
+                  background: 'transparent',
+                  border: `1px solid ${authLoading ? BORDER_DIM : ACCENT}`,
+                  borderRadius: 4,
+                  cursor: authLoading ? 'wait' : 'pointer',
+                  letterSpacing: 2,
+                  transition: 'all 0.15s',
+                }}
+              >
+                {authLoading ? '...' : authMode === 'signup' ? 'CREATE ACCOUNT' : 'LOG IN'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ── API Config ──────────────────────────────────────── */}
+        <div style={{ marginTop: 24, animation: 'slideIn 0.6s ease-out 0.15s backwards' }}>
           <div
             style={{
               fontFamily: FONTS.pixel,
@@ -342,7 +561,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={configured ? 'Key found in .env' : 'sk-ant-api03-...'}
+                placeholder="sk-ant-api03-..."
                 className="s-input"
                 style={{
                   width: '100%',
@@ -351,7 +570,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                   fontSize: 11,
                   color: COLORS.text,
                   background: INPUT_BG,
-                  border: `1px solid ${configured && !apiKey ? COLORS.active + '44' : BORDER_DIM}`,
+                  border: `1px solid ${BORDER_DIM}`,
                   borderRadius: 4,
                   boxSizing: 'border-box',
                   transition: 'border-color 0.2s',
@@ -404,7 +623,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
               ))}
             </select>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
+          <div style={{ marginTop: 5 }}>
             <a
               href="https://console.anthropic.com/settings/keys"
               target="_blank"
@@ -413,11 +632,6 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
             >
               Get a key
             </a>
-            {configured && !apiKey && (
-              <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: COLORS.active }}>
-                .env configured
-              </span>
-            )}
           </div>
         </div>
 
@@ -471,7 +685,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
             </div>
 
             {/* Occupation */}
-            <div style={{ marginBottom: 20 }}>
+            <div style={{ marginBottom: 14 }}>
               <label style={labelStyle}>OCCUPATION</label>
               <input
                 type="text"
@@ -483,32 +697,57 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
               />
             </div>
 
+            {/* Backstory */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ ...labelStyle, marginBottom: 0 }}>BACKSTORY</label>
+                <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM }}>
+                  {backstory.length}/500
+                </span>
+              </div>
+              <textarea
+                value={backstory}
+                onChange={(e) => setBackstory(e.target.value.slice(0, 500))}
+                placeholder="Moved here after losing their restaurant in the city. This cafe is their second chance."
+                rows={3}
+                className="s-textarea"
+                style={{
+                  ...inputStyle,
+                  resize: 'vertical' as const,
+                  lineHeight: 2.2,
+                  fontSize: 7,
+                }}
+              />
+            </div>
+
+            {/* Goal */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={labelStyle}>GOAL</label>
+              <input
+                type="text"
+                value={goal}
+                onChange={(e) => setGoal(e.target.value.slice(0, 200))}
+                placeholder="Become the most trusted person in the village"
+                className="s-input"
+                style={inputStyle}
+              />
+            </div>
+
             {/* Divider */}
-            <div
-              style={{
-                height: 1,
-                background: BORDER_DIM,
-                margin: '4px 0 20px',
-                opacity: 0.5,
-              }}
-            />
+            <div style={{ height: 1, background: BORDER_DIM, margin: '4px 0 18px', opacity: 0.5 }} />
 
             {/* Soul */}
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <label style={{ ...labelStyle, marginBottom: 0, color: ACCENT, fontSize: 7 }}>
-                  SOUL
-                </label>
-                <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM }}>
-                  {soul.length}/2000
-                </span>
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ ...labelStyle, marginBottom: 0, color: ACCENT, fontSize: 7 }}>SOUL</label>
+                <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM }}>{soul.length}/2000</span>
               </div>
               <textarea
                 ref={soulRef}
                 value={soul}
                 onChange={(e) => setSoul(e.target.value.slice(0, 2000))}
                 placeholder={SOUL_PLACEHOLDER}
-                rows={10}
+                rows={6}
                 className="s-textarea"
                 style={{
                   width: '100%',
@@ -525,17 +764,18 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                   transition: 'border-color 0.2s',
                 }}
               />
-              <p
-                style={{
-                  fontFamily: FONTS.pixel,
-                  fontSize: 5,
-                  color: BORDER_DIM,
-                  margin: '6px 0 0',
-                  lineHeight: 2,
-                }}
-              >
-                This text is injected into the agent's mind. It shapes how they think, speak, and act.
-              </p>
+            </div>
+
+            {/* Starting Gold */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
+              <label style={{ ...labelStyle, marginBottom: 0, whiteSpace: 'nowrap' as const }}>STARTING GOLD</label>
+              <input
+                type="number"
+                value={startingGold}
+                onChange={(e) => setStartingGold(Math.max(0, Math.min(10000, parseInt(e.target.value) || 0)))}
+                className="s-input"
+                style={{ ...inputStyle, width: 90, textAlign: 'center' as const }}
+              />
             </div>
 
             {/* Error */}
@@ -672,23 +912,31 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                       </div>
                       <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: LABEL_COLOR, marginTop: 2 }}>
                         {agent.occupation}
+                        {agent.startingGold !== undefined && (
+                          <span style={{ color: BORDER_DIM, marginLeft: 8 }}>{agent.startingGold}g</span>
+                        )}
                       </div>
                     </div>
-                    {agent.soul && (
-                      <div
-                        style={{
-                          fontFamily: FONTS.pixel,
-                          fontSize: 5,
-                          color: BORDER_DIM,
-                          maxWidth: 180,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {agent.soul.slice(0, 60)}...
-                      </div>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteAgent(agent.id)}
+                      disabled={deletingAgent === agent.id}
+                      className="s-show"
+                      style={{
+                        fontFamily: FONTS.pixel,
+                        fontSize: 8,
+                        color: deletingAgent === agent.id ? BORDER_DIM : '#664444',
+                        background: 'none',
+                        border: 'none',
+                        cursor: deletingAgent === agent.id ? 'wait' : 'pointer',
+                        padding: '4px 6px',
+                        transition: 'color 0.15s',
+                        flexShrink: 0,
+                      }}
+                      title="Remove from village"
+                    >
+                      {deletingAgent === agent.id ? '...' : '\u00D7'}
+                    </button>
                   </div>
                 );
               })}
@@ -707,7 +955,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
           <button
             type="button"
             onClick={handleEnter}
-            disabled={!canEnter || loading}
+            disabled={!canEnter}
             className="s-btn"
             style={{
               width: '100%',
@@ -715,17 +963,17 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
               padding: '14px 0',
               fontFamily: FONTS.pixel,
               fontSize: 11,
-              color: !canEnter || loading ? BORDER_DIM : ACCENT,
+              color: !canEnter ? BORDER_DIM : ACCENT,
               background: 'transparent',
-              border: `2px solid ${!canEnter || loading ? BORDER_DIM : ACCENT}`,
+              border: `2px solid ${!canEnter ? BORDER_DIM : ACCENT}`,
               borderRadius: 4,
-              cursor: !canEnter || loading ? 'not-allowed' : 'pointer',
+              cursor: !canEnter ? 'not-allowed' : 'pointer',
               letterSpacing: 4,
               transition: 'all 0.2s',
               opacity: !canEnter ? 0.5 : 1,
             }}
           >
-            {loading ? 'CONNECTING...' : 'ENTER THE VILLAGE'}
+            ENTER THE VILLAGE
           </button>
 
           <button
@@ -760,7 +1008,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
               opacity: 0.5,
             }}
           >
-            Your key stays server-side. Never stored to disk.
+            Your key powers only your agents. Stored encrypted server-side.
           </p>
         </div>
       </div>

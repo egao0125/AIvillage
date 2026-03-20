@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, BoardPost, Election, GameTime, Item, Mood, Position, Property, Skill, WorldEvent, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, Artifact, BoardPost, Building, DriveState, Election, GameTime, Institution, Item, Mood, Position, Property, Skill, Technology, VitalState, Weather, WorldEvent, WorldSnapshot } from '@ai-village/shared';
 
 export class EventBroadcaster {
   constructor(private io: Server) {}
@@ -18,6 +18,10 @@ export class EventBroadcaster {
 
   agentSpawn(agent: Agent): void {
     this.io.emit('agent:spawn', { agent });
+  }
+
+  agentLeave(agentId: string): void {
+    this.io.emit('agent:leave', { agentId });
   }
 
   agentCurrency(agentId: string, currency: number, delta: number, reason: string): void {
@@ -74,5 +78,41 @@ export class EventBroadcaster {
 
   reputationChange(fromId: string, toId: string, score: number): void {
     this.io.emit('reputation:change', { fromId, toId, score });
+  }
+
+  agentThought(agentId: string, thought: string): void {
+    this.io.emit('agent:thought', { agentId, thought });
+  }
+
+  agentDeath(agentId: string, cause: string): void {
+    this.io.emit('agent:death', { agentId, cause });
+  }
+
+  agentDrives(agentId: string, drives: DriveState): void {
+    this.io.emit('agent:drives', { agentId, drives });
+  }
+
+  agentVitals(agentId: string, vitals: VitalState): void {
+    this.io.emit('agent:vitals', { agentId, vitals });
+  }
+
+  weatherChange(weather: Weather): void {
+    this.io.emit('world:weather', weather);
+  }
+
+  institutionUpdate(institution: Institution): void {
+    this.io.emit('institution:update', institution);
+  }
+
+  artifactCreated(artifact: Artifact): void {
+    this.io.emit('artifact:created', artifact);
+  }
+
+  buildingUpdate(building: Building): void {
+    this.io.emit('building:update', building);
+  }
+
+  technologyDiscovered(technology: Technology): void {
+    this.io.emit('technology:discovered', technology);
   }
 }

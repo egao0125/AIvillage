@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, WorldEvent, WorldSnapshot } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, AnthropicProvider } from '@ai-village/ai-engine';
+import type { Agent, AgentConfig, WorldEvent, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
+import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { World } from './world.js';
 import { EventBroadcaster } from './events.js';
@@ -8,6 +8,8 @@ import { ConversationManager } from './conversation.js';
 import { AgentController } from './agent-controller.js';
 import { STARTER_AGENTS } from '../agents/starter.js';
 import { AREAS } from '../map/village.js';
+import { SupabasePersistence } from '../persistence/supabase.js';
+import type { ControllerState } from './agent-controller.js';
 
 export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
@@ -17,11 +19,25 @@ export class SimulationEngine {
   private conversationManager!: ConversationManager;
   private broadcaster!: EventBroadcaster;
   private cognitions: Map<string, AgentCognition> = new Map();
+  private agentApiKeys: Map<string, { apiKey: string; model: string }> = new Map();
+  // Shared throttle per API key — limits concurrent LLM calls to prevent OOM
+  private static readonly MAX_CONCURRENT_LLM = 5;
+  private throttles: Map<string, ThrottledProvider> = new Map();
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
+  private persistence: SupabasePersistence | null = null;
 
   constructor(private io: Server) {
     this.world = new World();
+
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (supabaseUrl && supabaseKey) {
+      this.persistence = new SupabasePersistence(supabaseUrl, supabaseKey);
+      console.log('[Engine] Supabase persistence enabled');
+    } else {
+      console.log('[Engine] Supabase persistence disabled (missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY)');
+    }
   }
 
   async initialize(): Promise<void> {
@@ -31,23 +47,108 @@ export class SimulationEngine {
     // Create conversation manager
     this.conversationManager = new ConversationManager(this.world, this.broadcaster);
 
-    // Get Anthropic API key
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      console.warn(
-        '[Engine] ANTHROPIC_API_KEY not set — LLM calls will fail. Set it in .env for full AI functionality.',
-      );
+    // Restore from Supabase if persistence is enabled
+    if (this.persistence) {
+      await this.loadFromSupabase();
     }
 
-    // Spawn starter agents
-    for (const starter of STARTER_AGENTS) {
-      this.addAgent(starter.config, starter.wakeHour, starter.sleepHour);
-    }
-
-    console.log(`[Engine] AI Village initialized with ${this.world.agents.size} agents`);
+    console.log(`[Engine] AI Village initialized (no starter agents — users create agents via UI)`);
   }
 
-  addAgent(config: AgentConfig, wakeHour: number = 7, sleepHour: number = 23): Agent {
+  private async loadFromSupabase(): Promise<void> {
+    if (!this.persistence) return;
+
+    try {
+      // Load all data in parallel
+      const [worldData, agents, controllerDataMap] = await Promise.all([
+        this.persistence.loadWorldState(),
+        this.persistence.loadAgents(),
+        this.persistence.loadAgentControllers(),
+      ]);
+
+      if (worldData) {
+        this.world.time = worldData.time as typeof this.world.time;
+        this.world.weather = worldData.weather as typeof this.world.weather;
+        this.world.board = (worldData.board ?? []) as typeof this.world.board;
+        this.world.reputation = (worldData.reputation ?? []) as typeof this.world.reputation;
+        this.world.secrets = (worldData.secrets ?? []) as typeof this.world.secrets;
+        this.world.artifacts = (worldData.artifacts ?? []) as typeof this.world.artifacts;
+        this.world.technologies = (worldData.technologies ?? []) as typeof this.world.technologies;
+        this.world.materialSpawns = (worldData.materialSpawns ?? this.world.materialSpawns) as typeof this.world.materialSpawns;
+        this.world.events = (worldData.events ?? []) as typeof this.world.events;
+        this.world.conversations = recordToMap(worldData.conversations ?? {}) as typeof this.world.conversations;
+        this.world.elections = recordToMap(worldData.elections ?? {}) as typeof this.world.elections;
+        this.world.properties = recordToMap(worldData.properties ?? {}) as typeof this.world.properties;
+        this.world.items = recordToMap(worldData.items ?? {}) as typeof this.world.items;
+        this.world.institutions = recordToMap(worldData.institutions ?? {}) as typeof this.world.institutions;
+        this.world.buildings = recordToMap(worldData.buildings ?? {}) as typeof this.world.buildings;
+        console.log(`[Engine] World state restored (day ${this.world.time.day}, hour ${this.world.time.hour})`);
+      }
+
+      if (agents.length === 0) {
+        console.log('[Engine] No agents to restore from Supabase');
+        return;
+      }
+
+      const globalKey = process.env.ANTHROPIC_API_KEY;
+      const globalModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+      const sharedMemoryStore = new SupabaseMemoryStore(this.persistence.client);
+
+      for (const agent of agents) {
+        this.world.addAgent(agent);
+
+        // Restore per-agent API key (fall back to global env)
+        const ctrlDataForKey = controllerDataMap.get(agent.id);
+        const effectiveKey = ctrlDataForKey?.apiKey || globalKey || 'dummy-key';
+        const effectiveModel = ctrlDataForKey?.model || globalModel;
+        if (ctrlDataForKey?.apiKey) {
+          this.agentApiKeys.set(agent.id, { apiKey: ctrlDataForKey.apiKey, model: effectiveModel });
+        }
+
+        // Create cognition with Supabase-backed memory + throttled LLM
+        const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider);
+        this.cognitions.set(agent.id, cognition);
+
+        // Restore controller
+        const ctrlData = controllerDataMap.get(agent.id);
+        const wakeHour = ctrlData?.wakeHour ?? 7;
+        const sleepHour = ctrlData?.sleepHour ?? 23;
+        const homeArea = ctrlData?.homeArea ?? 'plaza';
+
+        const controller = new AgentController(
+          agent,
+          cognition,
+          this.world,
+          this.broadcaster,
+          wakeHour,
+          sleepHour,
+          homeArea,
+        );
+
+        // Restore mutable controller state
+        if (ctrlData) {
+          const restoredState = ctrlData.controllerState as ControllerState;
+          // Reset moving/performing to idle — path is not saved, agent needs to replan
+          controller.state = (restoredState === 'moving' || restoredState === 'performing')
+            ? 'idle'
+            : restoredState;
+          controller.dayPlan = ctrlData.dayPlan as typeof controller.dayPlan;
+          controller.currentPlanIndex = ctrlData.currentPlanIndex ?? 0;
+          controller.activityTimer = ctrlData.activityTimer ?? 0;
+          controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
+        }
+
+        this.controllers.set(agent.id, controller);
+      }
+
+      console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
+    } catch (err) {
+      console.error('[Engine] Failed to load from Supabase:', err);
+    }
+  }
+
+  addAgent(config: AgentConfig, wakeHour: number = 7, sleepHour: number = 23, startingCurrency: number = 100, apiKey?: string, model?: string, ownerId?: string): Agent {
     const id = crypto.randomUUID();
 
     // Pick a random spawn position from public areas
@@ -62,24 +163,33 @@ export class SimulationEngine {
       position: { ...spawnPos },
       state: 'idle',
       currentAction: 'arriving',
-      currency: 100,
+      currency: startingCurrency,
       createdAt: Date.now(),
-      ownerId: 'user',
+      ownerId: ownerId || 'anonymous',
       mood: 'neutral',
       inventory: [],
       skills: [],
     };
 
+    agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
+    agent.vitals = { health: 100, hunger: 0, energy: 100 };
+    agent.alive = true;
+    agent.mentalModels = [];
+    agent.institutionIds = [];
+
     this.world.addAgent(agent);
     this.broadcaster.agentSpawn(agent);
 
-    // Create cognition stack
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-    const memoryStore = new InMemoryStore();
-    const llmProvider = apiKey
-      ? new AnthropicProvider(apiKey, model)
-      : new AnthropicProvider('dummy-key', model); // will fail on actual calls
+    // Create cognition stack with per-agent API key (falls back to global env)
+    const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
+    const effectiveModel = model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    if (effectiveKey) {
+      this.agentApiKeys.set(id, { apiKey: effectiveKey, model: effectiveModel });
+    }
+    const memoryStore = this.persistence
+      ? new SupabaseMemoryStore(this.persistence.client)
+      : new InMemoryStore();
+    const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider);
     this.cognitions.set(id, cognition);
 
@@ -98,7 +208,63 @@ export class SimulationEngine {
       `[Engine] Agent created: ${config.name} (${config.occupation}) at ${spawnArea}`,
     );
 
+    // Save immediately so agents survive restarts
+    if (this.persistence) {
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
+        console.error('[Persistence] Save after addAgent failed:', err)
+      );
+    }
+
     return agent;
+  }
+
+  removeAgent(id: string): boolean {
+    const agent = this.world.getAgent(id);
+    if (!agent) return false;
+
+    // Stop controller
+    const controller = this.controllers.get(id);
+    if (controller) {
+      this.controllers.delete(id);
+    }
+
+    // Remove cognition and API key
+    this.cognitions.delete(id);
+    this.agentApiKeys.delete(id);
+
+    // Remove from any active conversations
+    for (const conv of this.world.getActiveConversations()) {
+      if (conv.participants.includes(id)) {
+        // End the conversation in world state
+        this.world.endConversation(conv.id);
+        this.broadcaster.conversationEnd(conv.id);
+        // Release other participants
+        for (const pid of conv.participants) {
+          if (pid !== id) {
+            const otherController = this.controllers.get(pid);
+            if (otherController) {
+              otherController.leaveConversation();
+            }
+          }
+        }
+      }
+    }
+
+    // Remove from world
+    this.world.agents.delete(id);
+
+    // Broadcast leave
+    this.broadcaster.agentLeave(id);
+
+    // Delete from Supabase (CASCADE removes controller + memories)
+    if (this.persistence) {
+      void this.persistence.deleteAgent(id).catch(err =>
+        console.error('[Persistence] Delete failed:', err)
+      );
+    }
+
+    console.log(`[Engine] Agent removed: ${agent.config.name}`);
+    return true;
   }
 
   start(): void {
@@ -106,17 +272,25 @@ export class SimulationEngine {
 
     this.tickInterval = setInterval(() => {
       this.tick();
-    }, 250); // 4x speed: 1 game minute = 250ms real time
+    }, 83); // 12x speed: 1 game minute = 83ms real time (~3x previous)
 
     console.log('[Engine] Simulation started');
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.tickInterval) {
       clearInterval(this.tickInterval);
       this.tickInterval = null;
-      console.log('[Engine] Simulation stopped');
     }
+    if (this.persistence) {
+      try {
+        await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+        console.log('[Engine] Final state saved to Supabase');
+      } catch (err) {
+        console.error('[Engine] Final save failed:', err);
+      }
+    }
+    console.log('[Engine] Simulation stopped');
   }
 
   private tick(): void {
@@ -157,6 +331,24 @@ export class SimulationEngine {
 
     // 10. Every tick: expire world events
     this.world.expireEvents();
+
+    // 11. Every 60 ticks (~1 game hour): update weather
+    if (this.tickCount % 60 === 0) {
+      this.updateWeather();
+    }
+
+    // 12. Every 1440 ticks (~1 game day): advance season check, damage buildings
+    if (this.tickCount % 1440 === 0) {
+      this.checkSeasonAdvance();
+      this.weatherDamageBuildings();
+    }
+
+    // 13. Periodic save every 300 ticks (~5 game hours)
+    if (this.tickCount % 300 === 0 && this.persistence) {
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
+        console.error('[Persistence] Periodic save failed:', err)
+      );
+    }
   }
 
   /**
@@ -166,7 +358,7 @@ export class SimulationEngine {
   private runPerception(): void {
     for (const [agentId, cognition] of this.cognitions.entries()) {
       const agent = this.world.getAgent(agentId);
-      if (!agent || agent.state === 'sleeping') continue;
+      if (!agent || agent.state === 'sleeping' || agent.alive === false) continue;
 
       const nearby = this.world.getNearbyAgents(agent.position, 5)
         .filter(a => a.id !== agentId);
@@ -196,6 +388,9 @@ export class SimulationEngine {
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         if (dist > 3) continue;
+
+        // Skip dead agents
+        if (a1.alive === false || a2.alive === false) continue;
 
         // Check if both are available (not sleeping or already conversing)
         const c1 = this.controllers.get(a1.id);
@@ -382,29 +577,102 @@ export class SimulationEngine {
     }
   }
 
+  private updateWeather(): void {
+    const oldWeather = this.world.weather.current;
+    const newWeather = this.world.updateWeather();
+    if (newWeather !== oldWeather) {
+      this.broadcaster.weatherChange(this.world.weather);
+      console.log(`[Engine] Weather changed: ${oldWeather} → ${newWeather} (${this.world.weather.season})`);
+    }
+  }
+
+  private checkSeasonAdvance(): void {
+    this.world.weather.seasonDay++;
+    if (this.world.weather.seasonDay >= 30) {
+      this.world.advanceSeason();
+      this.broadcaster.weatherChange(this.world.weather);
+      console.log(`[Engine] Season changed to ${this.world.weather.season}`);
+    }
+  }
+
+  private weatherDamageBuildings(): void {
+    const weather = this.world.weather.current;
+    if (weather !== 'storm' && weather !== 'snow') return;
+
+    const damage = weather === 'storm' ? 5 : 2;
+    for (const building of this.world.buildings.values()) {
+      const updated = this.world.damageBuilding(building.id, damage);
+      if (updated) {
+        this.broadcaster.buildingUpdate(updated);
+        if (updated.durability <= 0) {
+          console.log(`[Engine] Building collapsed: ${updated.name}`);
+        }
+      }
+    }
+  }
+
+  killAgent(agentId: string, cause: string): void {
+    const agent = this.world.getAgent(agentId);
+    if (!agent || agent.alive === false) return;
+
+    const droppedItems = this.world.killAgent(agentId, cause);
+
+    // Stop controller
+    this.controllers.delete(agentId);
+    this.cognitions.delete(agentId);
+
+    // Broadcast death
+    this.broadcaster.agentDeath(agentId, cause);
+
+    // Create diary artifact from agent's memories (their final legacy)
+    const artifact = {
+      id: crypto.randomUUID(),
+      title: `Diary of ${agent.config.name}`,
+      content: `${agent.config.name}, ${agent.config.occupation}, lived ${this.world.time.day} days in the village. They died of ${cause}. They had ${agent.currency} gold and ${agent.skills.length} skills.`,
+      type: 'diary' as const,
+      creatorId: agentId,
+      creatorName: agent.config.name,
+      location: this.world.getAreaAt(agent.position)?.id,
+      visibility: 'public' as const,
+      reactions: [],
+      createdAt: Date.now(),
+      day: this.world.time.day,
+    };
+    this.world.addArtifact(artifact);
+    this.broadcaster.artifactCreated(artifact);
+
+    console.log(`[Engine] ${agent.config.name} has died: ${cause}. Diary created.`);
+  }
+
   getSnapshot(): WorldSnapshot {
     return this.world.getSnapshot();
   }
 
+  /**
+   * Get or create a throttled LLM provider for a given API key.
+   * All agents sharing the same key share the same concurrency limit.
+   */
+  private getThrottledProvider(apiKey: string, model: string): ThrottledProvider {
+    const cacheKey = `${apiKey}:${model}`;
+    let throttled = this.throttles.get(cacheKey);
+    if (!throttled) {
+      const inner = new AnthropicProvider(apiKey, model);
+      throttled = new ThrottledProvider(inner, SimulationEngine.MAX_CONCURRENT_LLM);
+      this.throttles.set(cacheKey, throttled);
+    }
+    return throttled;
+  }
+
   get isConfigured(): boolean {
-    return !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'dummy-key';
+    // With BYOK, always allow — each agent carries its own key
+    return true;
   }
 
   get isRunning(): boolean {
     return this.tickInterval !== null;
   }
+}
 
-  updateApiKey(apiKey: string, model?: string): void {
-    const m = model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-    process.env.ANTHROPIC_API_KEY = apiKey;
-
-    // Rebuild all LLM providers with the new key
-    for (const [agentId, cognition] of this.cognitions.entries()) {
-      const provider = new AnthropicProvider(apiKey, m);
-      // Replace the provider on the cognition instance
-      (cognition as any).llm = provider;
-    }
-
-    console.log(`[Engine] API key updated, model: ${m}`);
-  }
+function recordToMap<V>(record: Record<string, V>): Map<string, V> {
+  return new Map(Object.entries(record));
 }
