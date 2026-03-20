@@ -4,7 +4,7 @@
 // Based on: https://arxiv.org/abs/2304.03442
 // ============================================================================
 
-import type { Agent, Memory, Position, MapArea, AgentState, DayPlan, DayPlanItem, Mood, Item, Skill, WorldEvent, Election, Property, ReputationEntry, Secret, MentalModel, DriveState, VitalState } from "@ai-village/shared";
+import type { Agent, Memory, Position, MapArea, AgentState, DayPlan, DayPlanItem, Mood, Item, Skill, Election, Property, ReputationEntry, Secret, MentalModel, DriveState, VitalState } from "@ai-village/shared";
 
 // --- Memory Stream ---
 
@@ -13,6 +13,8 @@ export interface MemoryStore {
   retrieve(agentId: string, query: string, limit?: number): Promise<Memory[]>;
   getRecent(agentId: string, limit?: number): Promise<Memory[]>;
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
+  getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
+  removeBatch(ids: string[]): Promise<void>;
 }
 
 // --- LLM Provider ---
@@ -318,13 +320,71 @@ Format: MOOD: <mood>`;
       mentalModels = await this.updateMentalModels(interactionMemories);
     }
 
+    // Summarize old memories to prevent unbounded growth
+    await this.summarizeOldMemories();
+
     return { reflection, mood, mentalModels };
+  }
+
+  /**
+   * Summarize old, low-importance memories into condensed reflections.
+   * Called at end of reflect() to keep memory stores bounded.
+   * Memories older than 3 real hours (~3 game days at 12x speed) with importance < 7 get summarized.
+   */
+  async summarizeOldMemories(): Promise<void> {
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+    const oldMemories = await this.memory.getOlderThan(this.agent.id, threeHoursAgo);
+
+    if (oldMemories.length < 10) return; // not worth summarizing yet
+
+    // Keep high-importance memories intact
+    const summarizable = oldMemories.filter(m => m.importance < 7);
+    if (summarizable.length < 5) return;
+
+    // Group by type
+    const groups: Map<string, Memory[]> = new Map();
+    for (const m of summarizable) {
+      const key = m.type;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(m);
+    }
+
+    for (const [type, memories] of groups) {
+      if (memories.length < 3) continue; // too few to summarize
+
+      const memoryTexts = memories.map(m => m.content).join('\n- ');
+
+      try {
+        const summary = await this.llm.complete(
+          `You are summarizing old memories for ${this.agent.config.name}. Be concise.`,
+          `Summarize these ${memories.length} ${type} memories into 2-3 sentences that capture the key information:\n- ${memoryTexts}`
+        );
+
+        // Create summary memory
+        await this.memory.add({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'reflection',
+          content: `[Summary of ${memories.length} old ${type} memories] ${summary}`,
+          importance: 6,
+          timestamp: Date.now(),
+          relatedAgentIds: [...new Set(memories.flatMap(m => m.relatedAgentIds))],
+        });
+
+        // Remove originals
+        await this.memory.removeBatch(memories.map(m => m.id));
+
+        console.log(`[Memory] ${this.agent.config.name}: summarized ${memories.length} old ${type} memories`);
+      } catch (err) {
+        console.error(`[Memory] Failed to summarize ${type} memories for ${this.agent.config.name}:`, err);
+      }
+    }
   }
 
   /**
    * Generate conversation response
    */
-  async converse(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string): Promise<string> {
+  async converse(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string): Promise<string> {
     const { config } = this.agent;
     const memoryQuery = otherAgents.map(a => `${a.config.name} ${a.config.occupation}`).join(' ');
     const memories = await this.memory.retrieve(
@@ -362,6 +422,7 @@ Format: MOOD: <mood>`;
     }).join('');
     const boardSection = boardContext ? `\n\nVILLAGE BOARD (public posts everyone can see):\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
+    const artifactSection = artifactContext ? `\n\nVILLAGE MEDIA (recent publications):\n${artifactContext}` : '';
     const systemPrompt = `You are ${config.name}, age ${config.age}, ${config.occupation}.
 
 ${soulText}${deepIdentitySection}
@@ -388,7 +449,7 @@ VILLAGE MAP — you know these places and what you can do there:
 
 You can ONLY get coffee at the cafe, ONLY buy bread at the bakery, ONLY craft at the workshop, etc. Go to the right place for what you need.
 
-You are having a conversation with ${otherAgents.map(a => `${a.config.name} (${a.config.occupation})`).join(', ')}.${otherDescriptions}${boardSection}${worldSection}
+You are having a conversation with ${otherAgents.map(a => `${a.config.name} (${a.config.occupation})`).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}
 
 YOUR STATUS:
 - Gold: ${this.agent.currency ?? 0}
@@ -426,6 +487,7 @@ ECONOMY & ITEMS:
   [ACTION: give <N> gold to <name>] [ACTION: demand <N> gold from <name>]
   [ACTION: gather - <material>] — pick up materials (wood, herbs, fish, etc.)
   [ACTION: craft - <item name> from <material>] — make something from materials you have.
+  [ACTION: cook - <dish name> from <ingredient>] — cook food from ingredients (doubles value, creates food item).
   [ACTION: give item - <item name> to <agent>] [ACTION: sell item - <item name> to <agent> for <N> gold]
   [ACTION: buy item - <item name> from <agent> for <N> gold] [ACTION: steal item - <item name> from <agent>]
 
@@ -433,6 +495,13 @@ SECRETS & SKILLS:
   [ACTION: share secret - <secret text> with <agent>] — whisper a secret.
   [ACTION: create secret - <secret text> about <agent>] — invent or note a secret.
   [ACTION: teach - <skill name> to <agent>] [ACTION: learn - <skill name> from <agent>]
+
+MEDIA & WRITING:
+  [ACTION: publish newspaper - <Title>: <content>] — publish a newspaper everyone reads.
+  [ACTION: write letter to <agent> - <content>] — send a private letter.
+  [ACTION: create propaganda - <Title>: <content>] — spread propaganda.
+  [ACTION: create law - <Title>: <content>] — draft a formal law.
+  [ACTION: create manifesto - <Title>: <content>] — publish your manifesto.
 
   [ACTION: <any intention>] — anything else you want to do.
 
@@ -576,7 +645,9 @@ ${memoryContext || 'No recent memories yet.'}
 
 Plan your activities from hour ${currentTime.hour} onward. You are a social creature — include activities where you go to places where other villagers hang out (plaza, cafe, tavern, market, park). If someone asked you to meet them somewhere or do something together, go there. If a conversation upset you, you might avoid that person or seek comfort. React to what happened — don't just follow routine. Mix work with socializing.
 
-You are growing and changing. Your plans should reflect who you're becoming, not just who you started as. If you learned a new skill, practice it. If you got burned by someone, avoid them or confront them. If you discovered a new interest, pursue it. If you're falling into bad habits, your plans might reflect that too — skipping work to drink at the tavern, hoarding gold at the market, scheming at town hall.${strongestDriveHint}
+You are growing and changing. Your plans should reflect who you're becoming, not just who you started as. If you learned a new skill, practice it. If you got burned by someone, avoid them or confront them. If you discovered a new interest, pursue it. If you're falling into bad habits, your plans might reflect that too — skipping work to drink at the tavern, hoarding gold at the market, scheming at town hall.
+
+FOOD & SURVIVAL: If you're hungry (hunger > 50), go to the cafe, bakery, or tavern to buy food for gold. You can also gather food from the farm, lake, or forest. Eating reduces hunger. If you don't eat, your health drops.${strongestDriveHint}
 
 Return a JSON array of activities:
 [{"time": <hour 0-23>, "duration": <minutes>, "activity": "<what you'll do>", "location": "<where>", "emoji": "<optional emoji>"}]

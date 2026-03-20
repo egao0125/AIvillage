@@ -1,4 +1,4 @@
-import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, ArtifactReaction, Building, Institution, InstitutionMember } from '@ai-village/shared';
+import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, ArtifactReaction, Building, Institution, InstitutionMember, Agent } from '@ai-village/shared';
 import type { AgentCognition } from '@ai-village/ai-engine';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -133,9 +133,16 @@ export class ConversationManager {
 
       // Generate response via LLM, with fallback on failure
       const boardContext = this.world.getBoardSummary();
+      const publicArtifacts = this.world.getPublicArtifacts().slice(-5);
+      const artifactContext = publicArtifacts.length > 0
+        ? publicArtifacts.map(a => `- [${a.type.toUpperCase()}] "${a.title}" by ${a.creatorName}: ${a.content.slice(0, 80)}`).join('\n')
+        : undefined;
+      // Build institution context for the speaking agent
+      const institutionContext = this.buildInstitutionContext(speakerId);
+
       let response: string;
       try {
-        response = await cognition.converse(otherAgents, history, boardContext);
+        response = await cognition.converse(otherAgents, history, boardContext, institutionContext || undefined, artifactContext);
       } catch {
         // Fallback dialogue when LLM is unavailable
         response = this.getFallbackDialogue(speakerAgent.config.name, otherAgents[0].config.name, active.turnCount);
@@ -458,6 +465,39 @@ export class ConversationManager {
           console.log(`[Social] ${actorName} crafted ${itemName} from ${materialName}`);
         } else {
           console.log(`[Social] ${actorName} tried to craft ${itemName} but lacks ${materialName}`);
+        }
+      }
+      return;
+    }
+
+    // --- COOK FOOD ---
+    // e.g. "cook - mushroom soup from mushrooms"
+    const cookMatch = lower.match(/^cook\s*[-:]\s*(.+?)\s+from\s+(.+)/);
+    if (cookMatch) {
+      const dishName = cookMatch[1].trim();
+      const ingredientName = cookMatch[2].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const ingredient = actor.inventory.find(i =>
+          i.name.toLowerCase() === ingredientName && (i.type === 'material' || i.type === 'food')
+        );
+        if (ingredient) {
+          this.world.removeItem(ingredient.id);
+          const cookedItem: Item = {
+            id: crypto.randomUUID(),
+            name: dishName,
+            description: `${dishName} cooked by ${actorName} from ${ingredientName}`,
+            ownerId: actorId,
+            createdBy: actorId,
+            value: ingredient.value * 2,
+            type: 'food',
+          };
+          this.world.addItem(cookedItem);
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          this.broadcaster.agentAction(actorId, `cooked ${dishName}`, '\u{1F373}');
+          console.log(`[Social] ${actorName} cooked ${dishName} from ${ingredientName}`);
+        } else {
+          console.log(`[Social] ${actorName} tried to cook ${dishName} but lacks ${ingredientName}`);
         }
       }
       return;
@@ -1047,6 +1087,28 @@ export class ConversationManager {
       timestamp: Date.now(),
       relatedAgentIds: [targetId],
     });
+  }
+
+  /**
+   * Build institution context for a specific agent.
+   */
+  private buildInstitutionContext(agentId: string): string {
+    const institutions = Array.from(this.world.institutions.values()).filter(i => !i.dissolved);
+    if (institutions.length === 0) return '';
+
+    const lines: string[] = ['VILLAGE INSTITUTIONS:'];
+    for (const inst of institutions) {
+      const myMembership = inst.members.find(m => m.agentId === agentId);
+      const memberNames = inst.members
+        .map(m => this.world.getAgent(m.agentId)?.config.name ?? m.agentId.slice(0, 6))
+        .join(', ');
+      let line = `- ${inst.name} (${inst.type}): ${inst.description || 'no description'}. ${inst.members.length} members [${memberNames}]. Treasury: ${inst.treasury}g.`;
+      if (myMembership) {
+        line += ` YOU are a ${myMembership.role}.`;
+      }
+      lines.push(line);
+    }
+    return lines.join('\n');
   }
 
   /**

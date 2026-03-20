@@ -1,17 +1,59 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Memory } from '@ai-village/shared';
+import { TFIDFEmbedder } from './embeddings.js';
 
 interface MemoryStore {
   add(memory: Memory): Promise<void>;
   retrieve(agentId: string, query: string, limit?: number): Promise<Memory[]>;
   getRecent(agentId: string, limit?: number): Promise<Memory[]>;
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
+  getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
+  removeBatch(ids: string[]): Promise<void>;
 }
 
 export class SupabaseMemoryStore implements MemoryStore {
+  private embedders: Map<string, TFIDFEmbedder> = new Map();
+  private bootstrapped: Set<string> = new Set();
+
   constructor(private supabase: SupabaseClient) {}
 
+  private getEmbedder(agentId: string): TFIDFEmbedder {
+    if (!this.embedders.has(agentId)) {
+      this.embedders.set(agentId, new TFIDFEmbedder());
+    }
+    return this.embedders.get(agentId)!;
+  }
+
+  /**
+   * Bootstrap the embedder for an agent by loading existing memories to build vocabulary.
+   * Only runs once per agent per server lifetime.
+   */
+  private async bootstrapEmbedder(agentId: string): Promise<TFIDFEmbedder> {
+    const embedder = this.getEmbedder(agentId);
+    if (this.bootstrapped.has(agentId)) return embedder;
+
+    const { data } = await this.supabase
+      .from('memories')
+      .select('content')
+      .eq('agent_id', agentId)
+      .order('timestamp', { ascending: false })
+      .limit(200);
+
+    if (data) {
+      for (const row of data) {
+        embedder.addDocument(row.content as string);
+      }
+    }
+    this.bootstrapped.add(agentId);
+    return embedder;
+  }
+
   async add(memory: Memory): Promise<void> {
+    // Build embedding (don't persist to Supabase — recomputed on load)
+    const embedder = this.getEmbedder(memory.agentId);
+    embedder.addDocument(memory.content);
+    memory.embedding = embedder.embed(memory.content);
+
     try {
       await this.supabase.from('memories').upsert({
         id: memory.id,
@@ -42,16 +84,29 @@ export class SupabaseMemoryStore implements MemoryStore {
 
     if (error || !data || data.length === 0) return [];
 
+    // Bootstrap embedder lazily
+    const embedder = await this.bootstrapEmbedder(agentId);
+    const queryEmbedding = embedder.embed(query);
+
     const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
     const now = Date.now();
 
     const scored = data.map(row => {
       const memory = this.rowToMemory(row);
 
+      // Compute embedding on the fly (not persisted)
+      const memEmbedding = embedder.embed(memory.content);
+
       // Keyword matching score (0-1)
       const contentLower = memory.content.toLowerCase();
       const matchCount = queryWords.filter(word => contentLower.includes(word)).length;
       const keywordScore = queryWords.length > 0 ? matchCount / queryWords.length : 0;
+
+      // Semantic similarity score (0-1)
+      let semanticScore = 0;
+      if (memEmbedding.length > 0 && queryEmbedding.length > 0) {
+        semanticScore = Math.max(0, TFIDFEmbedder.cosineSimilarity(queryEmbedding, memEmbedding));
+      }
 
       // Recency score (0-1) — exponential decay, half-life of 1 hour
       const ageMs = now - memory.timestamp;
@@ -61,8 +116,10 @@ export class SupabaseMemoryStore implements MemoryStore {
       // Importance score (0-1) — normalize from 1-10 to 0-1
       const importanceScore = (memory.importance - 1) / 9;
 
-      // Combined score (same weights as InMemoryStore)
-      const score = 0.4 * keywordScore + 0.3 * recencyScore + 0.3 * importanceScore;
+      // Combined score — 4 factors with semantic
+      const score = queryEmbedding.length > 0
+        ? 0.25 * keywordScore + 0.25 * semanticScore + 0.25 * recencyScore + 0.25 * importanceScore
+        : 0.4 * keywordScore + 0.3 * recencyScore + 0.3 * importanceScore;
 
       return { memory, score };
     });
@@ -93,6 +150,32 @@ export class SupabaseMemoryStore implements MemoryStore {
 
     if (error || !data) return [];
     return data.map(row => this.rowToMemory(row));
+  }
+
+  async getOlderThan(agentId: string, timestamp: number): Promise<Memory[]> {
+    const { data, error } = await this.supabase
+      .from('memories')
+      .select('*')
+      .eq('agent_id', agentId)
+      .lt('timestamp', timestamp)
+      .order('timestamp', { ascending: false });
+
+    if (error || !data) return [];
+    return data.map(row => this.rowToMemory(row));
+  }
+
+  async removeBatch(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    try {
+      // Supabase .in() supports up to ~300 IDs; batch if needed
+      const batchSize = 200;
+      for (let i = 0; i < ids.length; i += batchSize) {
+        const batch = ids.slice(i, i + batchSize);
+        await this.supabase.from('memories').delete().in('id', batch);
+      }
+    } catch (err) {
+      console.error('[SupabaseMemoryStore] removeBatch() failed:', err);
+    }
   }
 
   private rowToMemory(row: Record<string, unknown>): Memory {

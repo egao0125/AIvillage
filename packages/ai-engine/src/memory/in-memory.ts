@@ -1,14 +1,18 @@
 import type { Memory } from '@ai-village/shared';
+import { TFIDFEmbedder } from './embeddings.js';
 
 interface MemoryStore {
   add(memory: Memory): Promise<void>;
   retrieve(agentId: string, query: string, limit?: number): Promise<Memory[]>;
   getRecent(agentId: string, limit?: number): Promise<Memory[]>;
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
+  getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
+  removeBatch(ids: string[]): Promise<void>;
 }
 
 export class InMemoryStore implements MemoryStore {
   private memories: Map<string, Memory[]> = new Map();
+  private embedders: Map<string, TFIDFEmbedder> = new Map();
 
   private getAgentMemories(agentId: string): Memory[] {
     if (!this.memories.has(agentId)) {
@@ -17,8 +21,20 @@ export class InMemoryStore implements MemoryStore {
     return this.memories.get(agentId)!;
   }
 
+  private getEmbedder(agentId: string): TFIDFEmbedder {
+    if (!this.embedders.has(agentId)) {
+      this.embedders.set(agentId, new TFIDFEmbedder());
+    }
+    return this.embedders.get(agentId)!;
+  }
+
   async add(memory: Memory): Promise<void> {
     this.getAgentMemories(memory.agentId).push(memory);
+
+    // Build embedding
+    const embedder = this.getEmbedder(memory.agentId);
+    embedder.addDocument(memory.content);
+    memory.embedding = embedder.embed(memory.content);
   }
 
   async retrieve(agentId: string, query: string, limit = 10): Promise<Memory[]> {
@@ -28,11 +44,21 @@ export class InMemoryStore implements MemoryStore {
     const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
     const now = Date.now();
 
+    // Compute query embedding for semantic matching
+    const embedder = this.getEmbedder(agentId);
+    const queryEmbedding = embedder.embed(query);
+
     const scored = memories.map(memory => {
       // Keyword matching score (0-1)
       const contentLower = memory.content.toLowerCase();
       const matchCount = queryWords.filter(word => contentLower.includes(word)).length;
       const keywordScore = queryWords.length > 0 ? matchCount / queryWords.length : 0;
+
+      // Semantic similarity score (0-1)
+      let semanticScore = 0;
+      if (memory.embedding && memory.embedding.length > 0 && queryEmbedding.length > 0) {
+        semanticScore = Math.max(0, TFIDFEmbedder.cosineSimilarity(queryEmbedding, memory.embedding));
+      }
 
       // Recency score (0-1) — exponential decay, half-life of 1 hour
       const ageMs = now - memory.timestamp;
@@ -42,8 +68,11 @@ export class InMemoryStore implements MemoryStore {
       // Importance score (0-1) — normalize from 1-10 to 0-1
       const importanceScore = (memory.importance - 1) / 9;
 
-      // Combined score
-      const score = 0.4 * keywordScore + 0.3 * recencyScore + 0.3 * importanceScore;
+      // Combined score — 4 factors when embeddings available, 3 factors fallback
+      const hasEmbedding = memory.embedding && memory.embedding.length > 0;
+      const score = hasEmbedding
+        ? 0.25 * keywordScore + 0.25 * semanticScore + 0.25 * recencyScore + 0.25 * importanceScore
+        : 0.4 * keywordScore + 0.3 * recencyScore + 0.3 * importanceScore;
 
       return { memory, score };
     });
@@ -64,6 +93,18 @@ export class InMemoryStore implements MemoryStore {
     return memories
       .filter(m => m.importance >= minImportance)
       .sort((a, b) => b.importance - a.importance);
+  }
+
+  async getOlderThan(agentId: string, timestamp: number): Promise<Memory[]> {
+    const memories = this.getAgentMemories(agentId);
+    return memories.filter(m => m.timestamp < timestamp);
+  }
+
+  async removeBatch(ids: string[]): Promise<void> {
+    const idSet = new Set(ids);
+    for (const [agentId, memories] of this.memories) {
+      this.memories.set(agentId, memories.filter(m => !idSet.has(m.id)));
+    }
   }
 }
 

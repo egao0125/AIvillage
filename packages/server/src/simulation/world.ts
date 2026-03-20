@@ -1,4 +1,4 @@
-import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldEvent, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldSnapshot } from '@ai-village/shared';
 import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
 
 export class World {
@@ -8,7 +8,6 @@ export class World {
   time: GameTime;
   items: Map<string, Item> = new Map();
   secrets: Secret[] = [];
-  events: WorldEvent[] = [];
   elections: Map<string, Election> = new Map();
   properties: Map<string, Property> = new Map();
   reputation: ReputationEntry[] = [];
@@ -44,6 +43,10 @@ export class World {
       { areaId: 'lake', material: 'clay', respawnMinutes: 60 },
       { areaId: 'garden', material: 'herbs', respawnMinutes: 35 },
       { areaId: 'garden', material: 'flowers', respawnMinutes: 35 },
+      // Food spawns at commercial locations
+      { areaId: 'cafe', material: 'coffee', respawnMinutes: 20 },
+      { areaId: 'bakery', material: 'bread', respawnMinutes: 20 },
+      { areaId: 'tavern', material: 'stew', respawnMinutes: 25 },
     ];
   }
 
@@ -148,7 +151,6 @@ export class World {
       conversations: Array.from(this.conversations.values()).filter(c => !c.endedAt),
       areas: AREAS,
       board: this.getActiveBoard(),
-      events: this.events.filter(e => e.active),
       elections: Array.from(this.elections.values()),
       properties: Array.from(this.properties.values()),
       reputation: this.reputation,
@@ -229,6 +231,10 @@ export class World {
 
     spawn.lastGathered = now;
 
+    // Edible materials become food items
+    const edibleMaterials = ['mushrooms', 'fish', 'vegetables', 'bread', 'coffee', 'stew'];
+    const isFood = edibleMaterials.includes(spawn.material.toLowerCase());
+
     const item: Item = {
       id: crypto.randomUUID(),
       name: spawn.material,
@@ -236,7 +242,7 @@ export class World {
       ownerId: agentId,
       createdBy: agentId,
       value: 5,
-      type: 'material',
+      type: isFood ? 'food' : 'material',
     };
 
     this.addItem(item);
@@ -254,26 +260,6 @@ export class World {
     return this.secrets.filter(
       s => s.holderId === agentId || s.aboutAgentId === agentId || s.sharedWith.includes(agentId),
     );
-  }
-
-  // --- World Events ---
-
-  addWorldEvent(event: WorldEvent): void {
-    this.events.push(event);
-  }
-
-  getActiveEvents(): WorldEvent[] {
-    return this.events.filter(e => e.active);
-  }
-
-  expireEvents(): void {
-    const now = Date.now();
-    for (const event of this.events) {
-      if (event.active && (now - event.startTime) >= event.duration * 60_000) {
-        event.active = false;
-        console.log(`[World] Event expired: ${event.description}`);
-      }
-    }
   }
 
   // --- Elections ---

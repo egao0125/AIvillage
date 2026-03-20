@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, WorldEvent, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
+import type { Agent, AgentConfig, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { World } from './world.js';
@@ -26,6 +26,8 @@ export class SimulationEngine {
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
   private persistence: SupabasePersistence | null = null;
+  private weatherStableUntil: number = 0;
+  private lastConversationPair: Map<string, number> = new Map();
 
   constructor(private io: Server) {
     this.world = new World();
@@ -75,7 +77,6 @@ export class SimulationEngine {
         this.world.artifacts = (worldData.artifacts ?? []) as typeof this.world.artifacts;
         this.world.technologies = (worldData.technologies ?? []) as typeof this.world.technologies;
         this.world.materialSpawns = (worldData.materialSpawns ?? this.world.materialSpawns) as typeof this.world.materialSpawns;
-        this.world.events = (worldData.events ?? []) as typeof this.world.events;
         this.world.conversations = recordToMap(worldData.conversations ?? {}) as typeof this.world.conversations;
         this.world.elections = recordToMap(worldData.elections ?? {}) as typeof this.world.elections;
         this.world.properties = recordToMap(worldData.properties ?? {}) as typeof this.world.properties;
@@ -105,6 +106,12 @@ export class SimulationEngine {
           this.agentApiKeys.set(agent.id, { apiKey: ctrlDataForKey.apiKey, model: effectiveModel });
         }
 
+        // Away agents persist but don't get controller/cognition (no LLM calls)
+        if (agent.state === 'away') {
+          console.log(`[Engine] Agent ${agent.config.name} is away — skipping controller/cognition`);
+          continue;
+        }
+
         // Create cognition with Supabase-backed memory + throttled LLM
         const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
         const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider);
@@ -129,8 +136,8 @@ export class SimulationEngine {
         // Restore mutable controller state
         if (ctrlData) {
           const restoredState = ctrlData.controllerState as ControllerState;
-          // Reset moving/performing to idle — path is not saved, agent needs to replan
-          controller.state = (restoredState === 'moving' || restoredState === 'performing')
+          // Reset transient states to idle — path/conversation state is not saved across restarts
+          controller.state = (restoredState === 'moving' || restoredState === 'performing' || restoredState === 'conversing')
             ? 'idle'
             : restoredState;
           controller.dayPlan = ctrlData.dayPlan as typeof controller.dayPlan;
@@ -267,6 +274,94 @@ export class SimulationEngine {
     return true;
   }
 
+  suspendAgent(id: string): boolean {
+    const agent = this.world.getAgent(id);
+    if (!agent || agent.alive === false || agent.state === 'away') return false;
+
+    // End any active conversations
+    for (const conv of this.world.getActiveConversations()) {
+      if (conv.participants.includes(id)) {
+        this.world.endConversation(conv.id);
+        this.broadcaster.conversationEnd(conv.id);
+        for (const pid of conv.participants) {
+          if (pid !== id) {
+            const otherController = this.controllers.get(pid);
+            if (otherController) otherController.leaveConversation();
+          }
+        }
+      }
+    }
+
+    // Remove controller + cognition (stops LLM calls)
+    this.controllers.delete(id);
+    this.cognitions.delete(id);
+
+    // Set state to away — agent stays in world.agents + agentApiKeys
+    agent.state = 'away';
+    agent.currentAction = 'away from village';
+    this.world.updateAgentState(id, 'away', 'away from village');
+    this.broadcaster.agentAction(id, 'left the village');
+
+    console.log(`[Engine] Agent suspended: ${agent.config.name}`);
+
+    if (this.persistence) {
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
+        console.error('[Persistence] Save after suspend failed:', err)
+      );
+    }
+
+    return true;
+  }
+
+  resumeAgent(id: string): boolean {
+    const agent = this.world.getAgent(id);
+    if (!agent || agent.state !== 'away') return false;
+
+    // Recreate cognition
+    const keyData = this.agentApiKeys.get(id);
+    const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+    const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+
+    const memoryStore = this.persistence
+      ? new SupabaseMemoryStore(this.persistence.client)
+      : new InMemoryStore();
+    const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider);
+    this.cognitions.set(id, cognition);
+
+    // Recreate controller with default wake/sleep hours
+    const controller = new AgentController(
+      agent,
+      cognition,
+      this.world,
+      this.broadcaster,
+      7,
+      23,
+    );
+    this.controllers.set(id, controller);
+
+    // Set state to idle and place at plaza
+    agent.state = 'idle';
+    agent.currentAction = 'returning to village';
+    this.world.updateAgentState(id, 'idle', 'returning to village');
+
+    const spawnPos = getAreaEntrance('plaza');
+    this.world.updateAgentPosition(id, spawnPos);
+    agent.position = { ...spawnPos };
+
+    this.broadcaster.agentAction(id, 'returned to village');
+
+    console.log(`[Engine] Agent resumed: ${agent.config.name}`);
+
+    if (this.persistence) {
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
+        console.error('[Persistence] Save after resume failed:', err)
+      );
+    }
+
+    return true;
+  }
+
   start(): void {
     if (this.tickInterval) return;
 
@@ -323,17 +418,11 @@ export class SimulationEngine {
     // 7. Every 10 ticks: check overhearing
     if (this.tickCount % 10 === 0) this.checkOverhearing();
 
-    // 8. Every 300 ticks (~5 game hours): random world event chance
-    if (this.tickCount % 300 === 0) this.checkRandomEvents();
-
-    // 9. Every tick: check election deadlines
+    // 8. Every tick: check election deadlines
     this.checkElections();
 
-    // 10. Every tick: expire world events
-    this.world.expireEvents();
-
-    // 11. Every 60 ticks (~1 game hour): update weather
-    if (this.tickCount % 60 === 0) {
+    // 9. Every 600 ticks (~10 game hours): update weather (was 60 — too frequent)
+    if (this.tickCount % 600 === 0) {
       this.updateWeather();
     }
 
@@ -389,8 +478,14 @@ export class SimulationEngine {
 
         if (dist > 3) continue;
 
-        // Skip dead agents
+        // Skip dead or away agents
         if (a1.alive === false || a2.alive === false) continue;
+        if (a1.state === 'away' || a2.state === 'away') continue;
+
+        // Check conversation pair cooldown (min 600 ticks between same pair)
+        const pairKey = [a1.id, a2.id].sort().join(':');
+        const lastTick = this.lastConversationPair.get(pairKey);
+        if (lastTick !== undefined && (this.tickCount - lastTick) < 600) continue;
 
         // Check if both are available (not sleeping or already conversing)
         const c1 = this.controllers.get(a1.id);
@@ -413,6 +508,9 @@ export class SimulationEngine {
           // Start conversation
           const location = { ...a1.position };
           const convId = this.conversationManager.startConversation(a1.id, a2.id, location);
+
+          // Record pair cooldown
+          this.lastConversationPair.set(pairKey, this.tickCount);
 
           // Put both controllers into conversing state
           c1.enterConversation();
@@ -509,57 +607,6 @@ export class SimulationEngine {
   }
 
   /**
-   * 20% chance to trigger a random world event.
-   */
-  private checkRandomEvents(): void {
-    if (Math.random() > 0.2) return;
-
-    const eventTypes: WorldEvent['type'][] = [
-      'storm', 'festival', 'fire', 'drought', 'harvest',
-      'plague', 'earthquake', 'market_boom', 'bandit_sighting', 'miracle',
-    ];
-
-    const descriptions: Record<WorldEvent['type'], string> = {
-      storm: 'A fierce storm sweeps through the village!',
-      festival: 'A spontaneous festival breaks out in the village!',
-      fire: 'A fire has broken out in the village!',
-      drought: 'A drought is affecting the village crops.',
-      harvest: 'A bountiful harvest has arrived!',
-      plague: 'A mysterious illness spreads through the village.',
-      earthquake: 'The ground trembles beneath the village!',
-      market_boom: 'Trade is booming at the market!',
-      bandit_sighting: 'Bandits have been spotted near the village!',
-      miracle: 'Something miraculous has occurred in the village!',
-    };
-
-    const allAreaIds = Array.from(this.world.agents.values())
-      .map(a => this.world.getAreaAt(a.position)?.id)
-      .filter(Boolean) as string[];
-    const uniqueAreas = [...new Set(allAreaIds)];
-    const affectedCount = Math.min(1 + Math.floor(Math.random() * 3), uniqueAreas.length);
-    const affectedAreas: string[] = [];
-    const shuffled = [...uniqueAreas].sort(() => Math.random() - 0.5);
-    for (let i = 0; i < affectedCount; i++) {
-      affectedAreas.push(shuffled[i]);
-    }
-
-    const type = eventTypes[Math.floor(Math.random() * eventTypes.length)];
-    const event: WorldEvent = {
-      id: crypto.randomUUID(),
-      type,
-      description: descriptions[type],
-      startTime: Date.now(),
-      duration: 60 + Math.floor(Math.random() * 120), // 1-3 game hours
-      affectedAreas,
-      active: true,
-    };
-
-    this.world.addWorldEvent(event);
-    this.broadcaster.worldEvent(event);
-    console.log(`[Engine] World event: ${event.description} (affects: ${affectedAreas.join(', ')})`);
-  }
-
-  /**
    * Check if any election's endDay has been reached and resolve it.
    */
   private checkElections(): void {
@@ -578,9 +625,13 @@ export class SimulationEngine {
   }
 
   private updateWeather(): void {
+    // Weather must persist for at least 300 ticks before it can change
+    if (this.tickCount < this.weatherStableUntil) return;
+
     const oldWeather = this.world.weather.current;
     const newWeather = this.world.updateWeather();
     if (newWeather !== oldWeather) {
+      this.weatherStableUntil = this.tickCount + 300;
       this.broadcaster.weatherChange(this.world.weather);
       console.log(`[Engine] Weather changed: ${oldWeather} → ${newWeather} (${this.world.weather.season})`);
     }

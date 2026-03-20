@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { COLORS, FONTS } from '../styles';
 import { nameToColor, hexToString } from '../../utils/color';
+import { getToken, setToken, clearToken, authHeaders } from '../../utils/auth';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,21 +44,6 @@ Example:
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
-
-// --- Auth helpers ---
-function getToken(): string | null {
-  return localStorage.getItem('ai-village-token');
-}
-function setToken(token: string) {
-  localStorage.setItem('ai-village-token', token);
-}
-function clearToken() {
-  localStorage.removeItem('ai-village-token');
-}
-function authHeaders(): Record<string, string> {
-  const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
 
 export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
   // --- Auth state ---

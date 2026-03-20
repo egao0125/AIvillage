@@ -95,6 +95,7 @@ export function createRouter(engine: SimulationEngine): Router {
     // Never expose API keys or internal IDs to clients
     res.json(snapshot.agents.map(a => ({
       id: a.id,
+      ownerId: a.ownerId,
       config: {
         name: a.config.name,
         age: a.config.age,
@@ -256,6 +257,58 @@ export function createRouter(engine: SimulationEngine): Router {
         return;
       }
 
+      res.json({ success: true });
+    },
+  );
+
+  // POST /api/agents/:id/suspend — pause agent (requires ownership)
+  router.post(
+    '/api/agents/:id/suspend',
+    rateLimit(10, 60_000),
+    requireAuth,
+    (req, res) => {
+      const id = req.params.id as string;
+      const snapshot = engine.getSnapshot();
+      const agent = snapshot.agents.find(a => a.id === id);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      if (agent.ownerId !== req.userId) {
+        res.status(403).json({ error: 'You can only suspend your own agents' });
+        return;
+      }
+      const success = engine.suspendAgent(id);
+      if (!success) {
+        res.status(400).json({ error: 'Agent cannot be suspended (dead or already away)' });
+        return;
+      }
+      res.json({ success: true });
+    },
+  );
+
+  // POST /api/agents/:id/resume — resume agent (requires ownership)
+  router.post(
+    '/api/agents/:id/resume',
+    rateLimit(10, 60_000),
+    requireAuth,
+    (req, res) => {
+      const id = req.params.id as string;
+      const snapshot = engine.getSnapshot();
+      const agent = snapshot.agents.find(a => a.id === id);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      if (agent.ownerId !== req.userId) {
+        res.status(403).json({ error: 'You can only resume your own agents' });
+        return;
+      }
+      const success = engine.resumeAgent(id);
+      if (!success) {
+        res.status(400).json({ error: 'Agent cannot be resumed (not away)' });
+        return;
+      }
       res.json({ success: true });
     },
   );

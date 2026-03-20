@@ -1,8 +1,68 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { Agent, Item, Skill } from '@ai-village/shared';
 import { nameToColor, hexToString } from '../../utils/color';
-import { useReputation } from '../../core/hooks';
+import { useReputation, useAgents, useBoard, useArtifacts } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
+import { authHeaders, getUserId } from '../../utils/auth';
+
+// --- Leave / Return Village Button ---
+
+const LeaveReturnButton: React.FC<{ agent: Agent }> = ({ agent }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const isAway = agent.state === 'away';
+
+  const handleClick = async () => {
+    setLoading(true);
+    setError('');
+    const endpoint = isAway
+      ? `/api/agents/${agent.id}/resume`
+      : `/api/agents/${agent.id}/suspend`;
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || 'Failed');
+      }
+    } catch {
+      setError('Cannot reach server');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <button
+        onClick={handleClick}
+        disabled={loading}
+        style={{
+          width: '100%',
+          padding: '8px 0',
+          fontFamily: FONTS.pixel,
+          fontSize: '9px',
+          color: loading ? COLORS.textDim : isAway ? '#4ade80' : '#f59e0b',
+          background: 'transparent',
+          border: `1px solid ${loading ? COLORS.border : isAway ? '#4ade80' : '#f59e0b'}`,
+          borderRadius: 4,
+          cursor: loading ? 'wait' : 'pointer',
+          letterSpacing: 1,
+          transition: 'all 0.15s',
+        }}
+      >
+        {loading ? '...' : isAway ? 'RETURN TO VILLAGE' : 'LEAVE VILLAGE'}
+      </button>
+      {error && (
+        <div style={{ color: '#ef4444', fontSize: '10px', marginTop: 4, fontFamily: FONTS.pixel }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const MOOD_DISPLAY: Record<string, { emoji: string; label: string; color: string }> = {
   neutral: { emoji: '\u{1F610}', label: 'Neutral', color: '#9ca3af' },
@@ -46,7 +106,53 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
 }) => {
   const color = hexToString(nameToColor(agent.config.name));
   const reputation = useReputation();
+  const allAgents = useAgents();
+  const board = useBoard();
+  const artifacts = useArtifacts();
   const agentReputation = reputation.filter((r) => r.fromAgentId === agent.id);
+
+  // Helper to resolve agent ID to name
+  const resolveName = (id: string): string => {
+    const found = allAgents.find(a => a.id === id);
+    return found?.config.name ?? id.slice(0, 8);
+  };
+
+  // Build notable relationships
+  const notableRelationships: { emoji: string; text: string }[] = [];
+
+  // Alliances from board posts
+  const alliancePosts = board.filter(p => p.type === 'alliance' && !p.revoked && p.authorId === agent.id);
+  for (const post of alliancePosts) {
+    notableRelationships.push({ emoji: '\u{1F91D}', text: `Allied: ${post.content.slice(0, 60)}` });
+  }
+
+  // Strong trust/distrust from mental models
+  if (agent.mentalModels) {
+    for (const model of agent.mentalModels) {
+      const name = resolveName(model.targetId);
+      if (model.trust >= 50) {
+        notableRelationships.push({ emoji: '\u{1F49A}', text: `Trusts ${name} (${model.trust})` });
+      } else if (model.trust <= -30) {
+        notableRelationships.push({ emoji: '\u{1F624}', text: `Distrusts ${name} (${model.trust})` });
+      }
+    }
+  }
+
+  // Letters written
+  const letters = artifacts.filter(a => a.type === 'letter' && a.creatorId === agent.id);
+  for (const letter of letters.slice(-2)) {
+    notableRelationships.push({ emoji: '\u{1F48C}', text: `Wrote letter: "${letter.title}"` });
+  }
+
+  // Bidirectional: who thinks what about this agent
+  const othersModels: { name: string; trust: number; stance: string }[] = [];
+  for (const other of allAgents) {
+    if (other.id === agent.id || !other.mentalModels) continue;
+    const model = other.mentalModels.find(m => m.targetId === agent.id);
+    if (model) {
+      othersModels.push({ name: other.config.name, trust: model.trust, stance: model.emotionalStance });
+    }
+  }
 
   const moodInfo = MOOD_DISPLAY[agent.mood] || MOOD_DISPLAY.neutral;
 
@@ -257,7 +363,29 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </div>
       </div>
 
-      {/* Mental Models */}
+      {/* Leave / Return Village */}
+      {(agent as any).ownerId === getUserId() && agent.alive !== false && (
+        <LeaveReturnButton agent={agent} />
+      )}
+
+      {/* Notable Relationships */}
+      {notableRelationships.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={sectionLabel}>RELATIONSHIPS</div>
+          {notableRelationships.map((rel, i) => (
+            <div key={i} style={{
+              padding: '4px 10px',
+              marginBottom: 2,
+              fontSize: '11px',
+              color: COLORS.text,
+            }}>
+              {rel.emoji} {rel.text}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Mental Models — what this agent thinks of others */}
       {agent.mentalModels && agent.mentalModels.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <div style={sectionLabel}>MIND ({agent.mentalModels.length})</div>
@@ -270,7 +398,7 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
               border: `1px solid ${COLORS.border}`,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                <span style={{ color: COLORS.text, fontSize: '11px' }}>{model.targetId.slice(0, 8)}</span>
+                <span style={{ color: COLORS.text, fontSize: '11px' }}>{resolveName(model.targetId)}</span>
                 <span style={{
                   color: model.trust > 20 ? '#4ade80' : model.trust < -20 ? '#ef4444' : COLORS.textDim,
                   fontSize: '11px',
@@ -281,6 +409,36 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
               </div>
               <div style={{ color: COLORS.textDim, fontSize: '11px' }}>
                 {model.emotionalStance} — thinks: "{model.predictedGoal}"
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* What others think of this agent */}
+      {othersModels.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={sectionLabel}>OTHERS' VIEW</div>
+          {othersModels.map((om, i) => (
+            <div key={i} style={{
+              padding: '6px 10px',
+              marginBottom: 3,
+              background: COLORS.bgCard,
+              borderRadius: 4,
+              border: `1px solid ${COLORS.border}`,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: COLORS.text, fontSize: '11px' }}>{om.name}</span>
+                <span style={{
+                  color: om.trust > 20 ? '#4ade80' : om.trust < -20 ? '#ef4444' : COLORS.textDim,
+                  fontSize: '11px',
+                  fontFamily: FONTS.pixel,
+                }}>
+                  {om.trust > 0 ? '+' : ''}{om.trust} trust
+                </span>
+              </div>
+              <div style={{ color: COLORS.textDim, fontSize: '11px' }}>
+                feels {om.stance}
               </div>
             </div>
           ))}
@@ -395,7 +553,7 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
                 border: `1px solid ${COLORS.border}`,
               }}
             >
-              <span style={{ color: COLORS.text, fontSize: '12px' }}>{rep.toAgentId}</span>
+              <span style={{ color: COLORS.text, fontSize: '12px' }}>{resolveName(rep.toAgentId)}</span>
               <span
                 style={{
                   color:

@@ -131,6 +131,9 @@ export class AgentController {
       }
 
       case 'idle': {
+        // Check survival override before normal idle behavior
+        if (this.shouldOverridePlanForSurvival()) break;
+
         this.idleTimer++;
         if (this.idleTimer >= 30) {
           this.idleTimer = 0;
@@ -173,11 +176,13 @@ export class AgentController {
       this.world.updateAgentState(this.agent.id, 'active', 'planning the day');
       let boardContext = this.world.getBoardSummary();
 
-      // Build world context from active events and elections
-      const activeEvents = this.world.getActiveEvents();
-      if (activeEvents.length > 0) {
-        const eventsText = activeEvents.map(e => `- ${e.description} (affects: ${e.affectedAreas.join(', ')})`).join('\n');
-        boardContext += `\n\nCURRENT WORLD EVENTS:\n${eventsText}`;
+      // Add public artifacts to planning context
+      const publicArtifacts = this.world.getPublicArtifacts().slice(-10);
+      if (publicArtifacts.length > 0) {
+        const artifactText = publicArtifacts.map(a =>
+          `- [${a.type.toUpperCase()}] "${a.title}" by ${a.creatorName}: ${a.content.slice(0, 100)}`
+        ).join('\n');
+        boardContext += `\n\nVILLAGE MEDIA:\n${artifactText}`;
       }
 
       const activeElections = Array.from(this.world.elections.values()).filter(e => e.active);
@@ -189,7 +194,9 @@ export class AgentController {
         boardContext += `\n\nACTIVE ELECTIONS:\n${electionsText}`;
       }
 
-      const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext);
+      const institutionContext = this.buildInstitutionContext();
+      const worldCtx = institutionContext || undefined;
+      const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext, worldCtx);
       this.dayPlan = plan;
       this.currentPlanIndex = 0;
       console.log(
@@ -222,6 +229,9 @@ export class AgentController {
   }
 
   followNextPlanItem(): void {
+    // Drive-based override: survival needs trump all plans
+    if (this.shouldOverridePlanForSurvival()) return;
+
     if (!this.dayPlan || this.currentPlanIndex >= this.dayPlan.items.length) {
       this.state = 'idle';
       this.world.updateAgentState(this.agent.id, 'idle', 'relaxing');
@@ -312,17 +322,48 @@ export class AgentController {
 
     // Eating reduces hunger
     const lowerActivity = activity.toLowerCase();
-    if (lowerActivity.includes('eat') || lowerActivity.includes('food') || lowerActivity.includes('meal') || lowerActivity.includes('lunch') || lowerActivity.includes('dinner') || lowerActivity.includes('breakfast')) {
+    const isFoodActivity = lowerActivity.includes('eat') || lowerActivity.includes('food') || lowerActivity.includes('meal') || lowerActivity.includes('lunch') || lowerActivity.includes('dinner') || lowerActivity.includes('breakfast') || lowerActivity.includes('coffee') || lowerActivity.includes('drink');
+    const foodLocations = ['cafe', 'bakery', 'tavern'];
+    const atFoodLocation = foodLocations.includes(this.currentAreaId ?? '');
+
+    if (isFoodActivity || atFoodLocation) {
       const foodItem = this.agent.inventory.find(i => i.type === 'food');
       if (foodItem) {
+        // Consume food from inventory
         this.world.removeItem(foodItem.id);
         if (this.agent.vitals) {
           this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
         }
+      } else if (atFoodLocation && this.agent.currency >= 5) {
+        // Buy food at commercial location
+        this.world.updateAgentCurrency(this.agent.id, -5);
+        if (this.agent.vitals) {
+          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
+          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
+        }
+        this.broadcaster.agentCurrency(this.agent.id, this.agent.currency, -5, `bought food at ${this.currentAreaId}`);
+        console.log(`[Agent] ${this.agent.config.name} bought food at ${this.currentAreaId} for 5g`);
       } else if (this.agent.vitals) {
-        // Even without food items, visiting food locations reduces hunger slightly
-        this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 15);
+        // No food and no gold — still reduces hunger slightly from location ambiance
+        this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 10);
+      }
+    }
+
+    // Healing at hospital
+    const isHealingActivity = lowerActivity.includes('heal') || lowerActivity.includes('medicine') || lowerActivity.includes('treat') || lowerActivity.includes('doctor') || lowerActivity.includes('clinic');
+    if ((this.currentAreaId === 'hospital' || isHealingActivity) && this.agent.vitals) {
+      this.agent.vitals.health = Math.min(100, this.agent.vitals.health + 20);
+      console.log(`[Agent] ${this.agent.config.name} healed at hospital (health: ${this.agent.vitals.health})`);
+    }
+
+    // Auto-gather food at gathering locations
+    const gatherLocations = ['farm', 'garden', 'lake', 'forest'];
+    const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick');
+    if (gatherLocations.includes(this.currentAreaId ?? '') && isGatherActivity) {
+      const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
+      if (gathered) {
+        this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
       }
     }
 
@@ -385,7 +426,8 @@ export class AgentController {
       this.world.updateAgentState(this.agent.id, 'active', 'thinking about what to do next');
 
       const boardContext = this.world.getBoardSummary();
-      const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext);
+      const institutionContext = this.buildInstitutionContext();
+      const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext, institutionContext || undefined);
 
       // Replace remaining plan items with new ones
       this.dayPlan = plan;
@@ -594,6 +636,119 @@ export class AgentController {
       return time.hour === this.sleepHour && time.minute === 0;
     }
     return time.hour === this.sleepHour && time.minute === 0;
+  }
+
+  // --- Drive-Based Action Filtering ---
+
+  private survivalOverrideActive: boolean = false;
+  private static readonly FOOD_LOCATIONS = ['cafe', 'bakery', 'tavern'];
+
+  private isFoodActivity(activity: string): boolean {
+    const lower = activity.toLowerCase();
+    return lower.includes('eat') || lower.includes('food') || lower.includes('meal')
+      || lower.includes('lunch') || lower.includes('dinner') || lower.includes('breakfast')
+      || lower.includes('cook') || lower.includes('gather') || lower.includes('coffee')
+      || lower.includes('buy bread') || lower.includes('stew');
+  }
+
+  private forceFoodPlan(): void {
+    const target = AgentController.FOOD_LOCATIONS[
+      Math.floor(Math.random() * AgentController.FOOD_LOCATIONS.length)
+    ];
+    console.log(`[Agent] ${this.agent.config.name} SURVIVAL OVERRIDE: seeking food at ${target}`);
+    this.dayPlan = {
+      agentId: this.agent.id,
+      day: this.world.time.day,
+      items: [
+        { time: this.world.time.hour, duration: 30, activity: 'desperately looking for food', location: target, emoji: '\u{1F35E}' },
+      ],
+    };
+    this.currentPlanIndex = 0;
+    this.survivalOverrideActive = true;
+    this.followNextPlanItem();
+    this.survivalOverrideActive = false;
+  }
+
+  private forceHospitalPlan(): void {
+    console.log(`[Agent] ${this.agent.config.name} HEALTH CRISIS: heading to hospital`);
+    this.dayPlan = {
+      agentId: this.agent.id,
+      day: this.world.time.day,
+      items: [
+        { time: this.world.time.hour, duration: 40, activity: 'seeking medical treatment', location: 'hospital', emoji: '\u{1F3E5}' },
+      ],
+    };
+    this.currentPlanIndex = 0;
+    this.survivalOverrideActive = true;
+    this.followNextPlanItem();
+    this.survivalOverrideActive = false;
+  }
+
+  /**
+   * Check if drives should override the current plan for survival.
+   * Returns true if an override was triggered.
+   */
+  private shouldOverridePlanForSurvival(): boolean {
+    if (this.survivalOverrideActive) return false; // prevent recursion
+    const d = this.agent.drives;
+    const v = this.agent.vitals;
+    if (!d || !v) return false;
+
+    // Health crisis: force hospital visit
+    if (v.health <= 30) {
+      this.forceHospitalPlan();
+      return true;
+    }
+
+    // Emergency hunger: force food-seeking
+    if (d.survival > 80 || v.hunger >= 80) {
+      this.forceFoodPlan();
+      return true;
+    }
+
+    // Urgent hunger: insert food if next plan item isn't food-related
+    if (d.survival > 60 || v.hunger >= 60) {
+      if (this.dayPlan && this.currentPlanIndex < this.dayPlan.items.length) {
+        const nextItem = this.dayPlan.items[this.currentPlanIndex];
+        if (!this.isFoodActivity(nextItem.activity)) {
+          this.forceFoodPlan();
+          return true;
+        }
+      } else {
+        // No plan items left
+        this.forceFoodPlan();
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Build context about institutions for agent cognition.
+   */
+  buildInstitutionContext(): string {
+    const institutions = Array.from(this.world.institutions.values()).filter(i => !i.dissolved);
+    if (institutions.length === 0) return '';
+
+    const lines: string[] = ['VILLAGE INSTITUTIONS:'];
+    for (const inst of institutions) {
+      const myMembership = inst.members.find(m => m.agentId === this.agent.id);
+      const memberNames = inst.members
+        .map(m => this.world.getAgent(m.agentId)?.config.name ?? m.agentId.slice(0, 6))
+        .join(', ');
+      let line = `- ${inst.name} (${inst.type}): ${inst.description || 'no description'}. ${inst.members.length} members [${memberNames}]. Treasury: ${inst.treasury}g.`;
+      if (myMembership) {
+        line += ` YOU are a ${myMembership.role}.`;
+      }
+      if (inst.rules.length > 0) {
+        line += ` Rules: ${inst.rules.join('; ')}`;
+      }
+      lines.push(line);
+    }
+
+    lines.push('\nYou can form groups, propose rules, create organizations, join existing ones, or contribute gold to their treasury.');
+    return lines.join('\n');
   }
 
   private static readonly PUBLIC_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery', 'church', 'hospital', 'school', 'town_hall', 'workshop', 'farm', 'forest'];
