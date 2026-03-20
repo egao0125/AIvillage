@@ -131,6 +131,7 @@ export class SimulationEngine {
           wakeHour,
           sleepHour,
           homeArea,
+          this.conversationManager,
         );
 
         // Restore mutable controller state
@@ -208,6 +209,8 @@ export class SimulationEngine {
       this.broadcaster,
       wakeHour,
       sleepHour,
+      'plaza',
+      this.conversationManager,
     );
     this.controllers.set(id, controller);
 
@@ -337,6 +340,8 @@ export class SimulationEngine {
       this.broadcaster,
       7,
       23,
+      'plaza',
+      this.conversationManager,
     );
     this.controllers.set(id, controller);
 

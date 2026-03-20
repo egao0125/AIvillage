@@ -77,7 +77,8 @@ export type AgentState =
   | "routine"   // Commuting, eating, cleaning — rule-based
   | "idle"      // Off-screen, low-frequency thinking
   | "sleeping"  // Nighttime, no LLM calls
-  | "dead";     // Permanent. Possessions become unclaimed.
+  | "dead"      // Permanent. Possessions become unclaimed.
+  | "away";     // Dormant — agent left village, no LLM calls, can return
 
 // --- Mood ---
 
@@ -158,17 +159,7 @@ export interface Skill {
   learnedFrom?: string;
 }
 
-// --- World Events ---
-
-export interface WorldEvent {
-  id: string;
-  type: 'storm' | 'festival' | 'fire' | 'drought' | 'harvest' | 'plague' | 'earthquake' | 'market_boom' | 'bandit_sighting' | 'miracle';
-  description: string;
-  startTime: number;
-  duration: number;
-  affectedAreas: string[];
-  active: boolean;
-}
+// --- World Events (REMOVED — broken system, never properly expired) ---
 
 // --- Elections ---
 
@@ -388,7 +379,6 @@ export type ServerEvent =
   | { type: "agent:drives"; agentId: string; drives: DriveState }
   | { type: "agent:vitals"; agentId: string; vitals: VitalState }
   | { type: "world:time"; hour: number; minute: number; weather: string }
-  | { type: "world:event"; description: string }
   | { type: "world:weather"; weather: Weather }
   | { type: "institution:update"; institution: Institution }
   | { type: "artifact:created"; artifact: Artifact }
@@ -445,7 +435,6 @@ export interface WorldSnapshot {
   conversations: Conversation[];
   areas: MapArea[];
   board: BoardPost[];
-  events: WorldEvent[];
   elections: Election[];
   properties: Property[];
   reputation: ReputationEntry[];

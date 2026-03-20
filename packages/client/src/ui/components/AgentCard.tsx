@@ -22,9 +22,11 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     idle: COLORS.idle,
     sleeping: COLORS.sleeping,
     dead: '#4a0000',
+    away: '#6b7280',
   };
 
   const isDead = agent.alive === false;
+  const isAway = agent.state === 'away';
 
   return (
     <div
@@ -57,7 +59,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           width: 40,
           height: 40,
           borderRadius: '50%',
-          background: isDead ? '#333' : color,
+          background: isDead ? '#333' : isAway ? '#555' : color,
           border: '2px solid rgba(255,255,255,0.2)',
           display: 'flex',
           alignItems: 'center',
@@ -65,7 +67,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           fontSize: '16px',
           fontWeight: 'bold',
           flexShrink: 0,
-          opacity: isDead ? 0.5 : 1,
+          opacity: isDead || isAway ? 0.5 : 1,
         }}
       >
         {agent.config.name[0]}
@@ -83,7 +85,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
             whiteSpace: 'nowrap',
           }}
         >
-          {isDead ? '\u{1F480} ' : ''}{agent.config.name}
+          {isDead ? '\u{1F480} ' : isAway ? '\u{1F4A4} ' : ''}{agent.config.name}
         </div>
         <div
           style={{

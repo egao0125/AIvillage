@@ -364,7 +364,7 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
       </div>
 
       {/* Leave / Return Village */}
-      {(agent as any).ownerId === getUserId() && agent.alive !== false && (
+      {agent.ownerId === getUserId() && agent.alive !== false && (
         <LeaveReturnButton agent={agent} />
       )}
 

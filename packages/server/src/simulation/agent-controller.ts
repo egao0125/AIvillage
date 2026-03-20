@@ -1,9 +1,13 @@
 import type { Agent, DayPlan, DriveState, GameTime, Mood, Position, VitalState } from '@ai-village/shared';
-import type { AgentCognition } from '@ai-village/ai-engine';
+import { AgentCognition } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
+
+interface SoloActionExecutor {
+  executeSocialAction(actorId: string, actorName: string, targetId: string, action: string, cognition: AgentCognition): void;
+}
 
 export type ControllerState =
   | 'sleeping'
@@ -29,6 +33,7 @@ export class AgentController {
   private reflectingInProgress: boolean = false;
   private currentAreaId: string | null = null; // track where the agent is performing
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
+  private lastSoloActionTick: number = 0;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -42,6 +47,7 @@ export class AgentController {
     wakeHour: number,
     sleepHour: number,
     homeArea: string = 'plaza',
+    private soloActionExecutor?: SoloActionExecutor,
   ) {
     this.agent = agent;
     this.cognition = cognition;
@@ -195,7 +201,21 @@ export class AgentController {
       }
 
       const institutionContext = this.buildInstitutionContext();
-      const worldCtx = institutionContext || undefined;
+
+      // Add building context
+      const buildings = Array.from(this.world.buildings.values()).filter(b => b.durability > 0);
+      let buildingContext = '';
+      if (buildings.length > 0) {
+        buildingContext = '\nBUILDINGS:\n' + buildings.map(b =>
+          `- ${b.name} (${b.type}) at ${b.areaId}, built by ${this.world.getAgent(b.builtBy)?.config.name ?? 'unknown'}`
+        ).join('\n');
+      }
+      const hasMaterials = this.agent.inventory.some(i => i.type === 'material');
+      if (hasMaterials) {
+        buildingContext += '\nYou have materials — you can BUILD structures or CRAFT items at the workshop.';
+      }
+
+      const worldCtx = (institutionContext + buildingContext) || undefined;
       const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext, worldCtx);
       this.dayPlan = plan;
       this.currentPlanIndex = 0;
@@ -367,6 +387,20 @@ export class AgentController {
       }
     }
 
+    // Solo action — let agent DO something at this location
+    const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
+    if (ticksSinceLast >= 30 && !isFoodActivity && !isHealingActivity && !isGatherActivity && this.soloActionExecutor) {
+      this.lastSoloActionTick = this.world.time.totalMinutes;
+      void this.cognition.soloAction(activity, this.currentAreaId).then(response => {
+        const actions = AgentCognition.parseActions(response);
+        for (const action of actions) {
+          this.soloActionExecutor!.executeSocialAction(
+            this.agent.id, this.agent.config.name, '', action, this.cognition
+          );
+        }
+      }).catch(() => {});
+    }
+
     console.log(
       `[Agent] ${this.agent.config.name} starts: ${activity} (${duration} min)`,
     );
@@ -463,6 +497,34 @@ export class AgentController {
         this.agent.mentalModels = result.mentalModels;
       }
 
+      // Invention attempt — high-openness agents may invent during reflection
+      try {
+        const invention = await this.cognition.proposeInvention();
+        if (invention && !this.world.hasTechnology(invention.name)) {
+          // Consume one material
+          const materialItem = this.agent.inventory.find(i =>
+            i.type === 'material' && invention.materials.some(m => i.name.toLowerCase().includes(m.toLowerCase()))
+          );
+          if (materialItem) {
+            this.world.removeItem(materialItem.id);
+            this.world.addTechnology({
+              id: crypto.randomUUID(),
+              name: invention.name,
+              description: invention.description,
+              inventorId: this.agent.id,
+              inventorName: this.agent.config.name,
+              effects: invention.effects,
+              requirements: invention.materials,
+              discoveredAt: Date.now(),
+              day: this.world.time.day,
+            });
+            this.broadcaster.agentAction(this.agent.id, `invented ${invention.name}`, '\u{1F4A1}');
+            console.log(`[Tech] ${this.agent.config.name} invented: ${invention.name}`);
+          }
+        }
+      } catch {}
+
+
       // Use mood from LLM response, fall back to keyword parsing
       const mood = result.mood || this.parseMoodFromReflection(result.reflection);
       if (mood) {
@@ -482,9 +544,9 @@ export class AgentController {
     const v = this.agent.vitals;
     if (!v) return;
 
-    // Hunger increases slowly (1 per 4 game hours)
-    if (this.world.time.minute === 0 && this.world.time.hour % 4 === 0) {
-      v.hunger = Math.min(100, v.hunger + 1);
+    // Hunger increases every game hour
+    if (this.world.time.minute === 0) {
+      v.hunger = Math.min(100, v.hunger + 3);
     }
 
     // Energy depletes during activity, restores during sleep
@@ -518,9 +580,9 @@ export class AgentController {
     const v = this.agent.vitals;
     if (!d || !v) return;
 
-    // Survival: inverse of health and hunger satisfaction
+    // Survival: heavily hunger-weighted
     d.survival = Math.max(0, Math.min(100,
-      (100 - v.health) * 0.4 + v.hunger * 0.6
+      v.hunger * 0.85 + (100 - v.health) * 0.15
     ));
 
     // Safety: based on reputation (are people hostile?) and world events
@@ -701,13 +763,13 @@ export class AgentController {
     }
 
     // Emergency hunger: force food-seeking
-    if (d.survival > 80 || v.hunger >= 80) {
+    if (d.survival > 60 || v.hunger >= 60) {
       this.forceFoodPlan();
       return true;
     }
 
     // Urgent hunger: insert food if next plan item isn't food-related
-    if (d.survival > 60 || v.hunger >= 60) {
+    if (d.survival > 40 || v.hunger >= 40) {
       if (this.dayPlan && this.currentPlanIndex < this.dayPlan.items.length) {
         const nextItem = this.dayPlan.items[this.currentPlanIndex];
         if (!this.isFoodActivity(nextItem.activity)) {

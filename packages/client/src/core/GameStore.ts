@@ -2,7 +2,6 @@ import type {
   Agent,
   BoardPost,
   GameTime,
-  WorldEvent,
   Election,
   Property,
   ReputationEntry,
@@ -25,7 +24,6 @@ interface GameState {
   connected: boolean;
   activeConversations: Map<string, string[]>; // conversationId → [agentId1, agentId2]
   board: BoardPost[];
-  events: WorldEvent[];
   elections: Election[];
   properties: Property[];
   reputation: ReputationEntry[];
@@ -63,7 +61,6 @@ class GameStore {
     connected: false,
     activeConversations: new Map(),
     board: [],
-    events: [],
     elections: [],
     properties: [],
     reputation: [],
@@ -177,21 +174,6 @@ class GameStore {
     this.state = {
       ...this.state,
       board: [...this.state.board, post],
-    };
-    this.notify();
-  }
-
-  // --- World Events ---
-
-  setEvents(events: WorldEvent[]): void {
-    this.state = { ...this.state, events };
-    this.notify();
-  }
-
-  addWorldEvent(event: WorldEvent): void {
-    this.state = {
-      ...this.state,
-      events: [...this.state.events, event],
     };
     this.notify();
   }

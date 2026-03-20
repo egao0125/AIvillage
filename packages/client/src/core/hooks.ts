@@ -4,7 +4,6 @@ import type {
   Agent,
   BoardPost,
   GameTime,
-  WorldEvent,
   Election,
   Property,
   ReputationEntry,
@@ -60,13 +59,6 @@ export function useBoard(): BoardPost[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().board
-  );
-}
-
-export function useWorldEvents(): WorldEvent[] {
-  return useSyncExternalStore(
-    (cb) => gameStore.subscribe(cb),
-    () => gameStore.getState().events
   );
 }
 

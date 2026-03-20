@@ -124,7 +124,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.drawMoodRing(mood);
   }
 
-  moveTo(tileX: number, tileY: number): void {
+  moveToTile(tileX: number, tileY: number): void {
     this.targetX = tileX * TILE_SIZE + TILE_SIZE / 2;
     this.targetY = tileY * TILE_SIZE + TILE_SIZE / 2;
     this.isLerping = true;

@@ -4,6 +4,7 @@ import { createGameConfig } from '../game/config';
 import { Sidebar } from './components/Sidebar';
 import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
+import { SpectatorChat } from './components/SpectatorChat';
 import { connectSocket } from '../network/socket';
 
 export const App: React.FC = () => {
@@ -47,6 +48,8 @@ export const App: React.FC = () => {
       <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 420, zIndex: 10 }}>
         <Sidebar />
       </div>
+      {/* Spectator chat — floating bottom-left */}
+      <SpectatorChat />
     </div>
   );
 };

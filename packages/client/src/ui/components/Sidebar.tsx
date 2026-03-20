@@ -1,36 +1,44 @@
 import React, { useState } from 'react';
-import { useAgents, useSelectedAgent, useBoard, useWorldEvents, useArtifacts } from '../../core/hooks';
+import { useAgents, useSelectedAgent, useBoard, useArtifacts } from '../../core/hooks';
 import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
 import { AgentProfile } from './AgentProfile';
 import { ChatLog } from './ChatLog';
-import { ArtifactGallery } from './ArtifactGallery';
-import { VillageBoard } from './VillageBoard';
-import { WorldEvents } from './WorldEvents';
-import { COLORS, FONTS, SIZES } from '../styles';
+import { VillageDashboard } from './VillageDashboard';
+import { GossipFeed } from './GossipFeed';
+import { COLORS, FONTS } from '../styles';
 
-type Tab = 'villagers' | 'chat' | 'board' | 'artifacts' | 'events';
+type Tab = 'villagers' | 'feed' | 'village' | 'gossip';
 
 export const Sidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('villagers');
   const agents = useAgents();
   const selectedAgent = useSelectedAgent();
   const board = useBoard();
-  const events = useWorldEvents();
   const artifacts = useArtifacts();
+
+  // Count gossip items: rumors + threats + bounties + public artifacts
+  const gossipBoardCount = board.filter(p =>
+    (p.type === 'rumor' || p.type === 'threat' || p.type === 'bounty') && !p.revoked
+  ).length;
+  const publicArtifactCount = artifacts.filter(a => a.visibility === 'public').length;
+  const gossipCount = gossipBoardCount + publicArtifactCount;
+
+  // Count village items: rules + decrees + alliances + announcements
+  const villageCount = board.filter(p =>
+    (p.type === 'decree' || p.type === 'rule' || p.type === 'announcement' || p.type === 'alliance') && !p.revoked
+  ).length;
 
   const tabLabel = (tab: Tab): string => {
     switch (tab) {
       case 'villagers':
         return `Villagers (${agents.length})`;
-      case 'chat':
-        return 'Chat';
-      case 'board':
-        return `Board${board.length > 0 ? ` (${board.length})` : ''}`;
-      case 'artifacts':
-        return `Media${artifacts.length > 0 ? ` (${artifacts.length})` : ''}`;
-      case 'events':
-        return `Events${events.filter((e) => e.active).length > 0 ? ` (${events.filter((e) => e.active).length})` : ''}`;
+      case 'feed':
+        return 'Feed';
+      case 'village':
+        return `Village${villageCount > 0 ? ` (${villageCount})` : ''}`;
+      case 'gossip':
+        return `Social${gossipCount > 0 ? ` (${gossipCount})` : ''}`;
     }
   };
 
@@ -68,7 +76,7 @@ export const Sidebar: React.FC = () => {
           borderBottom: `1px solid ${COLORS.border}`,
         }}
       >
-        {(['villagers', 'chat', 'board', 'artifacts', 'events'] as Tab[]).map((tab) => (
+        {(['villagers', 'feed', 'village', 'gossip'] as Tab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -115,12 +123,10 @@ export const Sidebar: React.FC = () => {
               />
             ))}
           </>
-        ) : activeTab === 'board' ? (
-          <VillageBoard />
-        ) : activeTab === 'artifacts' ? (
-          <ArtifactGallery />
-        ) : activeTab === 'events' ? (
-          <WorldEvents />
+        ) : activeTab === 'village' ? (
+          <VillageDashboard />
+        ) : activeTab === 'gossip' ? (
+          <GossipFeed />
         ) : (
           <ChatLog />
         )}

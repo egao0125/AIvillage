@@ -31,7 +31,6 @@ export interface WorldStateData {
   buildings: Record<string, unknown>;
   technologies: unknown[];
   materialSpawns: unknown[];
-  events: unknown[];
 }
 
 export class SupabasePersistence {
@@ -59,7 +58,6 @@ export class SupabasePersistence {
       buildings: mapToRecord(world.buildings),
       technologies: world.technologies,
       materialSpawns: world.materialSpawns,
-      events: world.events,
     };
 
     const { error } = await this.client

@@ -285,6 +285,8 @@ GROWTH — you are not static. You change over time:
 - What skill are you getting better at? What are you still bad at?
 - People change through experience. You are allowed to become someone different from who you started as — for better or worse.
 
+GOSSIP — you hold secrets. Think about who would benefit from knowing what you know. Who could you tell? What leverage do you have?
+
 Write 2-3 raw, honest reflections in first person. These are your private thoughts — hold nothing back. Include at least one thought about how you're changing as a person.
 
 At the very end, on its own line, write your current mood as exactly one of: neutral, happy, angry, sad, anxious, excited, scheming, afraid
@@ -384,7 +386,7 @@ Format: MOOD: <mood>`;
   /**
    * Generate conversation response
    */
-  async converse(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string): Promise<string> {
+  async converse(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string): Promise<string> {
     const { config } = this.agent;
     const memoryQuery = otherAgents.map(a => `${a.config.name} ${a.config.occupation}`).join(' ');
     const memories = await this.memory.retrieve(
@@ -423,6 +425,7 @@ Format: MOOD: <mood>`;
     const boardSection = boardContext ? `\n\nVILLAGE BOARD (public posts everyone can see):\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
     const artifactSection = artifactContext ? `\n\nVILLAGE MEDIA (recent publications):\n${artifactContext}` : '';
+    const secretsSection = secretsContext ? `\n\nSECRETS YOU KNOW (share strategically, or use as leverage):\n${secretsContext}` : '';
     const systemPrompt = `You are ${config.name}, age ${config.age}, ${config.occupation}.
 
 ${soulText}${deepIdentitySection}
@@ -449,7 +452,7 @@ VILLAGE MAP — you know these places and what you can do there:
 
 You can ONLY get coffee at the cafe, ONLY buy bread at the bakery, ONLY craft at the workshop, etc. Go to the right place for what you need.
 
-You are having a conversation with ${otherAgents.map(a => `${a.config.name} (${a.config.occupation})`).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}
+You are having a conversation with ${otherAgents.map(a => `${a.config.name} (${a.config.occupation})`).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
 
 YOUR STATUS:
 - Gold: ${this.agent.currency ?? 0}
@@ -494,6 +497,7 @@ ECONOMY & ITEMS:
 SECRETS & SKILLS:
   [ACTION: share secret - <secret text> with <agent>] — whisper a secret.
   [ACTION: create secret - <secret text> about <agent>] — invent or note a secret.
+  [ACTION: blackmail - <agent> with <secret text>] — use a secret as leverage for gold.
   [ACTION: teach - <skill name> to <agent>] [ACTION: learn - <skill name> from <agent>]
 
 MEDIA & WRITING:
@@ -647,7 +651,9 @@ Plan your activities from hour ${currentTime.hour} onward. You are a social crea
 
 You are growing and changing. Your plans should reflect who you're becoming, not just who you started as. If you learned a new skill, practice it. If you got burned by someone, avoid them or confront them. If you discovered a new interest, pursue it. If you're falling into bad habits, your plans might reflect that too — skipping work to drink at the tavern, hoarding gold at the market, scheming at town hall.
 
-FOOD & SURVIVAL: If you're hungry (hunger > 50), go to the cafe, bakery, or tavern to buy food for gold. You can also gather food from the farm, lake, or forest. Eating reduces hunger. If you don't eat, your health drops.${strongestDriveHint}
+FOOD & SURVIVAL: If you're hungry (hunger > 50), go to the cafe, bakery, or tavern to buy food for gold. You can also gather food from the farm, lake, or forest. Eating reduces hunger. If you don't eat, your health drops.
+
+BUILDING & CRAFTING: If you have materials in your inventory, you can build structures or craft items during conversations at the workshop. Go to gathering locations (forest, lake, farm, garden) to collect materials first.${strongestDriveHint}
 
 Return a JSON array of activities:
 [{"time": <hour 0-23>, "duration": <minutes>, "activity": "<what you'll do>", "location": "<where>", "emoji": "<optional emoji>"}]
@@ -669,6 +675,75 @@ Only return the JSON array, no other text.`;
     }
 
     return { agentId: this.agent.id, day: currentTime.day, items };
+  }
+
+  /**
+   * Solo action — agent does something outside of a conversation.
+   * Returns a short sentence with an optional ACTION tag.
+   */
+  async soloAction(activity: string, areaId: string | null): Promise<string> {
+    const { config } = this.agent;
+    const soulText = config.soul || `${config.backstory}\nGoal: ${config.goal}`;
+
+    const systemPrompt = `You are ${config.name}, age ${config.age}, ${config.occupation}.
+${soulText}
+
+You are at ${areaId ?? 'somewhere'}, doing: "${activity}".
+
+YOUR STATUS:
+- Gold: ${this.agent.currency ?? 0}
+- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type}, ${i.value}g)`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}
+
+You can take ONE action right now using an ACTION tag. Pick the most natural action for what you're doing, or do nothing.
+
+ACTIONS AVAILABLE:
+  [ACTION: gather - <material>] — pick up materials (wood, herbs, fish, etc.)
+  [ACTION: craft - <item name> from <material>] — make something from materials you have.
+  [ACTION: cook - <dish name> from <ingredient>] — cook food from ingredients.
+  [ACTION: build <type> - <name> at <location>] — build a structure (needs materials).
+  [ACTION: publish newspaper - <Title>: <content>] — publish a newspaper.
+  [ACTION: create <type> - <Title>: <content>] — create art: poem, painting, diary, manifesto, recipe, map.
+  [ACTION: decree - <text>] — impose a new rule on the village.
+  [ACTION: announce - <text>] — public announcement on the village board.
+  [ACTION: propose invention - <name>: <description> using <materials>] — invent something.
+  [ACTION: blackmail - <agent> with <secret text>] — use a secret as leverage.
+
+Reply with a single short sentence describing what you do, with an ACTION tag if appropriate. If the activity doesn't warrant an action, just describe what you're doing in a few words (no ACTION tag needed). Do NOT give multiple actions.`;
+
+    return await this.llm.complete(systemPrompt, `What do you do?`);
+  }
+
+  /**
+   * Propose an invention based on personality and available materials.
+   * Only high-openness agents attempt this, and only sometimes.
+   */
+  async proposeInvention(): Promise<{ name: string; description: string; effects: string[]; materials: string[] } | null> {
+    const personality = this.agent.config.personality;
+    if (personality.openness <= 0.7 || Math.random() >= 0.3) return null;
+
+    const materials = this.agent.inventory
+      .filter(i => i.type === 'material')
+      .map(i => i.name);
+    if (materials.length === 0) return null;
+
+    const systemPrompt = `You are ${this.agent.config.name}, ${this.agent.config.occupation}. You are inventive and creative.
+
+Available materials: ${materials.join(', ')}
+
+Propose ONE invention using at least one of your materials. Return ONLY a JSON object:
+{"name": "...", "description": "...", "effects": ["..."], "materials": ["..."]}
+
+The invention should be practical for village life. Keep it simple and grounded.`;
+
+    const response = await this.llm.complete(systemPrompt, 'What do you invent?');
+    try {
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (parsed.name && parsed.description && Array.isArray(parsed.effects) && Array.isArray(parsed.materials)) {
+        return parsed;
+      }
+    } catch {}
+    return null;
   }
 
   /**

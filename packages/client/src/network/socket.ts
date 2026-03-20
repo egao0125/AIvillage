@@ -8,7 +8,6 @@ import type {
   WorldSnapshot,
   Item,
   Skill,
-  WorldEvent,
   Election,
   Property,
   DriveState,
@@ -41,7 +40,6 @@ export function connectSocket(): Socket {
     gameStore.setAgents(snapshot.agents);
     gameStore.setTime(snapshot.time);
     if (snapshot.board) gameStore.setBoard(snapshot.board);
-    if (snapshot.events) gameStore.setEvents(snapshot.events);
     if (snapshot.elections) gameStore.setElections(snapshot.elections);
     if (snapshot.properties) gameStore.setProperties(snapshot.properties);
     if (snapshot.reputation) gameStore.setReputation(snapshot.reputation);
@@ -162,10 +160,6 @@ export function connectSocket(): Socket {
     }
   });
 
-  socket.on('world:event', (event: WorldEvent) => {
-    gameStore.addWorldEvent(event);
-  });
-
   socket.on('election:update', (election: Election) => {
     gameStore.updateElection(election);
   });
@@ -248,7 +242,16 @@ export function connectSocket(): Socket {
     eventBus.emit('technology:discovered', technology);
   });
 
+  // --- Spectator chat ---
+  socket.on('spectator:comment', (data: { name: string; message: string; timestamp: number }) => {
+    eventBus.emit('spectator:comment', data);
+  });
+
   return socket;
+}
+
+export function sendSpectatorComment(message: string): void {
+  socket?.emit('spectator:comment', { message });
 }
 
 export function selectAgent(agentId: string): void {

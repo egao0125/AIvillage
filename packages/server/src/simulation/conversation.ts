@@ -140,9 +140,23 @@ export class ConversationManager {
       // Build institution context for the speaking agent
       const institutionContext = this.buildInstitutionContext(speakerId);
 
+      // Build secrets context — secrets the speaker knows about conversation partners
+      const speakerSecrets = this.world.getSecretsFor(speakerId);
+      const partnerIds = new Set(otherIds);
+      const relevantSecrets = speakerSecrets.filter(s =>
+        (s.holderId === speakerId || s.sharedWith.includes(speakerId)) &&
+        (s.aboutAgentId && partnerIds.has(s.aboutAgentId))
+      );
+      const secretsContext = relevantSecrets.length > 0
+        ? relevantSecrets.map(s => {
+            const aboutName = this.world.getAgent(s.aboutAgentId!)?.config.name ?? 'someone';
+            return `- About ${aboutName}: "${s.content}"`;
+          }).join('\n')
+        : undefined;
+
       let response: string;
       try {
-        response = await cognition.converse(otherAgents, history, boardContext, institutionContext || undefined, artifactContext);
+        response = await cognition.converse(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext);
       } catch {
         // Fallback dialogue when LLM is unavailable
         response = this.getFallbackDialogue(speakerAgent.config.name, otherAgents[0].config.name, active.turnCount);
@@ -336,7 +350,7 @@ export class ConversationManager {
    * Parse and execute a social action from an agent's conversation.
    * Actions can affect the world state: post to the board, transfer currency, etc.
    */
-  private executeSocialAction(
+  executeSocialAction(
     actorId: string,
     actorName: string,
     targetId: string,
@@ -599,6 +613,23 @@ export class ConversationManager {
             this.broadcaster.reputationChange(victim.id, actorId, this.world.getReputation(victim.id, actorId));
             console.log(`[Social] ${actorName} failed to steal ${itemName} from ${victim?.config.name ?? victimName}`);
           }
+
+          // Witness detection: nearby agents see the theft attempt
+          const nearbyWitnesses = this.world.getNearbyAgents(actor!.position, 5)
+            .filter(a => a.id !== actorId && a.id !== victim!.id && a.alive !== false);
+          for (const witness of nearbyWitnesses) {
+            const witnessSecret: Secret = {
+              id: crypto.randomUUID(),
+              holderId: witness.id,
+              aboutAgentId: actorId,
+              content: `I saw ${actorName} try to steal ${itemName} from ${victim!.config.name}`,
+              importance: 8,
+              sharedWith: [],
+              createdAt: Date.now(),
+            };
+            this.world.addSecret(witnessSecret);
+            console.log(`[Social] ${witness.config.name} witnessed theft attempt by ${actorName}`);
+          }
         }
       }
       return;
@@ -630,6 +661,18 @@ export class ConversationManager {
         }
         this.broadcaster.secretShared(actorId, recipient.id);
         this.world.updateReputation(recipient.id, actorId, 5, 'shared a secret');
+
+        // Gossip propagation: sharer's opinion of the secret's subject influences listener
+        if (secret.aboutAgentId) {
+          const sharerRep = this.world.getReputation(actorId, secret.aboutAgentId);
+          const attenuated = Math.max(-15, Math.min(15, Math.round(sharerRep * 0.5)));
+          const listenerRep = this.world.getReputation(recipient.id, secret.aboutAgentId);
+          if (Math.abs(listenerRep) < 30 && attenuated !== 0) {
+            this.world.updateReputation(recipient.id, secret.aboutAgentId, attenuated, `heard gossip from ${actorName}`);
+            this.broadcaster.reputationChange(recipient.id, secret.aboutAgentId, this.world.getReputation(recipient.id, secret.aboutAgentId));
+          }
+        }
+
         console.log(`[Social] ${actorName} shared a secret with ${recipient.config.name}: "${secretText}"`);
       }
       return;
@@ -653,6 +696,117 @@ export class ConversationManager {
       };
       this.world.addSecret(secret);
       console.log(`[Social] ${actorName} created a secret about ${aboutName}: "${secretText}"`);
+      return;
+    }
+
+    // --- BLACKMAIL ---
+    // e.g. "blackmail - Yuki with I saw you steal from the bakery"
+    const blackmailMatch = lower.match(/^blackmail\s*[-:]\s*(.+?)\s+with\s+(.+)/);
+    if (blackmailMatch) {
+      const targetName = blackmailMatch[1].trim();
+      const secretText = blackmailMatch[2].trim();
+      const target = this.findAgentByName(targetName);
+      if (target) {
+        // Validate actor holds a secret about target
+        const heldSecret = this.world.secrets.find(s =>
+          s.holderId === actorId && s.aboutAgentId === target.id
+        );
+        if (heldSecret) {
+          // 40% chance target pays, 60% chance they refuse
+          if (Math.random() < 0.4) {
+            // Target pays — 10-30 gold
+            const amount = 10 + Math.floor(Math.random() * 21);
+            const taken = Math.min(amount, target.currency);
+            if (taken > 0) {
+              const targetBalance = this.world.updateAgentCurrency(target.id, -taken);
+              const actorBalance = this.world.updateAgentCurrency(actorId, taken);
+              this.broadcaster.agentCurrency(target.id, targetBalance, -taken, `blackmailed by ${actorName}`);
+              this.broadcaster.agentCurrency(actorId, actorBalance, taken, `blackmailed ${target.config.name}`);
+            }
+            this.world.updateReputation(target.id, actorId, -15, `blackmailed me`);
+            this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
+            console.log(`[Social] ${actorName} blackmailed ${target.config.name} for ${taken}G`);
+          } else {
+            // Target refuses — secret gets exposed as board rumor
+            this.world.addBoardPost({
+              id: crypto.randomUUID(),
+              authorId: target.id,
+              authorName: target.config.name,
+              type: 'rumor',
+              content: `${actorName} tried to blackmail me! They claimed: "${secretText}"`,
+              timestamp: Date.now(),
+              day: this.world.time.day,
+              targetIds: [actorId],
+            });
+            this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+            // Village-wide rep hit for blackmailer
+            for (const agent of this.world.agents.values()) {
+              if (agent.id !== actorId && agent.alive !== false) {
+                this.world.updateReputation(agent.id, actorId, -5, `attempted blackmail against ${target.config.name}`);
+              }
+            }
+            this.world.updateReputation(target.id, actorId, -25, `tried to blackmail me`);
+            this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
+            console.log(`[Social] ${actorName} failed to blackmail ${target.config.name} — secret exposed!`);
+          }
+        } else {
+          console.log(`[Social] ${actorName} tried to blackmail ${target.config.name} but holds no secret about them`);
+        }
+      }
+      return;
+    }
+
+    // --- PROPOSE INVENTION ---
+    // e.g. "propose invention - Water Wheel: uses river current for power using wood"
+    const inventionMatch = lower.match(/^propose\s+invention\s*[-:]\s*(.+?):\s*(.+?)\s+using\s+(.+)/);
+    if (inventionMatch) {
+      const invName = inventionMatch[1].trim();
+      const invDescription = inventionMatch[2].trim();
+      const invMaterials = inventionMatch[3].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        // Check actor has at least one of the named materials
+        const materialItem = actor.inventory.find(i =>
+          i.type === 'material' && invMaterials.toLowerCase().includes(i.name.toLowerCase())
+        );
+        if (materialItem && !this.world.hasTechnology(invName)) {
+          this.world.removeItem(materialItem.id);
+          const tech: import('@ai-village/shared').Technology = {
+            id: crypto.randomUUID(),
+            name: invName,
+            description: invDescription,
+            inventorId: actorId,
+            inventorName: actorName,
+            effects: [invDescription],
+            requirements: [invMaterials],
+            discoveredAt: Date.now(),
+            day: this.world.time.day,
+          };
+          this.world.addTechnology(tech);
+          this.broadcaster.boardPost({
+            id: crypto.randomUUID(),
+            authorId: actorId,
+            authorName: actorName,
+            type: 'announcement',
+            content: `${actorName} invented "${invName}": ${invDescription}`,
+            timestamp: Date.now(),
+            day: this.world.time.day,
+          });
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          void cognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: actorId,
+            type: 'plan',
+            content: `I invented "${invName}": ${invDescription}`,
+            importance: 9,
+            timestamp: Date.now(),
+            relatedAgentIds: [],
+          });
+          console.log(`[Tech] ${actorName} invented: ${invName}`);
+        } else {
+          console.log(`[Social] ${actorName} tried to invent ${invName} but lacks materials or already exists`);
+        }
+      }
       return;
     }
 

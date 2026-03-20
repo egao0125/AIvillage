@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { COLORS, FONTS } from '../styles';
 import { nameToColor, hexToString } from '../../utils/color';
-import { getToken, setToken, clearToken, authHeaders } from '../../utils/auth';
+import { getToken, setToken, clearToken, authHeaders, setUserId } from '../../utils/auth';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,6 +99,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
           if (authRes.ok) {
             const authData = await authRes.json();
             setUser(authData.user);
+            if (authData.user?.id) setUserId(authData.user.id);
           } else {
             clearToken();
           }
@@ -154,6 +155,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       }
       if (data.token) {
         setToken(data.token);
+        if (data.user?.id) setUserId(data.user.id);
         setUser(data.user);
       } else {
         // Signup succeeded but no token — switch to login

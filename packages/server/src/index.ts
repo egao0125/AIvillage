@@ -51,6 +51,9 @@ if (isProduction) {
   });
 }
 
+// Spectator comment rate limit: 1 per 10 seconds per socket
+const spectatorLastComment: Map<string, number> = new Map();
+
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
 
@@ -61,8 +64,28 @@ io.on('connection', (socket) => {
     console.log(`Client selected agent: ${agentId}`);
   });
 
+  // Spectator chat — relay to all clients
+  socket.on('spectator:comment', (data: { message: string }) => {
+    if (!data.message || typeof data.message !== 'string') return;
+    const msg = data.message.trim().slice(0, 200);
+    if (!msg) return;
+
+    // Rate limit: 1 per 10 seconds
+    const now = Date.now();
+    const last = spectatorLastComment.get(socket.id) ?? 0;
+    if (now - last < 10_000) return;
+    spectatorLastComment.set(socket.id, now);
+
+    io.emit('spectator:comment', {
+      name: `Spectator`,
+      message: msg,
+      timestamp: now,
+    });
+  });
+
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
+    spectatorLastComment.delete(socket.id);
   });
 });
 

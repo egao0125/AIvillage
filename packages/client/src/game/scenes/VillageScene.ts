@@ -284,7 +284,7 @@ export class VillageScene extends Phaser.Scene {
             this.spawnAgent(agent);
           } else {
             const sprite = this.agentSprites.get(agent.id)!;
-            sprite.moveTo(agent.position.x, agent.position.y);
+            sprite.moveToTile(agent.position.x, agent.position.y);
             if (agent.currentAction) sprite.setAction(agent.currentAction);
           }
         }
@@ -293,7 +293,7 @@ export class VillageScene extends Phaser.Scene {
 
       eventBus.on('agent:move', (data: { agentId: string; to: { x: number; y: number } }) => {
         const sprite = this.agentSprites.get(data.agentId);
-        if (sprite) sprite.moveTo(data.to.x, data.to.y);
+        if (sprite) sprite.moveToTile(data.to.x, data.to.y);
       }),
 
       eventBus.on('agent:speak', (data: { agentId: string; message: string }) => {
