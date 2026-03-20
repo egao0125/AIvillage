@@ -28,11 +28,11 @@ export const COLORS = {
 
 export const FONTS = {
   pixel: '"Press Start 2P", monospace',
-  body: '"Press Start 2P", monospace',
+  body: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
 };
 
 export const SIZES = {
-  sidebarWidth: 320,
+  sidebarWidth: '420px' as string | number,
   cardPadding: 12,
   borderRadius: 4,
 };

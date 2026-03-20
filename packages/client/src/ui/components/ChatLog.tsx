@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React from 'react';
 import { useChatLog } from '../../core/hooks';
 import { nameToColor, hexToString } from '../../utils/color';
 import { COLORS, FONTS } from '../styles';
@@ -11,11 +11,6 @@ interface ConversationGroup {
 
 export const ChatLog: React.FC = () => {
   const chatLog = useChatLog();
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatLog.length]);
 
   if (chatLog.length === 0) {
     return (
@@ -23,8 +18,8 @@ export const ChatLog: React.FC = () => {
         style={{
           padding: 20,
           textAlign: 'center',
-          fontFamily: FONTS.pixel,
-          fontSize: '7px',
+          fontFamily: FONTS.body,
+          fontSize: '14px',
           color: COLORS.textDim,
         }}
       >
@@ -59,11 +54,9 @@ export const ChatLog: React.FC = () => {
   return (
     <div
       style={{
-        flex: 1,
-        overflowY: 'auto',
         padding: '4px 0',
-        fontFamily: FONTS.pixel,
-        fontSize: '7px',
+        fontFamily: FONTS.body,
+        fontSize: '14px',
       }}
     >
       {groups.map((group) => {
@@ -96,7 +89,7 @@ export const ChatLog: React.FC = () => {
                 gap: 4,
               }}
             >
-              <span style={{ color: COLORS.gold, fontSize: '6px' }}>💬</span>
+              <span style={{ color: COLORS.gold, fontSize: '12px' }}>💬</span>
               <span style={{ color: p1Color, fontWeight: 'bold' }}>
                 {group.participants[0] || '?'}
               </span>
@@ -129,7 +122,6 @@ export const ChatLog: React.FC = () => {
           </div>
         );
       })}
-      <div ref={bottomRef} />
     </div>
   );
 };

@@ -8,6 +8,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
+    "@ai-village/shared": "workspace:*",
     "phaser": "^3.80.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

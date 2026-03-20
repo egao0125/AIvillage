@@ -13,10 +13,22 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private actionLabel: Phaser.GameObjects.Text;
   private speechBubble: SpeechBubble;
   private selectionRing: Phaser.GameObjects.Graphics;
+  private moodRing: Phaser.GameObjects.Graphics;
   private targetX: number;
   private targetY: number;
   private isLerping: boolean = false;
   agentId: string;
+
+  private static readonly MOOD_COLORS: Record<string, number> = {
+    neutral: 0x9ca3af,
+    happy: 0x4ade80,
+    angry: 0xef4444,
+    sad: 0x60a5fa,
+    anxious: 0xfbbf24,
+    excited: 0xf97316,
+    scheming: 0xa855f7,
+    afraid: 0x94a3b8,
+  };
 
   constructor(
     scene: Phaser.Scene,
@@ -40,6 +52,11 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.selectionRing.setVisible(false);
     this.add(this.selectionRing);
     this.drawSelectionRing();
+
+    // Mood ring (behind sprite, in front of selection ring)
+    this.moodRing = scene.add.graphics();
+    this.add(this.moodRing);
+    this.drawMoodRing('neutral');
 
     // Sprite
     const textureKey = scene.textures.exists(spriteKey)
@@ -94,6 +111,17 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.selectionRing.strokeEllipse(0, 4, 28, 14);
     this.selectionRing.lineStyle(1, 0xffec80, 0.5);
     this.selectionRing.strokeEllipse(0, 4, 32, 18);
+  }
+
+  private drawMoodRing(mood: string): void {
+    this.moodRing.clear();
+    const color = AgentSprite.MOOD_COLORS[mood] || 0x9ca3af;
+    this.moodRing.lineStyle(1.5, color, 0.7);
+    this.moodRing.strokeCircle(0, 0, 10);
+  }
+
+  setMood(mood: string): void {
+    this.drawMoodRing(mood);
   }
 
   moveTo(tileX: number, tileY: number): void {

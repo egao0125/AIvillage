@@ -193,11 +193,11 @@ export class VillageScene extends Phaser.Scene {
           ry - 4,
           building.label,
           {
-            fontSize: '5px',
+            fontSize: '8px',
             fontFamily: '"Press Start 2P", monospace',
             color: '#ffffff',
             stroke: '#000000',
-            strokeThickness: 2,
+            strokeThickness: 3,
             resolution: 2,
           }
         );
@@ -244,20 +244,23 @@ export class VillageScene extends Phaser.Scene {
     const worldW = MAP_WIDTH * TILE_SIZE;
     const worldH = MAP_HEIGHT * TILE_SIZE;
 
-    this.cameras.main.setBounds(0, 0, worldW, worldH);
-    this.cameras.main.setZoom(1.5);
-    this.cameras.main.centerOn(worldW / 2, worldH / 2);
+    // No camera bounds — allow free panning
+    const cam = this.cameras.main;
+
+    // Initial zoom: fit the entire map in view
+    const fitZoom = Math.min(cam.width / worldW, cam.height / worldH);
+    cam.setZoom(Math.max(fitZoom, 0.5));
+    cam.centerOn(worldW / 2, worldH / 2);
 
     // Drag to pan
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (pointer.isDown && pointer.button === 0 && !pointer.event.shiftKey) {
-        const cam = this.cameras.main;
         cam.scrollX -= (pointer.x - pointer.prevPosition.x) / cam.zoom;
         cam.scrollY -= (pointer.y - pointer.prevPosition.y) / cam.zoom;
       }
     });
 
-    // Scroll to zoom
+    // Scroll to zoom — free range from 0.5x to 5x
     this.input.on(
       'wheel',
       (
@@ -266,8 +269,7 @@ export class VillageScene extends Phaser.Scene {
         _deltaX: number,
         deltaY: number
       ) => {
-        const cam = this.cameras.main;
-        const newZoom = Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 1.0, 5);
+        const newZoom = Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.5, 5);
         cam.setZoom(newZoom);
       }
     );

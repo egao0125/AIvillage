@@ -33,15 +33,20 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
+      {/* Map fills entire screen */}
       <div
         id="game-container"
         ref={gameContainerRef}
-        style={{ flex: 1, position: 'relative' }}
-      >
+        style={{ width: '100%', height: '100%' }}
+      />
+      <div style={{ position: 'absolute', top: 0, left: 0, zIndex: 10 }}>
         <TimeDisplay />
       </div>
-      <Sidebar />
+      {/* Sidebar overlays on right */}
+      <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 420, zIndex: 10 }}>
+        <Sidebar />
+      </div>
     </div>
   );
 };

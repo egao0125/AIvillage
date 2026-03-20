@@ -29,6 +29,9 @@ importers:
 
   packages/client:
     dependencies:
+      '@ai-village/shared':
+        specifier: workspace:*
+        version: link:../shared
       phaser:
         specifier: ^3.80.0
         version: 3.90.0

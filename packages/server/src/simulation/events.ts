@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, BoardPost, GameTime, Position, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, BoardPost, Election, GameTime, Item, Mood, Position, Property, Skill, WorldEvent, WorldSnapshot } from '@ai-village/shared';
 
 export class EventBroadcaster {
   constructor(private io: Server) {}
@@ -42,5 +42,37 @@ export class EventBroadcaster {
 
   worldSnapshot(snapshot: WorldSnapshot): void {
     this.io.emit('world:snapshot', snapshot);
+  }
+
+  agentMood(agentId: string, mood: string): void {
+    this.io.emit('agent:mood', { agentId, mood });
+  }
+
+  agentInventory(agentId: string, inventory: Item[]): void {
+    this.io.emit('agent:inventory', { agentId, inventory });
+  }
+
+  agentSkill(agentId: string, skill: Skill): void {
+    this.io.emit('agent:skill', { agentId, skill });
+  }
+
+  secretShared(fromId: string, toId: string): void {
+    this.io.emit('secret:shared', { fromId, toId });
+  }
+
+  worldEvent(event: WorldEvent): void {
+    this.io.emit('world:event', event);
+  }
+
+  electionUpdate(election: Election): void {
+    this.io.emit('election:update', election);
+  }
+
+  propertyChange(property: Property): void {
+    this.io.emit('property:change', property);
+  }
+
+  reputationChange(fromId: string, toId: string, score: number): void {
+    this.io.emit('reputation:change', { fromId, toId, score });
   }
 }

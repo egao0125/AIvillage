@@ -32,6 +32,9 @@ export interface Agent {
   currency: number;
   createdAt: number;
   ownerId: string;
+  mood: Mood;
+  inventory: Item[];
+  skills: Skill[];
 }
 
 export type AgentState =
@@ -39,6 +42,95 @@ export type AgentState =
   | "routine"   // Commuting, eating, cleaning — rule-based
   | "idle"      // Off-screen, low-frequency thinking
   | "sleeping"; // Nighttime, no LLM calls
+
+// --- Mood ---
+
+export type Mood = 'neutral' | 'happy' | 'angry' | 'sad' | 'anxious' | 'excited' | 'scheming' | 'afraid';
+
+// --- Items & Materials ---
+
+export type ItemType = 'tool' | 'food' | 'material' | 'art' | 'medicine' | 'document' | 'gift' | 'other';
+
+export interface Item {
+  id: string;
+  name: string;
+  description: string;
+  ownerId: string;
+  createdBy?: string;
+  value: number;
+  type: ItemType;
+}
+
+export interface MaterialSpawn {
+  areaId: string;
+  material: string;
+  respawnMinutes: number;
+  lastGathered?: number;
+}
+
+// --- Secrets ---
+
+export interface Secret {
+  id: string;
+  holderId: string;
+  aboutAgentId?: string;
+  content: string;
+  importance: number;
+  sharedWith: string[];
+  createdAt: number;
+}
+
+// --- Skills ---
+
+export interface Skill {
+  name: string;
+  level: number;
+  learnedFrom?: string;
+}
+
+// --- World Events ---
+
+export interface WorldEvent {
+  id: string;
+  type: 'storm' | 'festival' | 'fire' | 'drought' | 'harvest' | 'plague' | 'earthquake' | 'market_boom' | 'bandit_sighting' | 'miracle';
+  description: string;
+  startTime: number;
+  duration: number;
+  affectedAreas: string[];
+  active: boolean;
+}
+
+// --- Elections ---
+
+export interface Election {
+  id: string;
+  position: string;
+  candidates: string[];
+  votes: Record<string, string>;
+  startDay: number;
+  endDay: number;
+  winner?: string;
+  active: boolean;
+}
+
+// --- Property ---
+
+export interface Property {
+  areaId: string;
+  ownerId: string;
+  acquiredDay: number;
+  rentPrice?: number;
+}
+
+// --- Reputation ---
+
+export interface ReputationEntry {
+  fromAgentId: string;
+  toAgentId: string;
+  score: number;
+  reason: string;
+  lastUpdated: number;
+}
 
 // --- World ---
 
@@ -154,4 +246,8 @@ export interface WorldSnapshot {
   conversations: Conversation[];
   areas: MapArea[];
   board: BoardPost[];
+  events: WorldEvent[];
+  elections: Election[];
+  properties: Property[];
+  reputation: ReputationEntry[];
 }

@@ -19,8 +19,8 @@ export const VillageBoard: React.FC = () => {
     <div
       style={{
         padding: 12,
-        fontFamily: FONTS.pixel,
-        fontSize: '7px',
+        fontFamily: FONTS.body,
+        fontSize: '13px',
         color: COLORS.text,
       }}
     >
@@ -34,7 +34,7 @@ export const VillageBoard: React.FC = () => {
         >
           The village board is empty.
           <br />
-          <span style={{ fontSize: '6px', marginTop: 8, display: 'block' }}>
+          <span style={{ fontSize: '11px', marginTop: 8, display: 'block' }}>
             Agents will post decrees, rumors, and announcements here.
           </span>
         </div>
@@ -65,13 +65,14 @@ export const VillageBoard: React.FC = () => {
                   style={{
                     color: style.color,
                     textTransform: 'uppercase',
-                    fontSize: '6px',
+                    fontSize: '9px',
+                    fontFamily: FONTS.pixel,
                     letterSpacing: 1,
                   }}
                 >
                   {post.type}
                 </span>
-                <span style={{ color: COLORS.textDim, fontSize: '6px' }}>
+                <span style={{ color: COLORS.textDim, fontSize: '11px' }}>
                   by {post.authorName}
                 </span>
               </div>
@@ -81,7 +82,7 @@ export const VillageBoard: React.FC = () => {
               <div
                 style={{
                   color: COLORS.textDim,
-                  fontSize: '5px',
+                  fontSize: '10px',
                   marginTop: 4,
                 }}
               >

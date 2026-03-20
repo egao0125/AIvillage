@@ -23,7 +23,7 @@ interface SetupPageProps {
 
 const MODELS = [
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (fast)' },
-  { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4 (balanced)' },
+  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 (balanced)' },
   { value: 'claude-opus-4-6', label: 'Opus 4.6 (smartest)' },
 ];
 
@@ -54,7 +54,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
   // --- Config state ---
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [model, setModel] = useState('claude-sonnet-4-20250514');
+  const [model, setModel] = useState('claude-sonnet-4-6');
   const [configured, setConfigured] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);

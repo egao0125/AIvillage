@@ -1,4 +1,4 @@
-import type { BoardPostType, Conversation, Memory, Position } from '@ai-village/shared';
+import type { BoardPostType, Conversation, Item, Memory, Position, Secret } from '@ai-village/shared';
 import type { AgentCognition } from '@ai-village/ai-engine';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -20,10 +20,23 @@ export class ConversationManager {
   ) {}
 
   /**
-   * Start a new conversation between two agents.
-   * Returns the conversation ID.
+   * Start a new conversation between agents.
+   * Accepts an array of agent IDs (2 or more for group conversations).
+   * Also accepts two separate string args for backward compatibility.
    */
-  startConversation(agent1Id: string, agent2Id: string, location: Position): string {
+  startConversation(agentIdsOrFirst: string | string[], agent2Id?: string, location?: Position): string {
+    let agentIds: string[];
+    let loc: Position;
+
+    if (Array.isArray(agentIdsOrFirst)) {
+      agentIds = agentIdsOrFirst;
+      loc = location ? { ...location } : { x: 0, y: 0 };
+    } else {
+      // Backward compatible: two separate string args
+      agentIds = [agentIdsOrFirst, agent2Id!];
+      loc = location ? { ...location } : { x: 0, y: 0 };
+    }
+
     const id = crypto.randomUUID();
     // Variable conversation length — some are a quick "hey" / "hey", others go deep
     // Weighted toward shorter: 40% short (2-4), 35% medium (5-8), 25% long (9-14)
@@ -36,9 +49,9 @@ export class ConversationManager {
 
     const conversation: Conversation = {
       id,
-      participants: [agent1Id, agent2Id],
+      participants: agentIds,
       messages: [],
-      location: { ...location },
+      location: loc,
       startedAt: Date.now(),
     };
 
@@ -51,16 +64,31 @@ export class ConversationManager {
       processing: false,
     });
 
-    const agent1 = this.world.getAgent(agent1Id);
-    const agent2 = this.world.getAgent(agent2Id);
+    const names = agentIds.map(aid => this.world.getAgent(aid)?.config.name ?? aid);
     console.log(
-      `[Conversation] Started between ${agent1?.config.name ?? agent1Id} and ${agent2?.config.name ?? agent2Id} (max ${maxTurns} turns)`,
+      `[Conversation] Started between ${names.join(', ')} (max ${maxTurns} turns)`,
     );
 
     // Broadcast conversation start so client can draw visual link
-    this.broadcaster.conversationStart(id, [agent1Id, agent2Id]);
+    this.broadcaster.conversationStart(id, agentIds);
 
     return id;
+  }
+
+  /**
+   * Add a participant to an active conversation mid-way.
+   */
+  addParticipant(conversationId: string, agentId: string): void {
+    const active = this.activeConversations.get(conversationId);
+    if (!active) return;
+    if (active.conversation.participants.includes(agentId)) return;
+
+    active.conversation.participants.push(agentId);
+    const agent = this.world.getAgent(agentId);
+    console.log(
+      `[Conversation] ${agent?.config.name ?? agentId} joined conversation ${conversationId}`,
+    );
+    this.broadcaster.conversationStart(conversationId, active.conversation.participants);
   }
 
   /**
@@ -84,16 +112,16 @@ export class ConversationManager {
     active.processing = true;
 
     try {
-      // Determine current speaker
-      const speakerId = active.conversation.participants[active.currentSpeakerIdx];
-      const otherIdx = active.currentSpeakerIdx === 0 ? 1 : 0;
-      const otherId = active.conversation.participants[otherIdx];
+      const participants = active.conversation.participants;
+      // Determine current speaker using round-robin modulo for N participants
+      const speakerId = participants[active.currentSpeakerIdx % participants.length];
+      const otherIds = participants.filter(id => id !== speakerId);
 
       const speakerAgent = this.world.getAgent(speakerId);
-      const otherAgent = this.world.getAgent(otherId);
+      const otherAgents = otherIds.map(id => this.world.getAgent(id)).filter(Boolean) as import('@ai-village/shared').Agent[];
       const cognition = cognitions.get(speakerId);
 
-      if (!speakerAgent || !otherAgent || !cognition) {
+      if (!speakerAgent || otherAgents.length === 0 || !cognition) {
         this.endConversation(conversationId, cognitions);
         return false;
       }
@@ -107,17 +135,19 @@ export class ConversationManager {
       const boardContext = this.world.getBoardSummary();
       let response: string;
       try {
-        response = await cognition.converse(otherAgent, history, boardContext);
+        response = await cognition.converse(otherAgents, history, boardContext);
       } catch {
         // Fallback dialogue when LLM is unavailable
-        response = this.getFallbackDialogue(speakerAgent.config.name, otherAgent.config.name, active.turnCount);
+        response = this.getFallbackDialogue(speakerAgent.config.name, otherAgents[0].config.name, active.turnCount);
       }
 
       // Extract [ACTION: ...] tags and execute social actions
+      // Use the first other participant as default target for actions
+      const defaultTargetId = otherIds[0];
       const actionMatches = response.matchAll(/\[ACTION:\s*(.+?)\]/gi);
       for (const match of actionMatches) {
         const actionIntent = match[1].trim();
-        this.executeSocialAction(speakerId, speakerAgent.config.name, otherId, actionIntent, cognition);
+        this.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition);
       }
 
       // Strip the ACTION tag from the displayed message
@@ -145,7 +175,8 @@ export class ConversationManager {
       );
 
       active.turnCount++;
-      active.currentSpeakerIdx = otherIdx;
+      // Round-robin to next speaker
+      active.currentSpeakerIdx = (active.currentSpeakerIdx + 1) % participants.length;
 
       // Check if the speaker said goodbye
       const lower = response.toLowerCase();
@@ -261,24 +292,33 @@ export class ConversationManager {
       if (!cognition) continue;
 
       const participant = this.world.getAgent(participantId);
-      const otherId = conversation.participants.find(id => id !== participantId);
-      const other = otherId ? this.world.getAgent(otherId) : undefined;
-      if (!participant || !other) continue;
+      if (!participant) continue;
+
+      const otherIds = conversation.participants.filter(id => id !== participantId);
+      const otherNames = otherIds
+        .map(id => this.world.getAgent(id)?.config.name)
+        .filter(Boolean);
+
+      if (otherNames.length === 0) continue;
+
+      const othersLabel = otherNames.length === 1
+        ? otherNames[0]
+        : `${otherNames.slice(0, -1).join(', ')} and ${otherNames[otherNames.length - 1]}`;
 
       // Store the full conversation as a memory
       const memory: Memory = {
         id: crypto.randomUUID(),
         agentId: participantId,
         type: 'conversation',
-        content: `I had a conversation with ${other.config.name}. Here's what was said:\n${transcript}`,
+        content: `I had a conversation with ${othersLabel}. Here's what was said:\n${transcript}`,
         importance: 6,
         timestamp: Date.now(),
-        relatedAgentIds: [otherId!],
+        relatedAgentIds: otherIds,
       };
 
       try {
         await cognition.addMemory(memory);
-        console.log(`[Memory] ${participant.config.name} stored memory of conversation with ${other.config.name}`);
+        console.log(`[Memory] ${participant.config.name} stored memory of conversation with ${othersLabel}`);
       } catch (err) {
         console.error(`[Memory] Failed to store conversation memory for ${participant.config.name}:`, err);
       }
@@ -372,6 +412,336 @@ export class ConversationManager {
       return;
     }
 
+    // --- GATHER MATERIAL ---
+    // e.g. "gather - wood"
+    const gatherMatch = lower.match(/^gather\s*[-:]\s*(.+)/);
+    if (gatherMatch) {
+      const material = gatherMatch[1].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const area = this.world.getAreaAt(actor.position);
+        const areaId = area?.id ?? '';
+        const item = this.world.gatherMaterial(actorId, areaId);
+        if (item) {
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          this.broadcaster.agentAction(actorId, `gathered ${material}`, '🪓');
+        } else {
+          console.log(`[Social] ${actorName} tried to gather ${material} but nothing available`);
+        }
+      }
+      return;
+    }
+
+    // --- CRAFT ITEM ---
+    // e.g. "craft - wooden chair from wood"
+    const craftMatch = lower.match(/^craft\s*[-:]\s*(.+?)\s+from\s+(.+)/);
+    if (craftMatch) {
+      const itemName = craftMatch[1].trim();
+      const materialName = craftMatch[2].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const materialItem = actor.inventory.find(i => i.name.toLowerCase() === materialName && i.type === 'material');
+        if (materialItem) {
+          this.world.removeItem(materialItem.id);
+          const craftedItem: Item = {
+            id: crypto.randomUUID(),
+            name: itemName,
+            description: `${itemName} crafted by ${actorName} from ${materialName}`,
+            ownerId: actorId,
+            createdBy: actorId,
+            value: materialItem.value * 2,
+            type: 'other',
+          };
+          this.world.addItem(craftedItem);
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          this.broadcaster.agentAction(actorId, `crafted ${itemName}`, '🔨');
+          console.log(`[Social] ${actorName} crafted ${itemName} from ${materialName}`);
+        } else {
+          console.log(`[Social] ${actorName} tried to craft ${itemName} but lacks ${materialName}`);
+        }
+      }
+      return;
+    }
+
+    // --- GIVE ITEM ---
+    // e.g. "give item - wooden chair to Yuki"
+    const giveItemMatch = lower.match(/^give\s+item\s*[-:]\s*(.+?)\s+to\s+(.+)/);
+    if (giveItemMatch) {
+      const itemName = giveItemMatch[1].trim();
+      const recipientName = giveItemMatch[2].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const item = actor.inventory.find(i => i.name.toLowerCase() === itemName);
+        const recipient = this.findAgentByName(recipientName);
+        if (item && recipient) {
+          this.world.transferItem(item.id, actorId, recipient.id);
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          this.broadcaster.agentInventory(recipient.id, recipient.inventory);
+          console.log(`[Social] ${actorName} gave ${itemName} to ${recipient.config.name}`);
+        }
+      }
+      return;
+    }
+
+    // --- SELL ITEM ---
+    // e.g. "sell item - wooden chair to Yuki for 20 gold"
+    const sellItemMatch = lower.match(/^sell\s+item\s*[-:]\s*(.+?)\s+to\s+(.+?)\s+for\s+(\d+)\s*(?:gold|coins?|g)/);
+    if (sellItemMatch) {
+      const itemName = sellItemMatch[1].trim();
+      const buyerName = sellItemMatch[2].trim();
+      const price = parseInt(sellItemMatch[3]);
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const item = actor.inventory.find(i => i.name.toLowerCase() === itemName);
+        const buyer = this.findAgentByName(buyerName);
+        if (item && buyer && buyer.currency >= price) {
+          this.world.transferItem(item.id, actorId, buyer.id);
+          const buyerBalance = this.world.updateAgentCurrency(buyer.id, -price);
+          const sellerBalance = this.world.updateAgentCurrency(actorId, price);
+          this.broadcaster.agentCurrency(buyer.id, buyerBalance, -price, `bought ${itemName} from ${actorName}`);
+          this.broadcaster.agentCurrency(actorId, sellerBalance, price, `sold ${itemName} to ${buyer.config.name}`);
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          this.broadcaster.agentInventory(buyer.id, buyer.inventory);
+          console.log(`[Social] ${actorName} sold ${itemName} to ${buyer.config.name} for ${price}G`);
+        }
+      }
+      return;
+    }
+
+    // --- BUY ITEM ---
+    // e.g. "buy item - wooden chair from Yuki for 20 gold"
+    const buyItemMatch = lower.match(/^buy\s+item\s*[-:]\s*(.+?)\s+from\s+(.+?)\s+for\s+(\d+)\s*(?:gold|coins?|g)/);
+    if (buyItemMatch) {
+      const itemName = buyItemMatch[1].trim();
+      const sellerName = buyItemMatch[2].trim();
+      const price = parseInt(buyItemMatch[3]);
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const seller = this.findAgentByName(sellerName);
+        if (seller && actor.currency >= price) {
+          const item = seller.inventory.find(i => i.name.toLowerCase() === itemName);
+          if (item) {
+            this.world.transferItem(item.id, seller.id, actorId);
+            const actorBalance = this.world.updateAgentCurrency(actorId, -price);
+            const sellerBalance = this.world.updateAgentCurrency(seller.id, price);
+            this.broadcaster.agentCurrency(actorId, actorBalance, -price, `bought ${itemName} from ${seller.config.name}`);
+            this.broadcaster.agentCurrency(seller.id, sellerBalance, price, `sold ${itemName} to ${actorName}`);
+            this.broadcaster.agentInventory(actorId, actor.inventory);
+            this.broadcaster.agentInventory(seller.id, seller.inventory);
+            console.log(`[Social] ${actorName} bought ${itemName} from ${seller.config.name} for ${price}G`);
+          }
+        }
+      }
+      return;
+    }
+
+    // --- STEAL ITEM ---
+    // e.g. "steal item - wooden chair from Yuki"
+    const stealItemMatch = lower.match(/^steal\s+item\s*[-:]\s*(.+?)\s+from\s+(.+)/);
+    if (stealItemMatch) {
+      const itemName = stealItemMatch[1].trim();
+      const victimName = stealItemMatch[2].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const victim = this.findAgentByName(victimName);
+        if (victim) {
+          const item = victim.inventory.find(i => i.name.toLowerCase() === itemName);
+          // 50% chance of success
+          if (item && Math.random() < 0.5) {
+            this.world.transferItem(item.id, victim.id, actorId);
+            this.broadcaster.agentInventory(actorId, actor.inventory);
+            this.broadcaster.agentInventory(victim.id, victim.inventory);
+            this.world.updateReputation(victim.id, actorId, -20, `stole ${itemName}`);
+            this.broadcaster.reputationChange(victim.id, actorId, this.world.getReputation(victim.id, actorId));
+            console.log(`[Social] ${actorName} stole ${itemName} from ${victim.config.name}!`);
+          } else {
+            this.world.updateReputation(victim.id, actorId, -10, `attempted theft of ${itemName}`);
+            this.broadcaster.reputationChange(victim.id, actorId, this.world.getReputation(victim.id, actorId));
+            console.log(`[Social] ${actorName} failed to steal ${itemName} from ${victim?.config.name ?? victimName}`);
+          }
+        }
+      }
+      return;
+    }
+
+    // --- SHARE SECRET ---
+    // e.g. "share secret - the mayor is corrupt with Yuki"
+    const shareSecretMatch = lower.match(/^share\s+secret\s*[-:]\s*(.+?)\s+with\s+(.+)/);
+    if (shareSecretMatch) {
+      const secretText = shareSecretMatch[1].trim();
+      const recipientName = shareSecretMatch[2].trim();
+      const recipient = this.findAgentByName(recipientName);
+      if (recipient) {
+        // Find existing secret or create one
+        let secret = this.world.secrets.find(s => s.holderId === actorId && s.content.toLowerCase() === secretText);
+        if (!secret) {
+          secret = {
+            id: crypto.randomUUID(),
+            holderId: actorId,
+            content: secretText,
+            importance: 7,
+            sharedWith: [],
+            createdAt: Date.now(),
+          };
+          this.world.addSecret(secret);
+        }
+        if (!secret.sharedWith.includes(recipient.id)) {
+          secret.sharedWith.push(recipient.id);
+        }
+        this.broadcaster.secretShared(actorId, recipient.id);
+        this.world.updateReputation(recipient.id, actorId, 5, 'shared a secret');
+        console.log(`[Social] ${actorName} shared a secret with ${recipient.config.name}: "${secretText}"`);
+      }
+      return;
+    }
+
+    // --- CREATE SECRET ---
+    // e.g. "create secret - saw them stealing about Yuki"
+    const createSecretMatch = lower.match(/^create\s+secret\s*[-:]\s*(.+?)\s+about\s+(.+)/);
+    if (createSecretMatch) {
+      const secretText = createSecretMatch[1].trim();
+      const aboutName = createSecretMatch[2].trim();
+      const aboutAgent = this.findAgentByName(aboutName);
+      const secret: Secret = {
+        id: crypto.randomUUID(),
+        holderId: actorId,
+        aboutAgentId: aboutAgent?.id,
+        content: secretText,
+        importance: 7,
+        sharedWith: [],
+        createdAt: Date.now(),
+      };
+      this.world.addSecret(secret);
+      console.log(`[Social] ${actorName} created a secret about ${aboutName}: "${secretText}"`);
+      return;
+    }
+
+    // --- CALL ELECTION ---
+    // e.g. "call election - mayor"
+    const electionMatch = lower.match(/^call\s+election\s*[-:]\s*(.+)/);
+    if (electionMatch) {
+      const position = electionMatch[1].trim();
+      const election = {
+        id: crypto.randomUUID(),
+        position,
+        candidates: [actorId],
+        votes: {} as Record<string, string>,
+        startDay: this.world.time.day,
+        endDay: this.world.time.day + 2,
+        active: true,
+      };
+      this.world.startElection(election);
+      this.broadcaster.electionUpdate(election);
+      console.log(`[Social] ${actorName} called an election for ${position}`);
+      return;
+    }
+
+    // --- VOTE ---
+    // e.g. "vote - Yuki for mayor"
+    const voteMatch = lower.match(/^vote\s*[-:]\s*(.+?)\s+for\s+(.+)/);
+    if (voteMatch) {
+      const candidateName = voteMatch[1].trim();
+      const position = voteMatch[2].trim();
+      const candidate = this.findAgentByName(candidateName);
+      if (candidate) {
+        // Find active election for this position
+        for (const election of this.world.elections.values()) {
+          if (election.active && election.position.toLowerCase() === position) {
+            this.world.castVote(election.id, actorId, candidate.id);
+            this.broadcaster.electionUpdate(election);
+            console.log(`[Social] ${actorName} voted for ${candidate.config.name} for ${position}`);
+            break;
+          }
+        }
+      }
+      return;
+    }
+
+    // --- CLAIM PROPERTY ---
+    // e.g. "claim property - forest"
+    const claimMatch = lower.match(/^claim\s+property\s*[-:]\s*(.+)/);
+    if (claimMatch) {
+      const areaName = claimMatch[1].trim();
+      const property = this.world.claimProperty(areaName, actorId, this.world.time.day);
+      if (property) {
+        this.broadcaster.propertyChange(property);
+        console.log(`[Social] ${actorName} claimed ${areaName}`);
+      } else {
+        console.log(`[Social] ${actorName} tried to claim ${areaName} but it's already owned`);
+      }
+      return;
+    }
+
+    // --- CHARGE RENT ---
+    // e.g. "charge rent - 10 gold for forest"
+    const rentMatch = lower.match(/^charge\s+rent\s*[-:]\s*(\d+)\s*(?:gold|coins?|g)\s+for\s+(.+)/);
+    if (rentMatch) {
+      const amount = parseInt(rentMatch[1]);
+      const areaName = rentMatch[2].trim();
+      const ownerId = this.world.getPropertyOwner(areaName);
+      if (ownerId === actorId) {
+        // Charge all agents currently at that area
+        for (const agent of this.world.agents.values()) {
+          if (agent.id === actorId) continue;
+          const agentArea = this.world.getAreaAt(agent.position);
+          if (agentArea?.id === areaName) {
+            const paid = Math.min(amount, agent.currency);
+            if (paid > 0) {
+              const tenantBalance = this.world.updateAgentCurrency(agent.id, -paid);
+              const ownerBalance = this.world.updateAgentCurrency(actorId, paid);
+              this.broadcaster.agentCurrency(agent.id, tenantBalance, -paid, `rent to ${actorName} for ${areaName}`);
+              this.broadcaster.agentCurrency(actorId, ownerBalance, paid, `rent from ${agent.config.name} for ${areaName}`);
+              console.log(`[Social] ${actorName} charged ${agent.config.name} ${paid}G rent for ${areaName}`);
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // --- TEACH SKILL ---
+    // e.g. "teach - cooking to Yuki"
+    const teachMatch = lower.match(/^teach\s*[-:]\s*(.+?)\s+to\s+(.+)/);
+    if (teachMatch) {
+      const skillName = teachMatch[1].trim();
+      const studentName = teachMatch[2].trim();
+      const student = this.findAgentByName(studentName);
+      if (student) {
+        this.world.addSkill(student.id, { name: skillName, level: 1, learnedFrom: actorId });
+        const updatedSkill = student.skills.find(s => s.name === skillName);
+        if (updatedSkill) {
+          this.broadcaster.agentSkill(student.id, updatedSkill);
+        }
+        this.world.updateReputation(student.id, actorId, 10, `taught ${skillName}`);
+        this.broadcaster.reputationChange(student.id, actorId, this.world.getReputation(student.id, actorId));
+        console.log(`[Social] ${actorName} taught ${skillName} to ${student.config.name}`);
+      }
+      return;
+    }
+
+    // --- LEARN SKILL ---
+    // e.g. "learn - cooking from Yuki"
+    const learnMatch = lower.match(/^learn\s*[-:]\s*(.+?)\s+from\s+(.+)/);
+    if (learnMatch) {
+      const skillName = learnMatch[1].trim();
+      const teacherName = learnMatch[2].trim();
+      const teacher = this.findAgentByName(teacherName);
+      if (teacher) {
+        this.world.addSkill(actorId, { name: skillName, level: 1, learnedFrom: teacher.id });
+        const actor = this.world.getAgent(actorId);
+        if (actor) {
+          const updatedSkill = actor.skills.find(s => s.name === skillName);
+          if (updatedSkill) {
+            this.broadcaster.agentSkill(actorId, updatedSkill);
+          }
+        }
+        this.world.updateReputation(actorId, teacher.id, 5, `learned ${skillName}`);
+        this.broadcaster.reputationChange(actorId, teacher.id, this.world.getReputation(actorId, teacher.id));
+        console.log(`[Social] ${actorName} learned ${skillName} from ${teacher.config.name}`);
+      }
+      return;
+    }
+
     // --- DEFAULT: store as intention memory ---
     // Anything that doesn't match a specific pattern still becomes a high-priority memory
     void cognition.addMemory({
@@ -383,5 +753,23 @@ export class ConversationManager {
       timestamp: Date.now(),
       relatedAgentIds: [targetId],
     });
+  }
+
+  /**
+   * Find an agent by name (case-insensitive, partial match).
+   */
+  private findAgentByName(name: string): import('@ai-village/shared').Agent | undefined {
+    const lower = name.toLowerCase().trim();
+    for (const agent of this.world.agents.values()) {
+      const agentName = agent.config.name.toLowerCase();
+      if (
+        agentName === lower ||
+        agentName.includes(lower) ||
+        lower.includes(agentName.split(' ')[0].toLowerCase())
+      ) {
+        return agent;
+      }
+    }
+    return undefined;
   }
 }

@@ -1,4 +1,4 @@
-import type { Agent, DayPlan, GameTime, Position } from '@ai-village/shared';
+import type { Agent, DayPlan, GameTime, Mood, Position } from '@ai-village/shared';
 import type { AgentCognition } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
@@ -162,7 +162,24 @@ export class AgentController {
 
     try {
       this.world.updateAgentState(this.agent.id, 'active', 'planning the day');
-      const boardContext = this.world.getBoardSummary();
+      let boardContext = this.world.getBoardSummary();
+
+      // Build world context from active events and elections
+      const activeEvents = this.world.getActiveEvents();
+      if (activeEvents.length > 0) {
+        const eventsText = activeEvents.map(e => `- ${e.description} (affects: ${e.affectedAreas.join(', ')})`).join('\n');
+        boardContext += `\n\nCURRENT WORLD EVENTS:\n${eventsText}`;
+      }
+
+      const activeElections = Array.from(this.world.elections.values()).filter(e => e.active);
+      if (activeElections.length > 0) {
+        const electionsText = activeElections.map(e => {
+          const candidateNames = e.candidates.map(cid => this.world.getAgent(cid)?.config.name ?? cid).join(', ');
+          return `- Election for ${e.position}: candidates [${candidateNames}], ends day ${e.endDay}`;
+        }).join('\n');
+        boardContext += `\n\nACTIVE ELECTIONS:\n${electionsText}`;
+      }
+
       const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext);
       this.dayPlan = plan;
       this.currentPlanIndex = 0;
@@ -324,7 +341,7 @@ export class AgentController {
     if (this.state === 'conversing') {
       this.state = 'idle';
       this.idleTimer = 0;
-      this.conversationCooldown = 60; // 60 ticks before this agent can talk again
+      this.conversationCooldown = 20; // 20 ticks before this agent can talk again
       this.world.updateAgentState(this.agent.id, 'idle', 'finished conversation');
 
       // After a conversation, replan the rest of the day based on new memories
@@ -380,13 +397,57 @@ export class AgentController {
     this.world.updateAgentState(this.agent.id, 'active', 'reflecting');
 
     try {
-      await this.cognition.reflect();
+      const result = await this.cognition.reflect();
+
+      // Use mood from LLM response, fall back to keyword parsing
+      const mood = result.mood || this.parseMoodFromReflection(result.reflection);
+      if (mood) {
+        this.agent.mood = mood;
+        this.broadcaster.agentMood(this.agent.id, mood);
+        console.log(`[Agent] ${this.agent.config.name} mood: ${mood}`);
+      }
     } catch (err) {
       console.error(`[Agent] ${this.agent.config.name} failed to reflect:`, err);
     } finally {
       this.reflectingInProgress = false;
       this.goToSleep();
     }
+  }
+
+  /**
+   * Infer mood from reflection text based on keyword matching.
+   */
+  private parseMoodFromReflection(reflection: string): Mood | null {
+    if (!reflection) return null;
+    const lower = reflection.toLowerCase();
+
+    const moodKeywords: Record<Mood, string[]> = {
+      happy: ['happy', 'joy', 'pleased', 'delighted', 'wonderful', 'great day', 'grateful', 'love'],
+      angry: ['angry', 'furious', 'rage', 'outraged', 'infuriated', 'livid', 'hate'],
+      sad: ['sad', 'lonely', 'depressed', 'heartbroken', 'miss', 'grief', 'sorrow', 'melancholy'],
+      anxious: ['anxious', 'worried', 'nervous', 'uneasy', 'dread', 'fear', 'stress', 'tense'],
+      excited: ['excited', 'thrilled', 'eager', 'can\'t wait', 'anticipat', 'energized'],
+      scheming: ['scheming', 'plotting', 'plan', 'manipulat', 'leverage', 'exploit', 'advantage'],
+      afraid: ['afraid', 'terrified', 'scared', 'frighten', 'danger', 'threat'],
+      neutral: [],
+    };
+
+    let bestMood: Mood = 'neutral';
+    let bestCount = 0;
+
+    for (const [mood, keywords] of Object.entries(moodKeywords) as [Mood, string[]][]) {
+      if (mood === 'neutral') continue;
+      let count = 0;
+      for (const kw of keywords) {
+        if (lower.includes(kw)) count++;
+      }
+      if (count > bestCount) {
+        bestCount = count;
+        bestMood = mood;
+      }
+    }
+
+    return bestCount > 0 ? bestMood : 'neutral';
   }
 
   private static readonly SLEEP_AREAS = ['park', 'garden', 'church', 'tavern', 'forest'];

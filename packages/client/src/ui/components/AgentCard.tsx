@@ -29,8 +29,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
-        padding: '10px 12px',
+        gap: 12,
+        padding: '14px 16px',
         cursor: 'pointer',
         background: selected ? COLORS.bgHover : 'transparent',
         borderLeft: selected
@@ -51,47 +51,57 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       {/* Agent avatar circle */}
       <div
         style={{
-          width: 32,
-          height: 32,
+          width: 40,
+          height: 40,
           borderRadius: '50%',
           background: color,
           border: '2px solid rgba(255,255,255,0.2)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: '12px',
+          fontSize: '16px',
+          fontWeight: 'bold',
           flexShrink: 0,
         }}
       >
         {agent.config.name[0]}
       </div>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
         <div
           style={{
             fontFamily: FONTS.pixel,
-            fontSize: '8px',
+            fontSize: '11px',
             color: COLORS.text,
-            marginBottom: 3,
+            marginBottom: 4,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
           }}
         >
           {agent.config.name}
         </div>
         <div
           style={{
-            fontFamily: FONTS.pixel,
-            fontSize: '6px',
+            fontFamily: FONTS.body,
+            fontSize: '13px',
             color: COLORS.textDim,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
           }}
         >
           {agent.config.occupation}
         </div>
         <div
           style={{
-            fontFamily: FONTS.pixel,
-            fontSize: '6px',
+            fontFamily: FONTS.body,
+            fontSize: '12px',
             color: COLORS.textDim,
-            marginTop: 2,
+            marginTop: 3,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
           }}
         >
           {agent.currentAction || agent.state}
@@ -99,11 +109,11 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       </div>
 
       {/* Currency + state */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
         <div
           style={{
             fontFamily: FONTS.pixel,
-            fontSize: '7px',
+            fontSize: '11px',
             color: COLORS.gold,
           }}
         >
@@ -111,8 +121,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         </div>
         <div
           style={{
-            width: 8,
-            height: 8,
+            width: 10,
+            height: 10,
             borderRadius: '50%',
             background: stateColors[agent.state] || COLORS.idle,
           }}

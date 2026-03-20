@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, AgentConfig, WorldEvent, WorldSnapshot } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, AnthropicProvider } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { World } from './world.js';
@@ -65,6 +65,9 @@ export class SimulationEngine {
       currency: 100,
       createdAt: Date.now(),
       ownerId: 'user',
+      mood: 'neutral',
+      inventory: [],
+      skills: [],
     };
 
     this.world.addAgent(agent);
@@ -72,7 +75,7 @@ export class SimulationEngine {
 
     // Create cognition stack
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+    const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
     const memoryStore = new InMemoryStore();
     const llmProvider = apiKey
       ? new AnthropicProvider(apiKey, model)
@@ -103,7 +106,7 @@ export class SimulationEngine {
 
     this.tickInterval = setInterval(() => {
       this.tick();
-    }, 1000);
+    }, 250); // 4x speed: 1 game minute = 250ms real time
 
     console.log('[Engine] Simulation started');
   }
@@ -142,6 +145,18 @@ export class SimulationEngine {
 
     // 6. Advance active conversations (fire-and-forget)
     this.advanceConversations();
+
+    // 7. Every 10 ticks: check overhearing
+    if (this.tickCount % 10 === 0) this.checkOverhearing();
+
+    // 8. Every 300 ticks (~5 game hours): random world event chance
+    if (this.tickCount % 300 === 0) this.checkRandomEvents();
+
+    // 9. Every tick: check election deadlines
+    this.checkElections();
+
+    // 10. Every tick: expire world events
+    this.world.expireEvents();
   }
 
   /**
@@ -251,6 +266,122 @@ export class SimulationEngine {
     }
   }
 
+  /**
+   * Check if nearby agents can overhear an active conversation.
+   * Agents within 5 tiles who are not in the conversation get a snippet.
+   */
+  private checkOverhearing(): void {
+    const activeConversations = this.world.getActiveConversations();
+
+    for (const conv of activeConversations) {
+      if (conv.messages.length === 0) continue;
+
+      const lastMessage = conv.messages[conv.messages.length - 1];
+      const snippet = lastMessage.content.substring(0, 60);
+
+      // Find agents within 5 tiles of conversation location, not in the conversation
+      const nearby = this.world.getNearbyAgents(conv.location, 5);
+      for (const agent of nearby) {
+        if (conv.participants.includes(agent.id)) continue;
+        if (agent.state === 'sleeping') continue;
+        if (this.conversationManager.isInConversation(agent.id)) continue;
+
+        const cognition = this.cognitions.get(agent.id);
+        if (!cognition) continue;
+
+        // Store overheard snippet as a memory
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: agent.id,
+          type: 'observation',
+          content: `I overheard ${lastMessage.agentName} say: "${snippet}..."`,
+          importance: 5,
+          timestamp: Date.now(),
+          relatedAgentIds: conv.participants,
+        }).catch(() => {});
+
+        // Small chance the agent decides to join the conversation
+        if (Math.random() < 0.1) {
+          const controller = this.controllers.get(agent.id);
+          if (controller?.isAvailable) {
+            this.conversationManager.addParticipant(conv.id, agent.id);
+            controller.enterConversation();
+            console.log(`[Engine] ${agent.config.name} overheard and joined conversation`);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * 20% chance to trigger a random world event.
+   */
+  private checkRandomEvents(): void {
+    if (Math.random() > 0.2) return;
+
+    const eventTypes: WorldEvent['type'][] = [
+      'storm', 'festival', 'fire', 'drought', 'harvest',
+      'plague', 'earthquake', 'market_boom', 'bandit_sighting', 'miracle',
+    ];
+
+    const descriptions: Record<WorldEvent['type'], string> = {
+      storm: 'A fierce storm sweeps through the village!',
+      festival: 'A spontaneous festival breaks out in the village!',
+      fire: 'A fire has broken out in the village!',
+      drought: 'A drought is affecting the village crops.',
+      harvest: 'A bountiful harvest has arrived!',
+      plague: 'A mysterious illness spreads through the village.',
+      earthquake: 'The ground trembles beneath the village!',
+      market_boom: 'Trade is booming at the market!',
+      bandit_sighting: 'Bandits have been spotted near the village!',
+      miracle: 'Something miraculous has occurred in the village!',
+    };
+
+    const allAreaIds = Array.from(this.world.agents.values())
+      .map(a => this.world.getAreaAt(a.position)?.id)
+      .filter(Boolean) as string[];
+    const uniqueAreas = [...new Set(allAreaIds)];
+    const affectedCount = Math.min(1 + Math.floor(Math.random() * 3), uniqueAreas.length);
+    const affectedAreas: string[] = [];
+    const shuffled = [...uniqueAreas].sort(() => Math.random() - 0.5);
+    for (let i = 0; i < affectedCount; i++) {
+      affectedAreas.push(shuffled[i]);
+    }
+
+    const type = eventTypes[Math.floor(Math.random() * eventTypes.length)];
+    const event: WorldEvent = {
+      id: crypto.randomUUID(),
+      type,
+      description: descriptions[type],
+      startTime: Date.now(),
+      duration: 60 + Math.floor(Math.random() * 120), // 1-3 game hours
+      affectedAreas,
+      active: true,
+    };
+
+    this.world.addWorldEvent(event);
+    this.broadcaster.worldEvent(event);
+    console.log(`[Engine] World event: ${event.description} (affects: ${affectedAreas.join(', ')})`);
+  }
+
+  /**
+   * Check if any election's endDay has been reached and resolve it.
+   */
+  private checkElections(): void {
+    for (const election of this.world.elections.values()) {
+      if (election.active && election.endDay <= this.world.time.day) {
+        const resolved = this.world.resolveElection(election.id);
+        if (resolved) {
+          this.broadcaster.electionUpdate(resolved);
+          const winner = resolved.winner ? this.world.getAgent(resolved.winner) : undefined;
+          console.log(
+            `[Engine] Election for ${resolved.position} resolved — winner: ${winner?.config.name ?? 'none'}`,
+          );
+        }
+      }
+    }
+  }
+
   getSnapshot(): WorldSnapshot {
     return this.world.getSnapshot();
   }
@@ -264,7 +395,7 @@ export class SimulationEngine {
   }
 
   updateApiKey(apiKey: string, model?: string): void {
-    const m = model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514';
+    const m = model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
     process.env.ANTHROPIC_API_KEY = apiKey;
 
     // Rebuild all LLM providers with the new key

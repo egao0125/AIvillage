@@ -1,6 +1,14 @@
 import { useSyncExternalStore } from 'react';
 import { gameStore, type ChatEntry } from './GameStore';
-import type { Agent, BoardPost, GameTime } from '@ai-village/shared';
+import type {
+  Agent,
+  BoardPost,
+  GameTime,
+  WorldEvent,
+  Election,
+  Property,
+  ReputationEntry,
+} from '@ai-village/shared';
 
 export function useAgents(): Agent[] {
   const state = useSyncExternalStore(
@@ -47,5 +55,33 @@ export function useBoard(): BoardPost[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().board
+  );
+}
+
+export function useWorldEvents(): WorldEvent[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().events
+  );
+}
+
+export function useElections(): Election[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().elections
+  );
+}
+
+export function useProperties(): Property[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().properties
+  );
+}
+
+export function useReputation(): ReputationEntry[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().reputation
   );
 }

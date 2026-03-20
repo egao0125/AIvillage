@@ -15,9 +15,11 @@ export function createGameConfig(parent: string): Phaser.Types.Core.GameConfig {
     antialias: false,
     scale: {
       mode: Phaser.Scale.RESIZE,
-      autoCenter: Phaser.Scale.CENTER_BOTH,
+      autoCenter: Phaser.Scale.NO_CENTER,
+      width: '100%',
+      height: '100%',
     },
-    backgroundColor: '#3a7d32',
+    backgroundColor: '#0f0f23',
     scene: [BootScene, VillageScene],
   };
 }
