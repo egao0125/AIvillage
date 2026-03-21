@@ -416,6 +416,22 @@ export class SimulationEngine {
     console.log('[Engine] Simulation started');
   }
 
+  /** Pause the tick loop without saving state (for dev tools). */
+  pause(): void {
+    if (this.tickInterval) {
+      clearInterval(this.tickInterval);
+      this.tickInterval = null;
+      console.log('[Engine] Simulation paused');
+    }
+  }
+
+  /** Execute a single tick (for dev step-through). Only works when paused. */
+  singleTick(): void {
+    if (!this.tickInterval) {
+      this.tick();
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.tickInterval) {
       clearInterval(this.tickInterval);
