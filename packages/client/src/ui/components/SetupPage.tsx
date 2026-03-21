@@ -10,7 +10,7 @@ import { getToken, setToken, clearToken, authHeaders, setUserId } from '../../ut
 interface CreatedAgent {
   id: string;
   name: string;
-  occupation: string;
+  occupation?: string;
   soul: string;
   startingGold: number;
 }
@@ -39,7 +39,7 @@ const BORDER_DIM = '#2a2a4a';
 const SOUL_PLACEHOLDER = `Write their inner voice. This is who they are — how they think, speak, and act.
 
 Example:
-"I'm warm but guarded. I moved here after losing my restaurant in the city. I pour everything into my small cafe because it's my second chance. I talk to everyone but rarely share what I'm actually feeling. I want to become the most trusted person in the village, but I'm terrified of being vulnerable again."`;
+"I'm warm but guarded. I moved here after losing everything in the city. I talk to everyone but rarely share what I'm actually feeling. I want to be trusted, but I'm terrified of being vulnerable again."`;
 
 // ---------------------------------------------------------------------------
 // Component
@@ -66,7 +66,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
   const [occupation, setOccupation] = useState('');
   const [backstory, setBackstory] = useState('');
   const [goal, setGoal] = useState('');
-  const [startingGold, setStartingGold] = useState(100);
+  const [startingGold, setStartingGold] = useState(0);
   const [soul, setSoul] = useState('');
   const [personality, setPersonality] = useState({
     openness: 50, conscientiousness: 50, extraversion: 50,
@@ -193,10 +193,6 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       nameInputRef.current?.focus();
       return;
     }
-    if (!occupation.trim()) {
-      setError('Give your agent an occupation');
-      return;
-    }
     if (!user) {
       setError('Sign in first to create an agent');
       return;
@@ -262,7 +258,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       setOccupation('');
       setBackstory('');
       setGoal('');
-      setStartingGold(100);
+      setStartingGold(0);
       setSoul('');
       setPersonality({ openness: 50, conscientiousness: 50, extraversion: 50, agreeableness: 50, neuroticism: 50 });
       setShowPersonality(false);
@@ -703,55 +699,6 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
               </div>
             </div>
 
-            {/* Occupation */}
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>OCCUPATION</label>
-              <input
-                type="text"
-                value={occupation}
-                onChange={(e) => setOccupation(e.target.value)}
-                placeholder="Cafe owner"
-                className="s-input"
-                style={inputStyle}
-              />
-            </div>
-
-            {/* Backstory */}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <label style={{ ...labelStyle, marginBottom: 0 }}>BACKSTORY</label>
-                <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM }}>
-                  {backstory.length}/500
-                </span>
-              </div>
-              <textarea
-                value={backstory}
-                onChange={(e) => setBackstory(e.target.value.slice(0, 500))}
-                placeholder="Moved here after losing their restaurant in the city. This cafe is their second chance."
-                rows={3}
-                className="s-textarea"
-                style={{
-                  ...inputStyle,
-                  resize: 'vertical' as const,
-                  lineHeight: 2.2,
-                  fontSize: 7,
-                }}
-              />
-            </div>
-
-            {/* Goal */}
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>GOAL</label>
-              <input
-                type="text"
-                value={goal}
-                onChange={(e) => setGoal(e.target.value.slice(0, 200))}
-                placeholder="Become the most trusted person in the village"
-                className="s-input"
-                style={inputStyle}
-              />
-            </div>
-
             {/* Personality */}
             <div style={{ marginBottom: 14 }}>
               <button
@@ -825,6 +772,59 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
               </button>
               {showAdvanced && (
                 <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div>
+                    <label style={labelStyle}>OCCUPATION</label>
+                    <input
+                      type="text"
+                      value={occupation}
+                      onChange={(e) => setOccupation(e.target.value)}
+                      placeholder="Cafe owner (optional)"
+                      className="s-input"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <label style={{ ...labelStyle, marginBottom: 0 }}>BACKSTORY</label>
+                      <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM }}>
+                        {backstory.length}/500
+                      </span>
+                    </div>
+                    <textarea
+                      value={backstory}
+                      onChange={(e) => setBackstory(e.target.value.slice(0, 500))}
+                      placeholder="Where they come from, what shaped them"
+                      rows={2}
+                      className="s-textarea"
+                      style={{
+                        ...inputStyle,
+                        resize: 'vertical' as const,
+                        lineHeight: 2.2,
+                        fontSize: 7,
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>GOAL</label>
+                    <input
+                      type="text"
+                      value={goal}
+                      onChange={(e) => setGoal(e.target.value.slice(0, 200))}
+                      placeholder="What they want (optional)"
+                      className="s-input"
+                      style={inputStyle}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <label style={{ ...labelStyle, marginBottom: 0, whiteSpace: 'nowrap' as const }}>STARTING GOLD</label>
+                    <input
+                      type="number"
+                      value={startingGold}
+                      onChange={(e) => setStartingGold(Math.max(0, Math.min(10000, parseInt(e.target.value) || 0)))}
+                      className="s-input"
+                      style={{ ...inputStyle, width: 90, textAlign: 'center' as const }}
+                    />
+                  </div>
                   <div>
                     <label style={labelStyle}>FEARS</label>
                     <input
@@ -914,18 +914,6 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                   lineHeight: 2.4,
                   transition: 'border-color 0.2s',
                 }}
-              />
-            </div>
-
-            {/* Starting Gold */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-              <label style={{ ...labelStyle, marginBottom: 0, whiteSpace: 'nowrap' as const }}>STARTING GOLD</label>
-              <input
-                type="number"
-                value={startingGold}
-                onChange={(e) => setStartingGold(Math.max(0, Math.min(10000, parseInt(e.target.value) || 0)))}
-                className="s-input"
-                style={{ ...inputStyle, width: 90, textAlign: 'center' as const }}
               />
             </div>
 
@@ -1062,10 +1050,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                         {agent.name}
                       </div>
                       <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: LABEL_COLOR, marginTop: 2 }}>
-                        {agent.occupation}
-                        {agent.startingGold !== undefined && (
-                          <span style={{ color: BORDER_DIM, marginLeft: 8 }}>{agent.startingGold}g</span>
-                        )}
+                        {agent.soul ? agent.soul.slice(0, 40) + (agent.soul.length > 40 ? '...' : '') : 'no soul written'}
                       </div>
                     </div>
                     <button

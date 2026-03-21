@@ -12,6 +12,9 @@ import type {
   Artifact,
   Building,
   Technology,
+  NarrativeEntry,
+  Storyline,
+  Recap,
 } from '@ai-village/shared';
 
 export function useAgents(): Agent[] {
@@ -122,5 +125,33 @@ export function useTechnologies(): Technology[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().technologies
+  );
+}
+
+export function useNarratives(): NarrativeEntry[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().narratives
+  );
+}
+
+export function useStorylines(): Storyline[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().storylines
+  );
+}
+
+export function useCharacterPageAgentId(): string | null {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().characterPageAgentId
+  );
+}
+
+export function useActiveRecap(): Recap | null {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().activeRecap
   );
 }

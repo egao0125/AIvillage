@@ -1310,6 +1310,22 @@ export class ConversationManager {
       timestamp: Date.now(),
       relatedAgentIds: [targetId],
     });
+
+    // If it sounds like a public statement, post to board
+    const speechPatterns = /^(announce|shout|proclaim|declare|call out|yell)/i;
+    if (speechPatterns.test(rawAction)) {
+      const actorName = this.world.getAgent(actorId)?.config.name ?? 'Unknown';
+      this.world.addBoardPost({
+        id: crypto.randomUUID(),
+        authorId: actorId,
+        authorName: actorName,
+        type: 'announcement' as BoardPostType,
+        content: rawAction.replace(speechPatterns, '').replace(/^[\s\-:]+/, '').trim(),
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      });
+      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+    }
   }
 
   /**

@@ -5,7 +5,11 @@ import { Sidebar } from './components/Sidebar';
 import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
 import { SpectatorChat } from './components/SpectatorChat';
+import { NarrativeBar } from './components/NarrativeBar';
+import { CharacterPage } from './components/CharacterPage';
+import { RecapOverlay } from './components/RecapOverlay';
 import { connectSocket } from '../network/socket';
+import { useCharacterPageAgentId, useActiveRecap } from '../core/hooks';
 
 export const App: React.FC = () => {
   const [entered, setEntered] = useState(false);
@@ -29,6 +33,9 @@ export const App: React.FC = () => {
     };
   }, [entered]);
 
+  const characterPageAgentId = useCharacterPageAgentId();
+  const activeRecap = useActiveRecap();
+
   if (!entered) {
     return <SetupPage onEnter={handleEnter} />;
   }
@@ -48,6 +55,12 @@ export const App: React.FC = () => {
       <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 420, zIndex: 10 }}>
         <Sidebar />
       </div>
+      {/* Narrative bar — bottom overlay */}
+      <NarrativeBar />
+      {/* Character page — slides in from right */}
+      {characterPageAgentId && <CharacterPage />}
+      {/* Recap overlay — full screen cinematic */}
+      {activeRecap && <RecapOverlay />}
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat />
     </div>

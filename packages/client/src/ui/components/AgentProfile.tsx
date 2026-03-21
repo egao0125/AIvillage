@@ -349,7 +349,7 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
             {agent.config.name}
           </div>
           <div style={{ color: COLORS.textDim, fontSize: '13px' }}>
-            {agent.config.occupation}, {agent.config.age}
+            age {agent.config.age}
           </div>
         </div>
         <button
@@ -367,27 +367,8 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </button>
       </div>
 
-      {/* Currency + Mood row */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 12px',
-            background: COLORS.bgCard,
-            borderRadius: 4,
-            border: `1px solid ${COLORS.border}`,
-          }}
-        >
-          <span style={{ fontSize: '16px' }}>{'\u{1FA99}'}</span>
-          <div>
-            <div style={{ color: COLORS.gold, fontSize: '13px', fontWeight: 'bold' }}>
-              {agent.currency ?? 0} Gold
-            </div>
-          </div>
-        </div>
+      {/* Mood */}
+      <div style={{ marginBottom: 14 }}>
         <div
           style={{
             display: 'flex',
@@ -616,9 +597,6 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
                   {item.type.toUpperCase()}
                 </span>
               </div>
-              <span style={{ color: COLORS.gold, fontSize: '12px' }}>
-                {item.value}g
-              </span>
             </div>
           ))}
         </div>

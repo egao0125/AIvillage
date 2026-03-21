@@ -64,6 +64,17 @@ io.on('connection', (socket) => {
     console.log(`Client selected agent: ${agentId}`);
   });
 
+  // Recap request — per-viewer
+  socket.on('recap:request', async (data: { sinceDay: number }) => {
+    if (typeof data?.sinceDay !== 'number' || data.sinceDay < 0) return;
+    try {
+      const recap = await engine.recapGenerator.generateRecap(data.sinceDay);
+      socket.emit('recap:ready', recap);
+    } catch (err) {
+      console.error('[Recap] Failed to generate recap:', err);
+    }
+  });
+
   // Spectator chat — relay to all clients
   socket.on('spectator:comment', (data: { message: string }) => {
     if (!data.message || typeof data.message !== 'string') return;

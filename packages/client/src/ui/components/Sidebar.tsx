@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { useAgents, useSelectedAgent, useBoard, useArtifacts } from '../../core/hooks';
+import { useAgents, useSelectedAgent, useBoard, useArtifacts, useStorylines } from '../../core/hooks';
 import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
 import { AgentProfile } from './AgentProfile';
 import { ChatLog } from './ChatLog';
 import { VillageDashboard } from './VillageDashboard';
 import { GossipFeed } from './GossipFeed';
+import { ConfessionalPanel } from './ConfessionalPanel';
+import { StorylinePanel } from './StorylinePanel';
 import { COLORS, FONTS } from '../styles';
 
-type Tab = 'villagers' | 'feed' | 'village' | 'gossip';
+type Tab = 'villagers' | 'feed' | 'village' | 'confessional' | 'stories';
 
 export const Sidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('villagers');
@@ -16,18 +18,14 @@ export const Sidebar: React.FC = () => {
   const selectedAgent = useSelectedAgent();
   const board = useBoard();
   const artifacts = useArtifacts();
-
-  // Count gossip items: rumors + threats + bounties + public artifacts
-  const gossipBoardCount = board.filter(p =>
-    (p.type === 'rumor' || p.type === 'threat' || p.type === 'bounty') && !p.revoked
-  ).length;
-  const publicArtifactCount = artifacts.filter(a => a.visibility === 'public').length;
-  const gossipCount = gossipBoardCount + publicArtifactCount;
+  const storylines = useStorylines();
 
   // Count village items: rules + decrees + alliances + announcements
   const villageCount = board.filter(p =>
     (p.type === 'decree' || p.type === 'rule' || p.type === 'announcement' || p.type === 'alliance') && !p.revoked
   ).length;
+
+  const activeStorylines = storylines.filter(s => s.status === 'developing' || s.status === 'climax').length;
 
   const tabLabel = (tab: Tab): string => {
     switch (tab) {
@@ -37,8 +35,10 @@ export const Sidebar: React.FC = () => {
         return 'Feed';
       case 'village':
         return `Village${villageCount > 0 ? ` (${villageCount})` : ''}`;
-      case 'gossip':
-        return `Social${gossipCount > 0 ? ` (${gossipCount})` : ''}`;
+      case 'confessional':
+        return 'Thoughts';
+      case 'stories':
+        return `Stories${activeStorylines > 0 ? ` (${activeStorylines})` : ''}`;
     }
   };
 
@@ -76,7 +76,7 @@ export const Sidebar: React.FC = () => {
           borderBottom: `1px solid ${COLORS.border}`,
         }}
       >
-        {(['villagers', 'feed', 'village', 'gossip'] as Tab[]).map((tab) => (
+        {(['villagers', 'feed', 'village', 'confessional', 'stories'] as Tab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -125,8 +125,10 @@ export const Sidebar: React.FC = () => {
           </>
         ) : activeTab === 'village' ? (
           <VillageDashboard />
-        ) : activeTab === 'gossip' ? (
-          <GossipFeed />
+        ) : activeTab === 'confessional' ? (
+          <ConfessionalPanel />
+        ) : activeTab === 'stories' ? (
+          <StorylinePanel />
         ) : (
           <ChatLog />
         )}

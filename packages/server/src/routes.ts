@@ -138,6 +138,40 @@ export function createRouter(engine: SimulationEngine): Router {
     });
   });
 
+  // --- Character timeline + arc endpoints ---
+
+  router.get('/api/agents/:id/timeline', (req, res) => {
+    const id = req.params.id as string;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const timeline = engine.getCharacterTimeline(id, limit);
+    res.json(timeline);
+  });
+
+  router.get('/api/agents/:id/arc-summary', async (req, res) => {
+    const id = req.params.id as string;
+    const snapshot = engine.getSnapshot();
+    const agent = snapshot.agents.find(a => a.id === id);
+    if (!agent) {
+      res.status(404).json({ error: 'Agent not found' });
+      return;
+    }
+
+    // Simple arc summary from available data (no LLM for now — can be upgraded later)
+    const timeline = engine.getCharacterTimeline(id, 20);
+    const recentEvents = timeline.map(e => e.description).join('. ');
+
+    const mentalModels = agent.mentalModels?.map(m => {
+      const target = snapshot.agents.find(a => a.id === m.targetId);
+      return `${target?.config.name ?? 'Unknown'}: trust ${m.trust}, feels ${m.emotionalStance}`;
+    }).join('; ') ?? 'None';
+
+    const summary = `${agent.config.name}${agent.config.occupation ? ', ' + agent.config.occupation : ''}, age ${agent.config.age}. Mood: ${agent.mood}. ${recentEvents || 'Just arrived in the village.'}
+
+Relationships: ${mentalModels}`;
+
+    res.json({ summary });
+  });
+
   // --- Mutating endpoints (rate limited + validated) ---
 
   // POST /api/agents — spawn new agent (requires auth + BYOK API key)
@@ -165,11 +199,6 @@ export function createRouter(engine: SimulationEngine): Router {
         res.status(400).json({ error: 'Name is required' });
         return;
       }
-      if (!occupation || typeof occupation !== 'string') {
-        res.status(400).json({ error: 'Occupation is required' });
-        return;
-      }
-
       // Enforce max agent limit
       const maxAgents = parseInt(process.env.MAX_AGENTS || '50');
       const snapshot = engine.getSnapshot();
@@ -197,7 +226,7 @@ export function createRouter(engine: SimulationEngine): Router {
       const config = {
         name: sanitizeText(name, 50),
         age: clampNumber(age, 1, 120, 30),
-        occupation: sanitizeText(occupation, 100),
+        occupation: occupation ? sanitizeText(occupation, 100) : undefined,
         personality: {
           openness: clampNumber(req.body.personality?.openness, 0, 1, 0.5),
           conscientiousness: clampNumber(req.body.personality?.conscientiousness, 0, 1, 0.5),
@@ -234,7 +263,7 @@ export function createRouter(engine: SimulationEngine): Router {
 
       const safeWakeHour = clampNumber(wakeHour, 0, 23, 7);
       const safeSleepHour = clampNumber(sleepHour, 0, 23, 23);
-      const safeCurrency = clampNumber(startingGold, 0, 10000, 100);
+      const safeCurrency = clampNumber(startingGold, 0, 10000, 0);
 
       const agent = engine.addAgent(config, safeWakeHour, safeSleepHour, safeCurrency, apiKey.trim(), safeModel, req.userId!);
       res.json({ agent: { id: agent.id, name: agent.config.name } });

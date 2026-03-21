@@ -10,6 +10,10 @@ import { STARTER_AGENTS } from '../agents/starter.js';
 import { AREAS } from '../map/village.js';
 import { SupabasePersistence } from '../persistence/supabase.js';
 import type { ControllerState } from './agent-controller.js';
+import { VillageNarrator } from './narrator.js';
+import { CharacterTimeline } from './character-timeline.js';
+import { StorylineDetector } from './storyline-detector.js';
+import { RecapGenerator } from './recap-generator.js';
 
 export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
@@ -28,6 +32,10 @@ export class SimulationEngine {
   private persistence: SupabasePersistence | null = null;
   private weatherStableUntil: number = 0;
   private lastConversationPair: Map<string, number> = new Map();
+  private narrator!: VillageNarrator;
+  private characterTimeline!: CharacterTimeline;
+  private storylineDetector!: StorylineDetector;
+  recapGenerator!: RecapGenerator;
 
   constructor(private io: Server) {
     this.world = new World();
@@ -45,6 +53,27 @@ export class SimulationEngine {
   async initialize(): Promise<void> {
     // Create broadcaster
     this.broadcaster = new EventBroadcaster(this.io);
+
+    // Create narrator + timeline + storyline systems
+    const globalKey = process.env.ANTHROPIC_API_KEY;
+    const globalModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    if (globalKey) {
+      const narratorLlm = this.getThrottledProvider(globalKey, globalModel);
+      this.narrator = new VillageNarrator(narratorLlm, this.world);
+      this.broadcaster.setNarrator(this.narrator);
+
+      this.storylineDetector = new StorylineDetector(this.world, narratorLlm);
+      this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, narratorLlm);
+    } else {
+      // Fallback: create with a dummy provider that will just fail gracefully
+      const dummyLlm = this.getThrottledProvider('dummy-key', globalModel);
+      this.narrator = new VillageNarrator(dummyLlm, this.world);
+      this.storylineDetector = new StorylineDetector(this.world, dummyLlm);
+      this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, dummyLlm);
+    }
+
+    this.characterTimeline = new CharacterTimeline();
+    this.broadcaster.setTimeline(this.characterTimeline);
 
     // Create conversation manager
     this.conversationManager = new ConversationManager(this.world, this.broadcaster);
@@ -156,7 +185,7 @@ export class SimulationEngine {
     }
   }
 
-  addAgent(config: AgentConfig, wakeHour: number = 7, sleepHour: number = 23, startingCurrency: number = 100, apiKey?: string, model?: string, ownerId?: string): Agent {
+  addAgent(config: AgentConfig, wakeHour: number = 7, sleepHour: number = 23, startingCurrency: number = 0, apiKey?: string, model?: string, ownerId?: string): Agent {
     const id = crypto.randomUUID();
 
     // Pick a random spawn position from public areas
@@ -215,7 +244,7 @@ export class SimulationEngine {
     this.controllers.set(id, controller);
 
     console.log(
-      `[Engine] Agent created: ${config.name} (${config.occupation}) at ${spawnArea}`,
+      `[Engine] Agent created: ${config.name}${config.occupation ? ' (' + config.occupation + ')' : ''} at ${spawnArea}`,
     );
 
     // Save immediately so agents survive restarts
@@ -437,7 +466,26 @@ export class SimulationEngine {
       this.weatherDamageBuildings();
     }
 
-    // 13. Periodic save every 300 ticks (~5 game hours)
+    // 13. Narrator check every 60 ticks
+    if (this.tickCount % 60 === 0) {
+      void this.narrator.maybeNarrate(time).then(narrative => {
+        if (narrative) {
+          this.broadcaster.narrativeUpdate(narrative);
+          console.log(`[Narrator] Day ${time.day} ${time.hour}:${String(time.minute).padStart(2, '0')}: ${narrative.content.substring(0, 80)}...`);
+        }
+      }).catch(() => {});
+    }
+
+    // 14. Storyline detection every 1440 ticks (~1 game day)
+    if (this.tickCount % 1440 === 0) {
+      void this.storylineDetector.detectAndUpdate().then(storylines => {
+        for (const s of storylines) {
+          this.broadcaster.storylineUpdate(s);
+        }
+      }).catch(() => {});
+    }
+
+    // 15. Periodic save every 300 ticks (~5 game hours)
     if (this.tickCount % 300 === 0 && this.persistence) {
       void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
         console.error('[Persistence] Periodic save failed:', err)
@@ -687,7 +735,7 @@ export class SimulationEngine {
     const artifact = {
       id: crypto.randomUUID(),
       title: `Diary of ${agent.config.name}`,
-      content: `${agent.config.name}, ${agent.config.occupation}, lived ${this.world.time.day} days in the village. They died of ${cause}. They had ${agent.currency} gold and ${agent.skills.length} skills.`,
+      content: `${agent.config.name}${agent.config.occupation ? ', ' + agent.config.occupation + ',' : ''} lived ${this.world.time.day} days in the village. They died of ${cause}. They had ${agent.currency} gold and ${agent.skills.length} skills.`,
       type: 'diary' as const,
       creatorId: agentId,
       creatorName: agent.config.name,
@@ -704,7 +752,14 @@ export class SimulationEngine {
   }
 
   getSnapshot(): WorldSnapshot {
-    return this.world.getSnapshot();
+    const snapshot = this.world.getSnapshot();
+    snapshot.narratives = this.narrator.getRecentNarratives();
+    snapshot.storylines = this.storylineDetector.getStorylines();
+    return snapshot;
+  }
+
+  getCharacterTimeline(agentId: string, limit?: number) {
+    return this.characterTimeline.getTimeline(agentId, limit);
   }
 
   /**

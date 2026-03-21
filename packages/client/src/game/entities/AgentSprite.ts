@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { SpeechBubble } from './SpeechBubble';
+import { ThoughtBubble } from './ThoughtBubble';
 import { eventBus } from '../../core/EventBus';
 import { TILE_SIZE } from '../config';
 
@@ -12,6 +13,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private nameLabel: Phaser.GameObjects.Text;
   private actionLabel: Phaser.GameObjects.Text;
   private speechBubble: SpeechBubble;
+  private thoughtBubble: ThoughtBubble;
   private selectionRing: Phaser.GameObjects.Graphics;
   private moodRing: Phaser.GameObjects.Graphics;
   private targetX: number;
@@ -90,6 +92,10 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.actionLabel.setOrigin(0.5, 0);
     this.add(this.actionLabel);
 
+    // Thought bubble (positioned above-left, below speech in z-order)
+    this.thoughtBubble = new ThoughtBubble(scene, -10, -25);
+    this.add(this.thoughtBubble);
+
     // Speech bubble (positioned above sprite)
     this.speechBubble = new SpeechBubble(scene, 0, -20);
     this.add(this.speechBubble);
@@ -141,6 +147,10 @@ export class AgentSprite extends Phaser.GameObjects.Container {
 
   speak(message: string): void {
     this.speechBubble.show(message, 5000);
+  }
+
+  think(thought: string): void {
+    this.thoughtBubble.show(thought, 6000);
   }
 
   setSelected(selected: boolean): void {

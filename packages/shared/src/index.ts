@@ -16,7 +16,7 @@ export interface AgentPersonality {
 export interface AgentConfig {
   name: string;
   age: number;
-  occupation: string;
+  occupation?: string;
   personality: AgentPersonality;
   soul: string;        // Free-form personality description — the raw inner voice
   backstory: string;   // Where they come from, what shaped them
@@ -366,6 +366,65 @@ export interface Technology {
   day: number;
 }
 
+// --- Narrative (Reality TV Layer) ---
+
+export interface NarrativeEntry {
+  id: string;
+  content: string;
+  gameDay: number;
+  gameHour: number;
+  referencedAgentIds: string[];
+  referencedAgentNames: string[];
+  timestamp: number;
+}
+
+// --- Character Timeline ---
+
+export interface CharacterTimelineEvent {
+  id: string;
+  agentId: string;
+  type: 'conversation' | 'mood_change' | 'action' | 'board_post' | 'artifact' | 'death';
+  description: string;
+  relatedAgentIds: string[];
+  timestamp: number;
+  day: number;
+}
+
+// --- Storylines ---
+
+export type StorylineStatus = 'developing' | 'climax' | 'resolved' | 'dormant';
+export type StorylineTheme = 'conflict' | 'romance' | 'power' | 'alliance' | 'mystery' | 'survival';
+
+export interface StorylineEvent {
+  id: string;
+  description: string;
+  agentIds: string[];
+  timestamp: number;
+  day: number;
+}
+
+export interface Storyline {
+  id: string;
+  title: string;
+  theme: StorylineTheme;
+  involvedAgentIds: string[];
+  status: StorylineStatus;
+  events: StorylineEvent[];
+  summary: string;
+  createdAt: number;
+  lastUpdatedAt: number;
+  day: number;
+}
+
+// --- Recaps ---
+
+export interface Recap {
+  fromDay: number;
+  toDay: number;
+  segments: { title: string; description: string; involvedAgentIds: string[] }[];
+  narrative: string;
+}
+
 // --- Events (WebSocket) ---
 
 export type ServerEvent =
@@ -443,4 +502,6 @@ export interface WorldSnapshot {
   artifacts: Artifact[];
   buildings: Building[];
   technologies: Technology[];
+  narratives?: NarrativeEntry[];
+  storylines?: Storyline[];
 }

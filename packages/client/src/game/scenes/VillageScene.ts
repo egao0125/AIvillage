@@ -314,6 +314,11 @@ export class VillageScene extends Phaser.Scene {
         this.updateDayNight(time);
       }),
 
+      eventBus.on('agent:thought', (data: { agentId: string; thought: string }) => {
+        const sprite = this.agentSprites.get(data.agentId);
+        if (sprite) sprite.think(data.thought);
+      }),
+
       eventBus.on('agent:select', (agentId: string) => {
         this.selectAgent(agentId);
       })

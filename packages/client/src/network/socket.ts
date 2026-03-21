@@ -17,6 +17,9 @@ import type {
   Artifact,
   Building,
   Technology,
+  NarrativeEntry,
+  Storyline,
+  Recap,
 } from '@ai-village/shared';
 
 let socket: Socket | null = null;
@@ -48,6 +51,16 @@ export function connectSocket(): Socket {
     if (snapshot.artifacts) gameStore.setArtifacts(snapshot.artifacts);
     if (snapshot.buildings) gameStore.setBuildings(snapshot.buildings);
     if (snapshot.technologies) gameStore.setTechnologies(snapshot.technologies);
+    if (snapshot.narratives) gameStore.setNarratives(snapshot.narratives);
+    if (snapshot.storylines) gameStore.setStorylines(snapshot.storylines);
+
+    // Check if we need a recap (returning after 2+ game days absence)
+    const lastSeenDay = parseInt(localStorage.getItem('ai-village-last-seen-day') || '0');
+    if (lastSeenDay > 0 && snapshot.time.day > lastSeenDay + 2) {
+      socket?.emit('recap:request', { sinceDay: lastSeenDay });
+    }
+    localStorage.setItem('ai-village-last-seen-day', String(snapshot.time.day));
+
     eventBus.emit('world:snapshot', snapshot);
   });
 
@@ -241,6 +254,33 @@ export function connectSocket(): Socket {
     gameStore.addTechnology(technology);
     eventBus.emit('technology:discovered', technology);
   });
+
+  // --- Narrative + Storyline + Recap listeners ---
+
+  socket.on('narrative:update', (narrative: NarrativeEntry) => {
+    gameStore.addNarrative(narrative);
+    eventBus.emit('narrative:update', narrative);
+  });
+
+  socket.on('storyline:new', (storyline: Storyline) => {
+    gameStore.updateStoryline(storyline);
+  });
+
+  socket.on('storyline:update', (storyline: Storyline) => {
+    gameStore.updateStoryline(storyline);
+  });
+
+  socket.on('recap:ready', (recap: Recap) => {
+    gameStore.setActiveRecap(recap);
+  });
+
+  // Update last-seen day periodically
+  setInterval(() => {
+    const time = gameStore.getState().time;
+    if (time.day > 0) {
+      localStorage.setItem('ai-village-last-seen-day', String(time.day));
+    }
+  }, 60_000);
 
   // --- Spectator chat ---
   socket.on('spectator:comment', (data: { name: string; message: string; timestamp: number }) => {

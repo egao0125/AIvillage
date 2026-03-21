@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Agent } from '@ai-village/shared';
 import { nameToColor, hexToString } from '../../utils/color';
+import { gameStore } from '../../core/GameStore';
 import { COLORS, FONTS } from '../styles';
 
 interface AgentCardProps {
@@ -31,6 +32,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   return (
     <div
       onClick={onClick}
+      onDoubleClick={() => gameStore.openCharacterPage(agent.id)}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -97,34 +99,12 @@ export const AgentCard: React.FC<AgentCardProps> = ({
             whiteSpace: 'nowrap',
           }}
         >
-          {agent.config.occupation}
-        </div>
-        <div
-          style={{
-            fontFamily: FONTS.body,
-            fontSize: '12px',
-            color: COLORS.textDim,
-            marginTop: 3,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
           {agent.currentAction || agent.state}
         </div>
       </div>
 
-      {/* Currency + state */}
+      {/* State indicator */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
-        <div
-          style={{
-            fontFamily: FONTS.pixel,
-            fontSize: '11px',
-            color: COLORS.gold,
-          }}
-        >
-          {agent.currency ?? 0} G
-        </div>
         <div
           style={{
             width: 10,

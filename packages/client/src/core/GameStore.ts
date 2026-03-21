@@ -14,6 +14,9 @@ import type {
   Artifact,
   Building,
   Technology,
+  NarrativeEntry,
+  Storyline,
+  Recap,
 } from '@ai-village/shared';
 
 interface GameState {
@@ -33,6 +36,10 @@ interface GameState {
   artifacts: Artifact[];
   buildings: Building[];
   technologies: Technology[];
+  narratives: NarrativeEntry[];
+  storylines: Storyline[];
+  characterPageAgentId: string | null;
+  activeRecap: Recap | null;
 }
 
 export interface ChatEntry {
@@ -70,6 +77,10 @@ class GameStore {
     artifacts: [],
     buildings: [],
     technologies: [],
+    narratives: [],
+    storylines: [],
+    characterPageAgentId: null,
+    activeRecap: null,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -425,6 +436,59 @@ class GameStore {
       ...this.state,
       technologies: [...this.state.technologies, technology],
     };
+    this.notify();
+  }
+
+  // --- Narratives ---
+
+  setNarratives(narratives: NarrativeEntry[]): void {
+    this.state = { ...this.state, narratives };
+    this.notify();
+  }
+
+  addNarrative(narrative: NarrativeEntry): void {
+    this.state = {
+      ...this.state,
+      narratives: [...this.state.narratives.slice(-19), narrative],
+    };
+    this.notify();
+  }
+
+  // --- Storylines ---
+
+  setStorylines(storylines: Storyline[]): void {
+    this.state = { ...this.state, storylines };
+    this.notify();
+  }
+
+  updateStoryline(storyline: Storyline): void {
+    const existing = this.state.storylines.findIndex(s => s.id === storyline.id);
+    if (existing >= 0) {
+      const newStorylines = [...this.state.storylines];
+      newStorylines[existing] = storyline;
+      this.state = { ...this.state, storylines: newStorylines };
+    } else {
+      this.state = { ...this.state, storylines: [...this.state.storylines, storyline] };
+    }
+    this.notify();
+  }
+
+  // --- Character Page ---
+
+  openCharacterPage(agentId: string): void {
+    this.state = { ...this.state, characterPageAgentId: agentId };
+    this.notify();
+  }
+
+  closeCharacterPage(): void {
+    this.state = { ...this.state, characterPageAgentId: null };
+    this.notify();
+  }
+
+  // --- Recap ---
+
+  setActiveRecap(recap: Recap | null): void {
+    this.state = { ...this.state, activeRecap: recap };
     this.notify();
   }
 }

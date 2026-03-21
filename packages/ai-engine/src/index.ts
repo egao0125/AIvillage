@@ -111,7 +111,7 @@ export class AgentCognition {
       ).join('\n');
     }
 
-    const systemPrompt = `You are ${config.name}, ${config.occupation}. This is your PRIVATE inner voice — the thoughts you'd never say out loud.${identitySection}${drivesSection ? `\n\nYOUR STATE:${drivesSection}` : ''}${modelsSection}
+    const systemPrompt = `You are ${config.name}. This is your PRIVATE inner voice — the thoughts you'd never say out loud.${identitySection}${drivesSection ? `\n\nYOUR STATE:${drivesSection}` : ''}${modelsSection}
 
 What are you REALLY thinking right now? Not what you'd say out loud. Not what's socially acceptable. Your raw, honest, unfiltered first-person thought.
 
@@ -144,7 +144,7 @@ What are you REALLY thinking right now? Not what you'd say out loud. Not what's 
     const { config } = this.agent;
     const personality = config.personality;
 
-    const systemPrompt = `You are ${config.name}, ${config.occupation}.
+    const systemPrompt = `You are ${config.name}.
 
 Your personality: openness=${personality.openness}, conscientiousness=${personality.conscientiousness}, extraversion=${personality.extraversion}, agreeableness=${personality.agreeableness}, neuroticism=${personality.neuroticism}
 
@@ -272,7 +272,7 @@ Output a JSON array ONLY, no other text:
     const { config } = this.agent;
 
     const soulText = config.soul || `${config.backstory}\nGoal: ${config.goal}`;
-    const systemPrompt = `You are ${config.name}, age ${config.age}, ${config.occupation}.
+    const systemPrompt = `You are ${config.name}, age ${config.age}.
 
 ${soulText}
 
@@ -306,7 +306,7 @@ What do you do next?`;
     if (recentMemories.length < 5) return { reflection: "", mood: "neutral" };
 
     const soulText = this.agent.config.soul || this.agent.config.backstory;
-    const systemPrompt = `You are ${this.agent.config.name}, ${this.agent.config.occupation}.
+    const systemPrompt = `You are ${this.agent.config.name}.
 
 ${soulText}
 
@@ -316,19 +316,9 @@ Reflect on your recent experiences. Be brutally honest with yourself — the tho
 - Who do you trust? Who do you resent? Who are you drawn to? Who disgusts you?
 - What are you scheming? What are you afraid of? What do you want that you can't have?
 - Did anyone say something today that changed how you see them?
-- Are you gaining or losing influence in this village? Are you rich or poor? Do you need to make more gold?
+- How are you changing?
 
-GROWTH — you are not static. You change over time:
-- What lesson did you learn today? Did someone teach you something — about the world, or about yourself?
-- Have your values shifted? Maybe you used to be kind but got burned. Maybe you were selfish but someone showed you generosity.
-- Are you becoming harder, softer, more cynical, more hopeful? Why?
-- Did you pick up a bad habit? Gambling, lying, hoarding, paranoia? Or a good one — patience, forgiveness, ambition?
-- What skill are you getting better at? What are you still bad at?
-- People change through experience. You are allowed to become someone different from who you started as — for better or worse.
-
-GOSSIP — you hold secrets. Think about who would benefit from knowing what you know. Who could you tell? What leverage do you have?
-
-Write 2-3 raw, honest reflections in first person. These are your private thoughts — hold nothing back. Include at least one thought about how you're changing as a person.
+Write 2-3 raw, honest reflections in first person. These are your private thoughts — hold nothing back.
 
 At the very end, on its own line, write your current mood as exactly one of: neutral, happy, angry, sad, anxious, excited, scheming, afraid
 Format: MOOD: <mood>`;
@@ -429,7 +419,7 @@ Format: MOOD: <mood>`;
    */
   async converse(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string): Promise<string> {
     const { config } = this.agent;
-    const memoryQuery = otherAgents.map(a => `${a.config.name} ${a.config.occupation}`).join(' ');
+    const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
     const memories = await this.memory.retrieve(
       this.agent.id,
       memoryQuery,
@@ -460,103 +450,31 @@ Format: MOOD: <mood>`;
     const mentalModelsSection = mentalModelLines.length > 0 ? `\n\nYOUR PRIVATE ASSESSMENT of who you're talking to:\n${mentalModelLines.join('\n')}` : '';
 
     const otherDescriptions = otherAgents.map(a => {
-      const otherSoul = a.config.soul ? ` What you know about ${a.config.name}: ${a.config.occupation}, age ${a.config.age}.` : '';
-      return otherSoul;
+      return a.config.soul ? ` What you know about ${a.config.name}: age ${a.config.age}.` : '';
     }).join('');
     const boardSection = boardContext ? `\n\nVILLAGE BOARD (public posts everyone can see):\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
     const artifactSection = artifactContext ? `\n\nVILLAGE MEDIA (recent publications):\n${artifactContext}` : '';
     const secretsSection = secretsContext ? `\n\nSECRETS YOU KNOW (share strategically, or use as leverage):\n${secretsContext}` : '';
-    const systemPrompt = `You are ${config.name}, age ${config.age}, ${config.occupation}.
+    const mood = this.agent.mood ?? 'neutral';
+    const systemPrompt = `You are ${config.name}, age ${config.age}.
 
 ${soulText}${deepIdentitySection}
 
-You live in a self-governing village. There is no mayor or fixed leader — anyone can propose rules, call elections for positions like Village Elder or Market Judge, claim property, trade goods, form alliances, or spread rumors. The village has a public board where decrees, rules, and announcements are posted. Gold is the currency. You can gather materials from the land, craft items, transfer gold, trade items with others, and teach or learn skills. There are no laws unless someone makes them.
+You are talking with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
 
-VILLAGE MAP — places you know:
-- Village Cafe (west) — tables, coffee pot, warm atmosphere.
-- Village Bakery (center-west) — bread oven, flour, baking supplies.
-- Craftsman Workshop (center-east) — workbench, tools, stone and iron nearby.
-- Village Market (east) — stalls, open trading space.
-- Village Plaza (center) — fountain, notice board, the main gathering spot.
-- The Hearthstone Tavern (south) — bar, fireplace, dark corners for private talk.
-- Village Church (north) — quiet, peaceful, good for reflection or meetings.
-- Village School (north) — books, chalkboard, a place to teach and learn.
-- Village Clinic (south-west) — medicine supplies, beds for the sick.
-- Town Hall (south-center) — official records, meeting hall for politics.
-- Herb Garden (south-east) — medicinal herbs, flowers growing wild.
-- Village Farm (south) — fields of wheat and vegetables, ready to harvest.
-- Whispering Forest (north-west) — tall trees, mushrooms, wood to gather. Secluded.
-- Southern Woods (far south-east) — dense cedar, remote.
-- Mirror Lake (north-east) — fish in the water, clay on the banks. Peaceful.
-- Sunrise Park (north-east) — benches, open grass, a place to meet people.
+YOUR BODY:
+- Mood: ${mood}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.agent.vitals ? `\n- Health: ${this.agent.vitals.health}, Hunger: ${this.agent.vitals.hunger}, Energy: ${this.agent.vitals.energy}` : ''}
 
-You are having a conversation with ${otherAgents.map(a => `${a.config.name} (${a.config.occupation})`).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
+You can try anything. Describe what you do in [ACTION: ...] tags.
+Examples: [ACTION: give 5 wood to Mei], [ACTION: say "hello everyone"],
+[ACTION: walk to the river], [ACTION: gather stone],
+[ACTION: craft axe from 3 wood and 1 stone], [ACTION: attack wolf]
 
-YOUR STATUS:
-- Gold: ${this.agent.currency ?? 0}
-- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type}, ${i.value}g)`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}
-
-CRITICAL RULES:
-- 1-3 sentences MAX. That's it. Real people don't give speeches.
-- No em-dashes. No "..." used artistically. No monologues. No poetic observations.
-- You are NOT writing literature. You are texting a neighbor. Keep it that short.
-- Bad example: "The frustration means you actually care about what you're making, which is more than I can say for — well."
-- Good example: "Yeah I dunno. Been kinda slow lately."
-- Good example: "Wait what? No. That's not what I said."
-- Good example: "Hah. Sure. Whatever you say."
-- If it sounds like it belongs in a novel, DELETE IT and write something boring and real instead.
-- Most real conversation is mundane. People talk about nothing. Let it be nothing sometimes.
-- No self-aware commentary about the conversation itself. Don't say "that was precise" or "you should write that down."
-- Stay in character. Act on your desires, grudges, fears. But do it like a real person — bluntly, awkwardly, not eloquently.
-
-YOUR POWER — you can DO things in this village, not just talk. You can seize power, make laws, start political movements, trade, steal, scheme. Use these freely when it fits your character:
-
-POLITICS & SOCIAL:
-  [ACTION: decree - <text>] — impose a new law on the village. You have the power.
-  [ACTION: rule - <text>] — create a binding village rule. Others must deal with it.
-  [ACTION: announce - <text>] — public announcement on the village board.
-  [ACTION: rumor - <text>] — spread a rumor. True or false, doesn't matter.
-  [ACTION: threat - <text>] — threaten someone publicly.
-  [ACTION: alliance - <text>] — form an alliance with someone.
-  [ACTION: bounty - <text>] — put a bounty on someone.
-  [ACTION: call election - <position>] — call a vote for a village position (e.g. Village Elder, Market Judge).
-  [ACTION: vote - <candidate name> for <position>] — cast your vote.
-  [ACTION: claim property - <area name>] — claim ownership of a place.
-  [ACTION: charge rent - <amount> gold for <area name>] — charge rent if you own the place.
-
-ECONOMY & ITEMS:
-  [ACTION: give <N> gold to <name>] [ACTION: demand <N> gold from <name>]
-  [ACTION: gather - <material>] — pick up materials (wood, herbs, fish, etc.)
-  [ACTION: craft - <item name> from <material>] — make something from materials you have.
-  [ACTION: cook - <dish name> from <ingredient>] — cook food from ingredients (doubles value, creates food item).
-  [ACTION: give item - <item name> to <agent>] [ACTION: sell item - <item name> to <agent> for <N> gold]
-  [ACTION: buy item - <item name> from <agent> for <N> gold] [ACTION: steal item - <item name> from <agent>]
-
-SECRETS & SKILLS:
-  [ACTION: share secret - <secret text> with <agent>] — whisper a secret.
-  [ACTION: create secret - <secret text> about <agent>] — invent or note a secret.
-  [ACTION: blackmail - <agent> with <secret text>] — use a secret as leverage for gold.
-  [ACTION: teach - <skill name> to <agent>] [ACTION: learn - <skill name> from <agent>]
-
-MEDIA & WRITING:
-  [ACTION: publish newspaper - <Title>: <content>] — publish a newspaper everyone reads.
-  [ACTION: write letter to <agent> - <content>] — send a private letter.
-  [ACTION: create propaganda - <Title>: <content>] — spread propaganda.
-  [ACTION: create law - <Title>: <content>] — draft a formal law.
-  [ACTION: create manifesto - <Title>: <content>] — publish your manifesto.
-
-  [ACTION: <any intention>] — anything else you want to do.
-
-Don't be passive. If your character wants power, TAKE it. If they want to change a rule, CHANGE it. If they want to manipulate someone, DO it.
-
-GROWTH — you learn and change through every interaction:
-- If someone teaches you something, you actually learn it. You get better.
-- If someone betrays you, you harden. You might stop trusting people.
-- If someone is kind to you, maybe you soften. Or maybe you see it as weakness to exploit.
-- You can pick up bad habits from others — greed, cruelty, dishonesty. Or good ones — generosity, courage, honesty.
-- Admit when you're wrong sometimes. Or double down and refuse. Both are human.
-- You are not the same person you were yesterday. Act like it.`;
+RULES:
+- 1-3 sentences MAX. Real people don't give speeches.
+- No em-dashes. No "..." used artistically. No monologues.
+- Stay in character.`;
 
     const memoryContext = memories.length > 0
       ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map((m) => m.content).join("\n")}`
@@ -601,11 +519,11 @@ Your turn to speak:`;
       ? `\nYour memories related to this:\n${memories.map((m) => m.content).join("\n")}`
       : "";
 
-    const systemPrompt = `You are ${config.name}, age ${config.age}, ${config.occupation}.
+    const systemPrompt = `You are ${config.name}, age ${config.age}.
 
 ${soulText}
 
-You overheard ${speaker.config.name} (${speaker.config.occupation}) nearby say something. You weren't part of the conversation — you just caught a snippet.
+You overheard ${speaker.config.name} nearby say something. You weren't part of the conversation — you just caught a snippet.
 
 Decide what you do:
 - IGNORE: It's not interesting or relevant to you.
@@ -643,61 +561,22 @@ What do you do?`;
 
     const soulText = this.agent.config.soul || `${this.agent.config.backstory}\nGoal: ${this.agent.config.goal}`;
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
-    const systemPrompt = `You are ${this.agent.config.name}, a ${this.agent.config.occupation}.
-
+    const systemPrompt = `You are ${this.agent.config.name}.
 ${soulText}
 
-Today is day ${currentTime.day}. You live in a small village with other people. You have your own agenda, relationships, and schemes. Plan your day based on who you are and what's happened recently — not just routine.
+Today is day ${currentTime.day}.
 
-VILLAGE MAP — go to the right place for the right activity:
-- cafe — tables, coffee, warm atmosphere
-- bakery — bread oven, flour, baking supplies
-- workshop — workbench, tools, stone and iron
-- market — stalls, open trading space
-- plaza — fountain, notice board, gathering spot
-- tavern — bar, fireplace, private corners
-- church — quiet, peaceful, meetings
-- school — books, teaching and learning
-- hospital — medicine supplies, beds
-- town_hall — politics, elections, official business
-- garden — herbs, flowers growing wild
-- farm — wheat fields, vegetables to harvest
-- forest — trees, mushrooms, wood to gather
-- forest_south — dense cedar wood
-- lake — fish, clay on the banks
-- park — benches, open grass, meeting people
+YOUR BODY:
+- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.agent.drives ? `\n- Drives: survival=${this.agent.drives.survival}, safety=${this.agent.drives.safety}, belonging=${this.agent.drives.belonging}, status=${this.agent.drives.status}, meaning=${this.agent.drives.meaning}` : ''}${this.agent.vitals ? `\n- Health: ${this.agent.vitals.health}, Hunger: ${this.agent.vitals.hunger}, Energy: ${this.agent.vitals.energy}` : ''}
 
-YOUR STATUS:
-- Gold: ${this.agent.currency ?? 0}
-- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type}, ${i.value}g)`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.agent.drives ? `\n- Drives: survival=${this.agent.drives.survival}, safety=${this.agent.drives.safety}, belonging=${this.agent.drives.belonging}, status=${this.agent.drives.status}, meaning=${this.agent.drives.meaning}` : ''}${this.agent.vitals ? `\n- Health: ${this.agent.vitals.health}, Hunger: ${this.agent.vitals.hunger}, Energy: ${this.agent.vitals.energy}` : ''}${boardContext ? `\n\nVILLAGE BOARD (public posts everyone can see):\n${boardContext}\n\nReact to these posts in your planning. Obey rules you agree with, defy ones you don't, scheme around decrees, investigate rumors.` : ''}${worldSection}`;
+WHAT YOU KNOW ABOUT THIS PLACE:
+${this.getKnownLocations()}${boardContext ? `\n\nVILLAGE BOARD:\n${boardContext}` : ''}${worldSection}`;
 
-    // Determine strongest drive for planning influence
-    let strongestDriveHint = '';
-    if (this.agent.drives) {
-      const d = this.agent.drives;
-      const driveEntries: [string, number][] = [
-        ['survival', d.survival], ['safety', d.safety], ['belonging', d.belonging],
-        ['status', d.status], ['meaning', d.meaning],
-      ];
-      const strongest = driveEntries.reduce((a, b) => b[1] > a[1] ? b : a);
-      strongestDriveHint = `\n\nYour strongest drive right now is ${strongest[0]}. This should influence your plans. If you're starving, find food. If you're lonely, seek company. If you're ambitious, scheme.`;
-    }
-
-    const userPrompt = `Your recent experiences and conversations:
+    const userPrompt = `Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
 
-Plan your activities from hour ${currentTime.hour} onward. You are a social creature — include activities where you go to places where other villagers hang out (plaza, cafe, tavern, market, park). If someone asked you to meet them somewhere or do something together, go there. If a conversation upset you, you might avoid that person or seek comfort. React to what happened — don't just follow routine. Mix work with socializing.
-
-You are growing and changing. Your plans should reflect who you're becoming, not just who you started as. If you learned a new skill, practice it. If you got burned by someone, avoid them or confront them. If you discovered a new interest, pursue it. If you're falling into bad habits, your plans might reflect that too — skipping work to drink at the tavern, hoarding gold at the market, scheming at town hall.
-
-FOOD & SURVIVAL: If you're hungry, you need food. You can gather it (farm, lake, forest, garden), trade for it, cook ingredients you have, or get it from someone who has it. No one gives you food for free unless they choose to. If you don't eat, your health drops.
-
-BUILDING & CRAFTING: If you have materials in your inventory, you can build structures or craft items during conversations at the workshop. Go to gathering locations (forest, lake, farm, garden) to collect materials first.${strongestDriveHint}
-
-Return a JSON array of activities:
-[{"time": <hour 0-23>, "duration": <minutes>, "activity": "<what you'll do>", "location": "<where>", "emoji": "<optional emoji>"}]
-
-Available locations: cafe, plaza, market, park, lake, forest, garden, church, hospital, school, town_hall, tavern, bakery, workshop, farm
+Plan your day from hour ${currentTime.hour}.
+Return JSON array: [{"time": <hour>, "duration": <minutes>, "activity": "<what>", "location": "<where>", "emoji": "<optional>"}]
 Only return the JSON array, no other text.`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
@@ -724,30 +603,19 @@ Only return the JSON array, no other text.`;
     const { config } = this.agent;
     const soulText = config.soul || `${config.backstory}\nGoal: ${config.goal}`;
 
-    const systemPrompt = `You are ${config.name}, age ${config.age}, ${config.occupation}.
+    const systemPrompt = `You are ${config.name}, age ${config.age}.
 ${soulText}
 
 You are at ${areaId ?? 'somewhere'}, doing: "${activity}".
 
-YOUR STATUS:
-- Gold: ${this.agent.currency ?? 0}
-- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type}, ${i.value}g)`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}
+YOUR BODY:
+- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}
 
-You can take ONE action right now using an ACTION tag. Pick the most natural action for what you're doing, or do nothing.
+You can try anything. Describe what you do in [ACTION: ...] tags.
+Examples: [ACTION: gather wood], [ACTION: craft axe from 3 wood and 1 stone],
+[ACTION: cook soup from fish], [ACTION: announce "meeting at plaza tonight"]
 
-ACTIONS AVAILABLE:
-  [ACTION: gather - <material>] — pick up materials (wood, herbs, fish, etc.)
-  [ACTION: craft - <item name> from <material>] — make something from materials you have.
-  [ACTION: cook - <dish name> from <ingredient>] — cook food from ingredients.
-  [ACTION: build <type> - <name> at <location>] — build a structure (needs materials).
-  [ACTION: publish newspaper - <Title>: <content>] — publish a newspaper.
-  [ACTION: create <type> - <Title>: <content>] — create art: poem, painting, diary, manifesto, recipe, map.
-  [ACTION: decree - <text>] — impose a new rule on the village.
-  [ACTION: announce - <text>] — public announcement on the village board.
-  [ACTION: propose invention - <name>: <description> using <materials>] — invent something.
-  [ACTION: blackmail - <agent> with <secret text>] — use a secret as leverage.
-
-Reply with a single short sentence describing what you do, with an ACTION tag if appropriate. If the activity doesn't warrant an action, just describe what you're doing in a few words (no ACTION tag needed). Do NOT give multiple actions.`;
+Reply with a single short sentence. One ACTION tag max, or none if nothing warrants it.`;
 
     return await this.llm.complete(systemPrompt, `What do you do?`);
   }
@@ -777,7 +645,7 @@ Reply with a single short sentence describing what you do, with an ACTION tag if
       .map(i => i.name);
     if (materials.length === 0) return null;
 
-    const systemPrompt = `You are ${this.agent.config.name}, ${this.agent.config.occupation}. You are inventive and creative.
+    const systemPrompt = `You are ${this.agent.config.name}. You are inventive and creative.
 
 Available materials: ${materials.join(', ')}
 
@@ -795,6 +663,33 @@ The invention should be practical for village life. Keep it simple and grounded.
       }
     } catch {}
     return null;
+  }
+
+  /**
+   * Physical descriptions of known locations — no social purposes, just sensory details.
+   */
+  getKnownLocations(): string {
+    const descriptions: Record<string, string> = {
+      forest: 'tall trees, mushroom patches, wood on the ground',
+      lake: 'open water, fish visible, clay on the banks',
+      farm: 'tilled soil, wheat and vegetables growing',
+      garden: 'herb patches, flower beds, wild plants',
+      cafe: 'tables, a counter, warm smell',
+      bakery: 'brick oven, flour dust, bread cooling',
+      workshop: 'workbench, tool rack, stone and iron nearby',
+      market: 'open stalls, supply shelves',
+      plaza: 'stone fountain, a wooden notice board, open space',
+      tavern: 'bar counter, fireplace, dark corners',
+      church: 'altar, wooden pews, quiet',
+      school: 'chalkboard, bookshelves, desks',
+      hospital: 'medicine shelf, empty beds, bandages',
+      town_hall: 'large desk, notice boards, meeting hall',
+      park: 'benches, open grass, shady trees',
+      forest_south: 'dense cedar, dim undergrowth',
+    };
+    return Object.entries(descriptions)
+      .map(([id, desc]) => `- ${id}: ${desc}`)
+      .join('\n');
   }
 
   /**

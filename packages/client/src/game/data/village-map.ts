@@ -241,22 +241,13 @@ export const BUILDINGS: {
   type: 'house' | 'cafe' | 'shop';
   label?: string;
 }[] = [
-  // Church (5 wide, rows 1-4)
-  { x: 10, y: 1, w: 5, h: 4, type: 'house', label: 'Church' },
-  // School (5 wide, rows 1-4)
-  { x: 18, y: 1, w: 5, h: 4, type: 'house', label: 'School' },
-  // Cafe (5 wide, rows 9-14)
-  { x: 3, y: 9, w: 5, h: 6, type: 'cafe', label: 'Cafe' },
-  // Bakery (5 wide, rows 9-13)
-  { x: 10, y: 9, w: 5, h: 5, type: 'shop', label: 'Bakery' },
-  // Workshop (5 wide, rows 9-13)
-  { x: 24, y: 9, w: 5, h: 5, type: 'shop', label: 'Workshop' },
-  // Market (5 wide, rows 9-14)
-  { x: 31, y: 9, w: 5, h: 6, type: 'shop', label: 'Market' },
-  // Hospital (5 wide, rows 21-24)
-  { x: 2, y: 21, w: 5, h: 4, type: 'house', label: 'Clinic' },
-  // Town Hall (5 wide, rows 21-24)
-  { x: 9, y: 21, w: 5, h: 4, type: 'house', label: 'Town Hall' },
-  // Tavern (5 wide, rows 21-24)
-  { x: 20, y: 21, w: 5, h: 4, type: 'cafe', label: 'Tavern' },
+  { x: 10, y: 1, w: 5, h: 4, type: 'house' },
+  { x: 18, y: 1, w: 5, h: 4, type: 'house' },
+  { x: 3, y: 9, w: 5, h: 6, type: 'cafe' },
+  { x: 10, y: 9, w: 5, h: 5, type: 'shop' },
+  { x: 24, y: 9, w: 5, h: 5, type: 'shop' },
+  { x: 31, y: 9, w: 5, h: 6, type: 'shop' },
+  { x: 2, y: 21, w: 5, h: 4, type: 'house' },
+  { x: 9, y: 21, w: 5, h: 4, type: 'house' },
+  { x: 20, y: 21, w: 5, h: 4, type: 'cafe' },
 ];

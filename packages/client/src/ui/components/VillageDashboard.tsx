@@ -29,9 +29,6 @@ export const VillageDashboard: React.FC = () => {
   const time = useWorldTime();
 
   const aliveAgents = agents.filter(a => a.alive !== false);
-  const avgGold = aliveAgents.length > 0
-    ? Math.round(aliveAgents.reduce((s, a) => s + (a.currency ?? 0), 0) / aliveAgents.length)
-    : 0;
 
   const rules = board.filter(p => (p.type === 'decree' || p.type === 'rule') && !p.revoked);
   const alliances = board.filter(p => p.type === 'alliance' && !p.revoked);
@@ -65,8 +62,8 @@ export const VillageDashboard: React.FC = () => {
           <div style={{ fontFamily: FONTS.pixel, fontSize: '11px' }}>{weather.current} ({weather.temperature}°)</div>
         </div>
         <div style={{ padding: '8px 10px', background: COLORS.bgCard, borderRadius: 4, border: `1px solid ${COLORS.border}` }}>
-          <div style={{ color: COLORS.textDim, fontSize: '10px', marginBottom: 2 }}>Avg Gold</div>
-          <div style={{ fontFamily: FONTS.pixel, fontSize: '11px', color: COLORS.gold }}>{avgGold}G</div>
+          <div style={{ color: COLORS.textDim, fontSize: '10px', marginBottom: 2 }}>Time</div>
+          <div style={{ fontFamily: FONTS.pixel, fontSize: '11px' }}>{time.hour}:{String(time.minute).padStart(2, '0')}</div>
         </div>
       </div>
 
@@ -231,7 +228,7 @@ export const VillageDashboard: React.FC = () => {
                 })}
               </div>
               {inst.treasury > 0 && (
-                <div style={{ color: COLORS.gold, fontSize: '10px', marginTop: 4 }}>Treasury: {inst.treasury}G</div>
+                <div style={{ color: COLORS.textDim, fontSize: '10px', marginTop: 4 }}>Has treasury</div>
               )}
             </div>
           ))}
