@@ -131,7 +131,7 @@ export class SimulationEngine {
           wakeHour,
           sleepHour,
           homeArea,
-          this.conversationManager,
+          this.createActionExecutor(),
         );
 
         // Restore mutable controller state
@@ -210,7 +210,7 @@ export class SimulationEngine {
       wakeHour,
       sleepHour,
       'plaza',
-      this.conversationManager,
+      this.createActionExecutor(),
     );
     this.controllers.set(id, controller);
 
@@ -341,7 +341,7 @@ export class SimulationEngine {
       7,
       23,
       'plaza',
-      this.conversationManager,
+      this.createActionExecutor(),
     );
     this.controllers.set(id, controller);
 
@@ -409,8 +409,8 @@ export class SimulationEngine {
       controller.tick(time);
     }
 
-    // 4. Run perception every 30 ticks — agents notice their surroundings
-    if (this.tickCount % 30 === 0) {
+    // 4. Run perception every 120 ticks — agents notice their surroundings
+    if (this.tickCount % 120 === 0) {
       this.runPerception();
     }
 
@@ -453,6 +453,8 @@ export class SimulationEngine {
     for (const [agentId, cognition] of this.cognitions.entries()) {
       const agent = this.world.getAgent(agentId);
       if (!agent || agent.state === 'sleeping' || agent.alive === false) continue;
+      const ctrl = this.controllers.get(agentId);
+      if (ctrl?.apiExhausted) continue;
 
       const nearby = this.world.getNearbyAgents(agent.position, 5)
         .filter(a => a.id !== agentId);
@@ -492,11 +494,12 @@ export class SimulationEngine {
         const lastTick = this.lastConversationPair.get(pairKey);
         if (lastTick !== undefined && (this.tickCount - lastTick) < 600) continue;
 
-        // Check if both are available (not sleeping or already conversing)
+        // Check if both are available (not sleeping, conversing, or API exhausted)
         const c1 = this.controllers.get(a1.id);
         const c2 = this.controllers.get(a2.id);
         if (!c1 || !c2) continue;
         if (!c1.isAvailable || !c2.isAvailable) continue;
+        if (c1.apiExhausted || c2.apiExhausted) continue;
 
         // Check not already in conversation
         if (
@@ -506,8 +509,8 @@ export class SimulationEngine {
           continue;
         }
 
-        // Moderate probability — conversations should happen but not constantly
-        const prob = 0.15;
+        // Reduced probability — intentional conversations supplement this
+        const prob = 0.08;
 
         if (Math.random() < prob) {
           // Start conversation
@@ -717,6 +720,75 @@ export class SimulationEngine {
       this.throttles.set(cacheKey, throttled);
     }
     return throttled;
+  }
+
+  private createActionExecutor() {
+    return {
+      executeSocialAction: (actorId: string, actorName: string, targetId: string, action: string, cognition: AgentCognition) => {
+        this.conversationManager.executeSocialAction(actorId, actorName, targetId, action, cognition);
+      },
+      requestConversation: (initiatorId: string, targetId: string): boolean => {
+        const c1 = this.controllers.get(initiatorId);
+        const c2 = this.controllers.get(targetId);
+        if (!c1 || !c2) return false;
+        if (!c2.isAvailable) return false;
+        if (c1.apiExhausted || c2.apiExhausted) return false;
+        if (this.conversationManager.isInConversation(initiatorId) ||
+            this.conversationManager.isInConversation(targetId)) return false;
+
+        // Check pair cooldown
+        const pairKey = [initiatorId, targetId].sort().join(':');
+        const lastTick = this.lastConversationPair.get(pairKey);
+        if (lastTick !== undefined && (this.tickCount - lastTick) < 600) return false;
+
+        const a1 = this.world.getAgent(initiatorId);
+        if (!a1) return false;
+
+        const convId = this.conversationManager.startConversation(initiatorId, targetId, { ...a1.position });
+        this.lastConversationPair.set(pairKey, this.tickCount);
+        c1.enterConversation();
+        c2.enterConversation();
+        console.log(`[Engine] Intentional conversation: ${a1.config.name} sought out ${this.world.getAgent(targetId)?.config.name}`);
+        return true;
+      },
+    };
+  }
+
+  updateAgentApiKey(agentId: string, newApiKey: string, newModel: string): boolean {
+    const agent = this.world.getAgent(agentId);
+    if (!agent || agent.alive === false) return false;
+
+    // Update stored key
+    this.agentApiKeys.set(agentId, { apiKey: newApiKey, model: newModel });
+
+    // Create new provider and cognition
+    const llmProvider = this.getThrottledProvider(newApiKey, newModel);
+    const memoryStore = this.persistence
+      ? new SupabaseMemoryStore(this.persistence.client)
+      : new InMemoryStore();
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider);
+    this.cognitions.set(agentId, cognition);
+
+    // Reset controller's API state
+    const controller = this.controllers.get(agentId);
+    if (controller) {
+      controller.resetApiState(cognition);
+    }
+
+    // If agent was away, resume them
+    if (agent.state === 'away') {
+      this.resumeAgent(agentId);
+    }
+
+    // Save to persistence
+    if (this.persistence) {
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
+        console.error('[Persistence] Save after API key update failed:', err)
+      );
+    }
+
+    console.log(`[Engine] API key updated for ${agent.config.name} (model: ${newModel})`);
+    return true;
   }
 
   get isConfigured(): boolean {

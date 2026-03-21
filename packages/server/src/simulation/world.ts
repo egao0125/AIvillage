@@ -219,9 +219,19 @@ export class World {
     const spawn = this.materialSpawns.find(s => s.areaId === areaId);
     if (!spawn) return null;
 
-    // Check respawn timer
+    // Check respawn timer (technologies can reduce respawn time)
     const now = this.time.totalMinutes;
-    if (spawn.lastGathered !== undefined && (now - spawn.lastGathered) < spawn.respawnMinutes) {
+    let effectiveRespawn = spawn.respawnMinutes;
+    for (const tech of this.technologies) {
+      for (const effect of tech.effects) {
+        const lowerEffect = effect.toLowerCase();
+        if (lowerEffect.includes(spawn.areaId) || lowerEffect.includes(spawn.material.toLowerCase())) {
+          effectiveRespawn = Math.floor(effectiveRespawn * 0.7); // 30% faster
+          break;
+        }
+      }
+    }
+    if (spawn.lastGathered !== undefined && (now - spawn.lastGathered) < effectiveRespawn) {
       return null;
     }
 

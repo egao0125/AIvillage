@@ -157,9 +157,11 @@ export class ConversationManager {
       let response: string;
       try {
         response = await cognition.converse(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext);
-      } catch {
-        // Fallback dialogue when LLM is unavailable
-        response = this.getFallbackDialogue(speakerAgent.config.name, otherAgents[0].config.name, active.turnCount);
+      } catch (err) {
+        // No fallback dialogue — end conversation when LLM fails
+        console.error(`[Conversation] LLM failed for ${speakerAgent.config.name}:`, err);
+        this.endConversation(conversationId, cognitions);
+        return false;
       }
 
       // Extract [ACTION: ...] tags and execute social actions
@@ -168,7 +170,7 @@ export class ConversationManager {
       const actionMatches = response.matchAll(/\[ACTION:\s*(.+?)\]/gi);
       for (const match of actionMatches) {
         const actionIntent = match[1].trim();
-        this.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition);
+        this.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition, cognitions);
       }
 
       // Strip the ACTION tag from the displayed message
@@ -245,36 +247,6 @@ export class ConversationManager {
       }
     }
     return undefined;
-  }
-
-  private getFallbackDialogue(speakerName: string, otherName: string, turnCount: number): string {
-    const greetings = [
-      `Hey ${otherName}, nice to see you!`,
-      `Oh, ${otherName}! How are you doing?`,
-      `${otherName}, what a pleasant surprise!`,
-      `Hi there! Beautiful day, isn't it?`,
-      `Good to see you, ${otherName}.`,
-    ];
-    const midConvo = [
-      `That's really interesting, I hadn't thought about it that way.`,
-      `I've been meaning to explore more of the village.`,
-      `Have you been to the market lately? They have some new things.`,
-      `I was just thinking about that earlier today.`,
-      `The village has been quite lively recently.`,
-      `I wonder what the weather will be like tomorrow.`,
-      `Tell me more, I'd love to hear about that.`,
-      `You know, this place really feels like home.`,
-    ];
-    const farewells = [
-      `Well, I should get going. See you around, ${otherName}!`,
-      `It was nice chatting! Take care.`,
-      `I have to run, but let's talk again soon. Goodbye!`,
-      `See you later, ${otherName}!`,
-    ];
-
-    if (turnCount === 0) return greetings[Math.floor(Math.random() * greetings.length)];
-    if (turnCount >= 3) return farewells[Math.floor(Math.random() * farewells.length)];
-    return midConvo[Math.floor(Math.random() * midConvo.length)];
   }
 
   private endConversation(conversationId: string, cognitions?: Map<string, AgentCognition>): void {
@@ -356,6 +328,7 @@ export class ConversationManager {
     targetId: string,
     rawAction: string,
     cognition: AgentCognition,
+    cognitions?: Map<string, AgentCognition>,
   ): void {
     const lower = rawAction.toLowerCase();
     console.log(`[Social] ${actorName} action: ${rawAction}`);
@@ -412,13 +385,22 @@ export class ConversationManager {
       const targetBalance = this.world.updateAgentCurrency(targetId, amount);
       this.broadcaster.agentCurrency(actorId, newBalance, -amount, `gave gold to ${this.world.getAgent(targetId)?.config.name}`);
       this.broadcaster.agentCurrency(targetId, targetBalance, amount, `received gold from ${actorName}`);
+      // Mid-day mood reaction on gift recipient
+      const giftRecipientCog = cognitions?.get(targetId);
+      const giftTarget = this.world.getAgent(targetId);
+      if (giftRecipientCog && giftTarget) {
+        void giftRecipientCog.quickMoodReaction(`${actorName} gave me ${amount} gold as a gift!`).then(mood => {
+          if (mood) { giftTarget.mood = mood; this.broadcaster.agentMood(targetId, mood); }
+        }).catch(() => {});
+      }
       console.log(`[Social] ${actorName} gave ${amount}G to ${this.world.getAgent(targetId)?.config.name}`);
       return;
     }
 
-    const goldDemandMatch = lower.match(/(?:demand|take|steal|tax|extort)\s+(\d+)\s*(?:gold|coins?|g)\s+from\s+(\w+)/);
-    if (goldDemandMatch) {
-      const amount = parseInt(goldDemandMatch[1]);
+    // Instant theft — victim has no say (50% fail chance via steal item pattern)
+    const goldStealMatch = lower.match(/(?:take|steal|tax)\s+(\d+)\s*(?:gold|coins?|g)\s+from\s+(\w+)/);
+    if (goldStealMatch) {
+      const amount = parseInt(goldStealMatch[1]);
       const target = this.world.getAgent(targetId);
       if (target) {
         const taken = Math.min(amount, target.currency);
@@ -428,7 +410,52 @@ export class ConversationManager {
           this.broadcaster.agentCurrency(targetId, targetBalance, -taken, `${actorName} took gold`);
           this.broadcaster.agentCurrency(actorId, actorBalance, taken, `took gold from ${target.config.name}`);
           console.log(`[Social] ${actorName} took ${taken}G from ${target.config.name}`);
+
+          // Mid-day mood reaction on victim
+          const victimCognition = cognitions?.get(targetId);
+          if (victimCognition) {
+            void victimCognition.quickMoodReaction(`${actorName} stole ${taken} gold from me!`).then(mood => {
+              if (mood) {
+                target.mood = mood;
+                this.broadcaster.agentMood(targetId, mood);
+              }
+            }).catch(() => {});
+          }
         }
+      }
+      return;
+    }
+
+    // Victim-agency demands — stored as memory, victim decides
+    const goldDemandMatch = lower.match(/(?:demand|extort)\s+(\d+)\s*(?:gold|coins?|g)\s+from\s+(\w+)/);
+    if (goldDemandMatch) {
+      const amount = parseInt(goldDemandMatch[1]);
+      const target = this.world.getAgent(targetId);
+      if (target) {
+        // Store demand as high-importance memory on victim — they'll decide during next action
+        const victimCognition = cognitions?.get(targetId);
+        if (victimCognition) {
+          void victimCognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: targetId,
+            type: 'observation',
+            content: `${actorName} demanded ${amount} gold from me. I need to decide whether to comply or resist.`,
+            importance: 9,
+            timestamp: Date.now(),
+            relatedAgentIds: [actorId],
+          });
+
+          // Mid-day mood reaction on victim
+          void victimCognition.quickMoodReaction(`${actorName} demanded ${amount} gold from me!`).then(mood => {
+            if (mood) {
+              target.mood = mood;
+              this.broadcaster.agentMood(targetId, mood);
+            }
+          }).catch(() => {});
+        }
+        // Broadcast the demand (everyone sees it happened)
+        this.broadcaster.agentAction(actorId, `demanded ${amount}G from ${target.config.name}`, '💰');
+        console.log(`[Social] ${actorName} demanded ${amount}G from ${target.config.name} — victim will decide`);
       }
       return;
     }
@@ -464,19 +491,33 @@ export class ConversationManager {
         const materialItem = actor.inventory.find(i => i.name.toLowerCase() === materialName && i.type === 'material');
         if (materialItem) {
           this.world.removeItem(materialItem.id);
+          // Skill multiplier: crafting-related skills boost value
+          const craftSkill = actor.skills.find(s => s.name.toLowerCase().includes('craft') || s.name.toLowerCase().includes(materialName));
+          const skillMultiplier = craftSkill ? 1 + craftSkill.level * 0.1 : 1.0;
+          // Building crafting_bonus: check for workshop-type building at current location
+          const actorArea = this.world.getAreaAt(actor.position);
+          let buildingMultiplier = 1.0;
+          if (actorArea) {
+            for (const building of this.world.buildings.values()) {
+              if (building.areaId === actorArea.id && building.effects.includes('crafting_bonus') && building.durability > 0) {
+                buildingMultiplier = 1.5;
+                break;
+              }
+            }
+          }
           const craftedItem: Item = {
             id: crypto.randomUUID(),
             name: itemName,
             description: `${itemName} crafted by ${actorName} from ${materialName}`,
             ownerId: actorId,
             createdBy: actorId,
-            value: materialItem.value * 2,
+            value: Math.floor(materialItem.value * 2 * skillMultiplier * buildingMultiplier),
             type: 'other',
           };
           this.world.addItem(craftedItem);
           this.broadcaster.agentInventory(actorId, actor.inventory);
           this.broadcaster.agentAction(actorId, `crafted ${itemName}`, '🔨');
-          console.log(`[Social] ${actorName} crafted ${itemName} from ${materialName}`);
+          console.log(`[Social] ${actorName} crafted ${itemName} from ${materialName} (skill: x${skillMultiplier.toFixed(1)}, building: x${buildingMultiplier})`);
         } else {
           console.log(`[Social] ${actorName} tried to craft ${itemName} but lacks ${materialName}`);
         }
@@ -497,13 +538,27 @@ export class ConversationManager {
         );
         if (ingredient) {
           this.world.removeItem(ingredient.id);
+          // Skill multiplier: cooking-related skills boost value
+          const cookSkill = actor.skills.find(s => s.name.toLowerCase().includes('cook') || s.name.toLowerCase().includes('chef'));
+          const cookSkillMult = cookSkill ? 1 + cookSkill.level * 0.1 : 1.0;
+          // Building crafting_bonus: check for workshop/kitchen building at current location
+          const cookArea = this.world.getAreaAt(actor.position);
+          let cookBuildingMult = 1.0;
+          if (cookArea) {
+            for (const building of this.world.buildings.values()) {
+              if (building.areaId === cookArea.id && building.effects.includes('crafting_bonus') && building.durability > 0) {
+                cookBuildingMult = 1.5;
+                break;
+              }
+            }
+          }
           const cookedItem: Item = {
             id: crypto.randomUUID(),
             name: dishName,
             description: `${dishName} cooked by ${actorName} from ${ingredientName}`,
             ownerId: actorId,
             createdBy: actorId,
-            value: ingredient.value * 2,
+            value: Math.floor(ingredient.value * 2 * cookSkillMult * cookBuildingMult),
             type: 'food',
           };
           this.world.addItem(cookedItem);
@@ -725,6 +780,13 @@ export class ConversationManager {
             }
             this.world.updateReputation(target.id, actorId, -15, `blackmailed me`);
             this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
+            // Mid-day mood reaction on blackmail victim
+            const victimCog = cognitions?.get(target.id);
+            if (victimCog) {
+              void victimCog.quickMoodReaction(`${actorName} blackmailed me and I had to pay ${taken} gold!`).then(mood => {
+                if (mood) { target.mood = mood; this.broadcaster.agentMood(target.id, mood); }
+              }).catch(() => {});
+            }
             console.log(`[Social] ${actorName} blackmailed ${target.config.name} for ${taken}G`);
           } else {
             // Target refuses — secret gets exposed as board rumor
@@ -747,6 +809,13 @@ export class ConversationManager {
             }
             this.world.updateReputation(target.id, actorId, -25, `tried to blackmail me`);
             this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
+            // Mid-day mood reaction on blackmail victim (refused — may feel angry/empowered)
+            const refusedVictimCog = cognitions?.get(target.id);
+            if (refusedVictimCog) {
+              void refusedVictimCog.quickMoodReaction(`${actorName} tried to blackmail me but I refused and exposed them!`).then(mood => {
+                if (mood) { target.mood = mood; this.broadcaster.agentMood(target.id, mood); }
+              }).catch(() => {});
+            }
             console.log(`[Social] ${actorName} failed to blackmail ${target.config.name} — secret exposed!`);
           }
         } else {

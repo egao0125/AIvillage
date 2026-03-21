@@ -64,6 +64,141 @@ const LeaveReturnButton: React.FC<{ agent: Agent }> = ({ agent }) => {
   );
 };
 
+// --- Update API Key ---
+
+const MODELS = [
+  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { value: 'claude-opus-4-6', label: 'Opus 4.6' },
+];
+
+const UpdateApiKeyButton: React.FC<{ agent: Agent }> = ({ agent }) => {
+  const [expanded, setExpanded] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState('claude-sonnet-4-6');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  const handleUpdate = async () => {
+    if (!apiKey.trim() || apiKey.trim().length < 10) {
+      setError('Enter a valid API key');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setSuccess(false);
+    try {
+      const res = await fetch(`/api/agents/${agent.id}/api-key`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ apiKey: apiKey.trim(), model }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || 'Failed');
+      } else {
+        setSuccess(true);
+        setApiKey('');
+        setTimeout(() => { setSuccess(false); setExpanded(false); }, 2000);
+      }
+    } catch {
+      setError('Cannot reach server');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isExhausted = agent.currentAction === 'API exhausted';
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <button
+        onClick={() => { setExpanded(!expanded); setError(''); setSuccess(false); }}
+        style={{
+          width: '100%',
+          padding: '8px 0',
+          fontFamily: FONTS.pixel,
+          fontSize: '9px',
+          color: isExhausted ? '#ef4444' : COLORS.textDim,
+          background: 'transparent',
+          border: `1px solid ${isExhausted ? '#ef4444' : COLORS.border}`,
+          borderRadius: 4,
+          cursor: 'pointer',
+          letterSpacing: 1,
+          transition: 'all 0.15s',
+        }}
+      >
+        {isExhausted ? 'API EXHAUSTED — UPDATE KEY' : 'UPDATE API KEY'}
+      </button>
+      {expanded && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="sk-ant-api03-..."
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              fontFamily: 'monospace',
+              fontSize: '11px',
+              color: COLORS.text,
+              background: COLORS.bgCard,
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 4,
+              boxSizing: 'border-box',
+            }}
+          />
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              fontFamily: FONTS.pixel,
+              fontSize: '8px',
+              color: COLORS.text,
+              background: COLORS.bgCard,
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 4,
+              cursor: 'pointer',
+            }}
+          >
+            {MODELS.map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleUpdate}
+            disabled={loading}
+            style={{
+              width: '100%',
+              padding: '8px 0',
+              fontFamily: FONTS.pixel,
+              fontSize: '9px',
+              color: loading ? COLORS.textDim : success ? '#4ade80' : '#64ffda',
+              background: 'transparent',
+              border: `1px solid ${loading ? COLORS.border : success ? '#4ade80' : '#64ffda'}`,
+              borderRadius: 4,
+              cursor: loading ? 'wait' : 'pointer',
+              letterSpacing: 1,
+              transition: 'all 0.15s',
+            }}
+          >
+            {loading ? '...' : success ? 'UPDATED' : 'SAVE'}
+          </button>
+          {error && (
+            <div style={{ color: '#ef4444', fontSize: '10px', fontFamily: FONTS.pixel }}>
+              {error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MOOD_DISPLAY: Record<string, { emoji: string; label: string; color: string }> = {
   neutral: { emoji: '\u{1F610}', label: 'Neutral', color: '#9ca3af' },
   happy: { emoji: '\u{1F60A}', label: 'Happy', color: '#4ade80' },
@@ -363,9 +498,12 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </div>
       </div>
 
-      {/* Leave / Return Village */}
+      {/* Owner controls: Leave/Return + Update API Key */}
       {agent.ownerId === getUserId() && agent.alive !== false && (
-        <LeaveReturnButton agent={agent} />
+        <>
+          <UpdateApiKeyButton agent={agent} />
+          <LeaveReturnButton agent={agent} />
+        </>
       )}
 
       {/* Notable Relationships */}

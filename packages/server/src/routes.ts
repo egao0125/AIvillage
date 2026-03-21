@@ -302,6 +302,45 @@ export function createRouter(engine: SimulationEngine): Router {
     },
   );
 
+  // PATCH /api/agents/:id/api-key — update agent's API key and model (requires ownership)
+  router.patch(
+    '/api/agents/:id/api-key',
+    rateLimit(10, 60_000),
+    requireAuth,
+    (req, res) => {
+      const id = req.params.id as string;
+      const { apiKey, model } = req.body;
+
+      if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
+        res.status(400).json({ error: 'Valid API key required' });
+        return;
+      }
+
+      const snapshot = engine.getSnapshot();
+      const agent = snapshot.agents.find(a => a.id === id);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      if (agent.ownerId !== req.userId) {
+        res.status(403).json({ error: 'You can only update your own agents' });
+        return;
+      }
+
+      const safeModel = typeof model === 'string'
+        ? model.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 100)
+        : 'claude-sonnet-4-6';
+
+      const success = engine.updateAgentApiKey(id, apiKey.trim(), safeModel);
+      if (!success) {
+        res.status(400).json({ error: 'Failed to update API key' });
+        return;
+      }
+
+      res.json({ success: true });
+    },
+  );
+
   // POST /api/agents/:id/resume — resume agent (requires ownership)
   router.post(
     '/api/agents/:id/resume',

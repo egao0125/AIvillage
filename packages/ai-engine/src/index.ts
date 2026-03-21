@@ -186,6 +186,8 @@ Output a JSON array ONLY, no other text:
    * Perceive — What's around me right now?
    * Scans nearby agents, objects, and events within perception radius.
    */
+  private lastPerceptionKey: string = '';
+
   async perceive(nearbyAgents: Agent[], nearbyAreas: MapArea[]): Promise<string[]> {
     const observations: string[] = [];
 
@@ -199,20 +201,59 @@ Output a JSON array ONLY, no other text:
       observations.push(`I am near ${area.name} (${area.type}).`);
     }
 
-    // Store observations as memories
-    for (const obs of observations) {
-      await this.memory.add({
-        id: crypto.randomUUID(),
-        agentId: this.agent.id,
-        type: "observation",
-        content: obs,
-        importance: 3,
-        timestamp: Date.now(),
-        relatedAgentIds: nearbyAgents.map((a) => a.id),
-      });
-    }
+    if (observations.length === 0) return observations;
+
+    // Dedup: skip if nothing changed since last perception
+    const perceptionKey = observations.sort().join('|');
+    if (perceptionKey === this.lastPerceptionKey) return observations;
+    this.lastPerceptionKey = perceptionKey;
+
+    // Combine all observations into a single memory instead of one per observation
+    const combined = observations.join(' ');
+    await this.memory.add({
+      id: crypto.randomUUID(),
+      agentId: this.agent.id,
+      type: "observation",
+      content: combined,
+      importance: 2,
+      timestamp: Date.now(),
+      relatedAgentIds: nearbyAgents.map((a) => a.id),
+    });
+
+    // Hard-cap: prune old low-importance observations if memory is getting large
+    await this.pruneObservations();
 
     return observations;
+  }
+
+  /**
+   * Hard-cap memory at 500 per agent. Prune lowest-importance observations first.
+   * Only runs occasionally to avoid hammering the DB.
+   */
+  private pruneTickCounter: number = 0;
+  private async pruneObservations(): Promise<void> {
+    this.pruneTickCounter++;
+    if (this.pruneTickCounter % 10 !== 0) return; // only check every 10th perception
+
+    const allMemories = await this.memory.getRecent(this.agent.id, 600);
+    if (allMemories.length <= 500) return;
+
+    // Sort by importance ASC, then timestamp ASC (oldest, least important first)
+    const sorted = [...allMemories].sort((a, b) => {
+      if (a.importance !== b.importance) return a.importance - b.importance;
+      return a.timestamp - b.timestamp;
+    });
+
+    // Remove excess, preferring low-importance observations
+    const toRemove = sorted.slice(0, allMemories.length - 400); // prune to 400 to avoid constant churn
+    const idsToRemove = toRemove
+      .filter(m => m.type === 'observation' || m.importance <= 3)
+      .map(m => m.id);
+
+    if (idsToRemove.length > 0) {
+      await this.memory.removeBatch(idsToRemove);
+      console.log(`[Memory] ${this.agent.config.name}: pruned ${idsToRemove.length} old observations (${allMemories.length} → ${allMemories.length - idsToRemove.length})`);
+    }
   }
 
   /**
@@ -709,6 +750,18 @@ ACTIONS AVAILABLE:
 Reply with a single short sentence describing what you do, with an ACTION tag if appropriate. If the activity doesn't warrant an action, just describe what you're doing in a few words (no ACTION tag needed). Do NOT give multiple actions.`;
 
     return await this.llm.complete(systemPrompt, `What do you do?`);
+  }
+
+  /**
+   * Quick mood reaction — cheapest possible LLM call (~10 tokens).
+   * Used for mid-day emotional responses to significant events.
+   */
+  async quickMoodReaction(event: string): Promise<Mood | null> {
+    const systemPrompt = `You are ${this.agent.config.name}. Something just happened to you. React with ONLY your current mood. Reply with exactly one word from: neutral, happy, angry, sad, anxious, excited, scheming, afraid`;
+    const response = await this.llm.complete(systemPrompt, event);
+    const mood = response.trim().toLowerCase() as Mood;
+    const validMoods: Mood[] = ['neutral', 'happy', 'angry', 'sad', 'anxious', 'excited', 'scheming', 'afraid'];
+    return validMoods.includes(mood) ? mood : null;
   }
 
   /**
