@@ -34,6 +34,39 @@ export class AgentCognition {
   ) {}
 
   /**
+   * Qualitative vitals — only surfaces when thresholds are crossed.
+   * Returns empty string when everything is fine.
+   */
+  private getVitalsNote(): string {
+    const v = this.agent.vitals;
+    if (!v) return '';
+    const notes: string[] = [];
+    if (v.hunger >= 80) notes.push('starving');
+    else if (v.hunger >= 60) notes.push('getting hungry');
+    if (v.energy <= 15) notes.push('exhausted');
+    else if (v.energy <= 30) notes.push('tired');
+    if (v.health <= 30) notes.push('in bad shape physically');
+    if (notes.length === 0) return '';
+    return `\nYou're feeling ${notes.join(' and ')}.`;
+  }
+
+  /**
+   * Situational observations from drive state — factual conditions, no emotional labels.
+   * The agent's personality and reflection determine what they do about it.
+   */
+  private getSituationalObservations(): string {
+    const d = this.agent.drives;
+    if (!d) return '';
+    const observations: string[] = [];
+    if (d.belonging >= 70) observations.push('You haven\'t had a meaningful conversation recently.');
+    if (d.status >= 70) observations.push('Nobody has responded to your recent ideas on the board.');
+    if (d.safety >= 70) observations.push('People have been cold to you lately.');
+    if (d.meaning >= 75) observations.push('You\'ve been doing the same things day after day.');
+    if (observations.length === 0) return '';
+    return '\nLATELY:\n' + observations.join('\n');
+  }
+
+  /**
    * Compute emotional valence for a memory based on its content.
    * Negative words yield -0.3 to -0.8, positive words yield 0.3 to 0.8. Default 0.
    */
@@ -109,16 +142,8 @@ export class AgentCognition {
     if (config.coreValues?.length) identityParts.push(`What you'd die for: ${config.coreValues.join(', ')}`);
     const identitySection = identityParts.length > 0 ? `\n\nYOUR DEEP IDENTITY:\n${identityParts.join('\n')}` : '';
 
-    // Build drives/vitals section
-    let drivesSection = '';
-    if (this.agent.drives) {
-      const d = this.agent.drives;
-      drivesSection += `\nDrives: survival=${d.survival}, safety=${d.safety}, belonging=${d.belonging}, status=${d.status}, meaning=${d.meaning}`;
-    }
-    if (this.agent.vitals) {
-      const v = this.agent.vitals;
-      drivesSection += `\nVitals: health=${v.health}, hunger=${v.hunger}, energy=${v.energy}`;
-    }
+    // Build qualitative state section (replaces numerical drives/vitals)
+    const drivesSection = this.getVitalsNote() + this.getSituationalObservations();
 
     // Build mental models section
     let modelsSection = '';
@@ -332,11 +357,12 @@ ${soulText}
 
 YOUR STATUS: ${this.agent.currency ?? 0} gold. Mood: ${this.agent.mood ?? 'neutral'}.${this.agent.inventory?.length ? ` Inventory: ${this.agent.inventory.map(i => i.name).join(', ')}.` : ''}${this.agent.skills?.length ? ` Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}.` : ''}
 
-Reflect on your recent experiences. Be brutally honest with yourself — the thoughts you'd never say out loud.
-- Who do you trust? Who do you resent? Who are you drawn to? Who disgusts you?
-- What are you scheming? What are you afraid of? What do you want that you can't have?
+Reflect on your recent experiences. Be brutally honest with yourself.
+- Who do you trust? Who do you resent? Who are you drawn to?
+- What are you scheming? What are you afraid of?
 - Did anyone say something today that changed how you see them?
 - How are you changing?
+${this.getSituationalObservations()}
 
 Write 2-3 raw, honest reflections in first person. These are your private thoughts — hold nothing back.
 
@@ -531,8 +557,8 @@ ${soulText}${deepIdentitySection}
 
 You are talking with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
 
-YOUR BODY:
-- Mood: ${mood}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.agent.vitals ? `\n- Health: ${this.agent.vitals.health}, Hunger: ${this.agent.vitals.hunger}, Energy: ${this.agent.vitals.energy}` : ''}
+YOUR STATE:
+- Mood: ${mood}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}${this.getSituationalObservations()}
 
 You can try anything. Describe what you do in [ACTION: ...] tags.
 Examples: [ACTION: give 5 wood to Mei], [ACTION: say "hello everyone"],
@@ -637,7 +663,7 @@ ${soulText}
 Today is day ${currentTime.day}.
 
 YOUR BODY:
-- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.agent.drives ? `\n- Drives: survival=${this.agent.drives.survival}, safety=${this.agent.drives.safety}, belonging=${this.agent.drives.belonging}, status=${this.agent.drives.status}, meaning=${this.agent.drives.meaning}` : ''}${this.agent.vitals ? `\n- Health: ${this.agent.vitals.health}, Hunger: ${this.agent.vitals.hunger}, Energy: ${this.agent.vitals.energy}` : ''}
+- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}${this.getSituationalObservations()}
 
 WHAT YOU KNOW ABOUT THIS PLACE:
 ${this.getKnownLocations()}${boardContext ? `\n\nVILLAGE BOARD:\n${boardContext}` : ''}${worldSection}`;
@@ -678,8 +704,8 @@ ${soulText}
 
 You are at ${areaId ?? 'somewhere'}, doing: "${activity}".
 
-YOUR BODY:
-- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}
+YOUR STATE:
+- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}
 
 You can try anything. Describe what you do in [ACTION: ...] tags.
 Examples: [ACTION: gather wood], [ACTION: craft axe from 3 wood and 1 stone],

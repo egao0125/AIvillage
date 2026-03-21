@@ -598,14 +598,17 @@ export class AgentController {
     const v = this.agent.vitals;
     if (!v) return;
 
-    // Hunger increases every game hour — slow enough that agents can plan around it
+    // Hunger increases every game hour — halved so agents aren't obsessed with food
     if (this.world.time.minute === 0) {
-      v.hunger = Math.min(100, v.hunger + 1);
+      v.hunger = Math.min(100, v.hunger + 0.5);
     }
 
     // Energy depletes during activity, restores during sleep
+    // Also slowly restores during idle/performing (resting at tavern, sitting in park, etc.)
     if (this.state === 'performing' || this.state === 'moving') {
       v.energy = Math.max(0, v.energy - 0.05);
+    } else if (this.state === 'idle') {
+      v.energy = Math.min(100, v.energy + 0.02);
     } else if (this.state === 'sleeping') {
       v.energy = Math.min(100, v.energy + 0.5);
       v.hunger = Math.max(0, v.hunger - 0.1);
