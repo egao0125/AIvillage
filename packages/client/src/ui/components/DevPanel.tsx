@@ -27,7 +27,7 @@ export const DevPanel: React.FC = () => {
       top: 8,
       left: '50%',
       transform: 'translateX(-50%)',
-      zIndex: 999,
+      zIndex: 9999,
       display: 'flex',
       gap: 6,
       alignItems: 'center',
