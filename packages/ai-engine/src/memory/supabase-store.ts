@@ -108,18 +108,18 @@ export class SupabaseMemoryStore implements MemoryStore {
         semanticScore = Math.max(0, TFIDFEmbedder.cosineSimilarity(queryEmbedding, memEmbedding));
       }
 
-      // Recency score (0-1) — exponential decay, half-life of 1 hour
+      // Recency score (0-1) — exponential decay, half-life of 24 hours
       const ageMs = now - memory.timestamp;
-      const halfLifeMs = 60 * 60 * 1000;
+      const halfLifeMs = 24 * 60 * 60 * 1000; // 24 hours
       const recencyScore = Math.exp(-ageMs / halfLifeMs);
 
       // Importance score (0-1) — normalize from 1-10 to 0-1
       const importanceScore = (memory.importance - 1) / 9;
 
-      // Combined score — 4 factors with semantic
+      // Combined score — importance-weighted so significant memories surface over noise
       const score = queryEmbedding.length > 0
-        ? 0.25 * keywordScore + 0.25 * semanticScore + 0.25 * recencyScore + 0.25 * importanceScore
-        : 0.4 * keywordScore + 0.3 * recencyScore + 0.3 * importanceScore;
+        ? 0.15 * keywordScore + 0.30 * semanticScore + 0.20 * recencyScore + 0.35 * importanceScore
+        : 0.25 * keywordScore + 0.25 * recencyScore + 0.50 * importanceScore;
 
       return { memory, score };
     });

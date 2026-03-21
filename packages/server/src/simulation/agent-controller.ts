@@ -454,15 +454,8 @@ export class AgentController {
     this.state = 'conversing';
     this.world.updateAgentState(this.agent.id, 'active', 'conversing');
 
-    // Think before speaking (skip if API exhausted)
-    if (!this.apiExhausted) {
-      void this.cognition.innerMonologue(
-        'entering a conversation',
-        `About to talk to someone. Mood: ${this.agent.mood}.`
-      ).then(thought => {
-        if (thought) this.broadcaster.agentThought(this.agent.id, thought);
-      }).catch(() => {});
-    }
+    // Pre-conversation thinking is now handled by preConversationAgenda() in conversation.ts
+    // which generates a targeted agenda instead of a generic inner monologue
   }
 
   /**

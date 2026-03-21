@@ -60,19 +60,19 @@ export class InMemoryStore implements MemoryStore {
         semanticScore = Math.max(0, TFIDFEmbedder.cosineSimilarity(queryEmbedding, memory.embedding));
       }
 
-      // Recency score (0-1) — exponential decay, half-life of 1 hour
+      // Recency score (0-1) — exponential decay, half-life of 24 hours
       const ageMs = now - memory.timestamp;
-      const halfLifeMs = 60 * 60 * 1000; // 1 hour
+      const halfLifeMs = 24 * 60 * 60 * 1000; // 24 hours
       const recencyScore = Math.exp(-ageMs / halfLifeMs);
 
       // Importance score (0-1) — normalize from 1-10 to 0-1
       const importanceScore = (memory.importance - 1) / 9;
 
-      // Combined score — 4 factors when embeddings available, 3 factors fallback
+      // Combined score — importance-weighted so significant memories surface over noise
       const hasEmbedding = memory.embedding && memory.embedding.length > 0;
       const score = hasEmbedding
-        ? 0.25 * keywordScore + 0.25 * semanticScore + 0.25 * recencyScore + 0.25 * importanceScore
-        : 0.4 * keywordScore + 0.3 * recencyScore + 0.3 * importanceScore;
+        ? 0.15 * keywordScore + 0.30 * semanticScore + 0.20 * recencyScore + 0.35 * importanceScore
+        : 0.25 * keywordScore + 0.25 * recencyScore + 0.50 * importanceScore;
 
       return { memory, score };
     });
