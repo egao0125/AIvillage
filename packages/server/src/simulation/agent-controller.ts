@@ -398,6 +398,11 @@ export class AgentController {
           this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
         }
+      } else if (atFoodLocation && this.agent.vitals && this.agent.vitals.hunger > 30) {
+        // Food establishments serve food — agents don't need inventory items to eat here
+        this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 25);
+        this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
+        this.broadcaster.agentAction(this.agent.id, `had a meal at ${this.currentAreaId}`, '🍽️');
       }
     }
 
@@ -421,6 +426,14 @@ export class AgentController {
       const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
       if (gathered) {
         this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
+        // Auto-eat gathered food — agents shouldn't starve while standing at a farm
+        if (gathered.type === 'food' && this.agent.vitals && this.agent.vitals.hunger > 20) {
+          this.world.removeItem(gathered.id);
+          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
+          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
+          this.broadcaster.agentAction(this.agent.id, `ate ${gathered.name}`, '🍽️');
+          console.log(`[Agent] ${this.agent.config.name} auto-ate ${gathered.name} (hunger: ${this.agent.vitals.hunger})`);
+        }
       }
     }
 
@@ -585,9 +598,9 @@ export class AgentController {
     const v = this.agent.vitals;
     if (!v) return;
 
-    // Hunger increases every game hour
+    // Hunger increases every game hour — slow enough that agents can plan around it
     if (this.world.time.minute === 0) {
-      v.hunger = Math.min(100, v.hunger + 3);
+      v.hunger = Math.min(100, v.hunger + 1);
     }
 
     // Energy depletes during activity, restores during sleep
