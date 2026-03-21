@@ -479,7 +479,7 @@ export class AgentController {
     if (this.state === 'conversing') {
       this.state = 'idle';
       this.idleTimer = 0;
-      this.conversationCooldown = 20; // 20 ticks before this agent can talk again
+      this.conversationCooldown = 120; // ~10 seconds before this agent can talk again
       this.world.updateAgentState(this.agent.id, 'idle', 'finished conversation');
 
       // After a conversation, replan the rest of the day based on new memories
