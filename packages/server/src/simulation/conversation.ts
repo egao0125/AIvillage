@@ -9,6 +9,7 @@ interface ActiveConversation {
   maxTurns: number;
   currentSpeakerIdx: number;
   processing: boolean;
+  agendas: Map<string, string>; // agentId → pre-conversation agenda
 }
 
 export class ConversationManager {
@@ -62,6 +63,7 @@ export class ConversationManager {
       maxTurns,
       currentSpeakerIdx: 0,
       processing: false,
+      agendas: new Map(),
     });
 
     const names = agentIds.map(aid => this.world.getAgent(aid)?.config.name ?? aid);
@@ -154,9 +156,20 @@ export class ConversationManager {
           }).join('\n')
         : undefined;
 
+      // Generate agenda on speaker's first turn — gives them a goal for the conversation
+      if (!active.agendas.has(speakerId)) {
+        try {
+          const agenda = await cognition.preConversationAgenda(otherAgents);
+          active.agendas.set(speakerId, agenda);
+        } catch {
+          // Non-fatal — conversation proceeds without agenda
+        }
+      }
+      const agenda = active.agendas.get(speakerId);
+
       let response: string;
       try {
-        response = await cognition.converse(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext);
+        response = await cognition.converse(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext, agenda);
       } catch (err) {
         // No fallback dialogue — end conversation when LLM fails
         console.error(`[Conversation] LLM failed for ${speakerAgent.config.name}:`, err);
@@ -298,13 +311,20 @@ export class ConversationManager {
         ? otherNames[0]
         : `${otherNames.slice(0, -1).join(', ')} and ${otherNames[otherNames.length - 1]}`;
 
+      // Score conversation importance dynamically — a deal or betrayal matters more than small talk
+      const convContent = `I had a conversation with ${othersLabel}. Here's what was said:\n${transcript}`;
+      let importance = 6;
+      try {
+        importance = await cognition.scoreImportance(convContent, 'conversation');
+      } catch {}
+
       // Store the full conversation as a memory
       const memory: Memory = {
         id: crypto.randomUUID(),
         agentId: participantId,
         type: 'conversation',
-        content: `I had a conversation with ${othersLabel}. Here's what was said:\n${transcript}`,
-        importance: 6,
+        content: convContent,
+        importance,
         timestamp: Date.now(),
         relatedAgentIds: otherIds,
       };
