@@ -8,8 +8,12 @@ import { SpectatorChat } from './components/SpectatorChat';
 import { NarrativeBar } from './components/NarrativeBar';
 import { CharacterPage } from './components/CharacterPage';
 import { RecapOverlay } from './components/RecapOverlay';
+import { DevPanel } from './components/DevPanel';
 import { connectSocket } from '../network/socket';
 import { useCharacterPageAgentId, useActiveRecap } from '../core/hooks';
+
+// Toggle dev tools — set to false to remove entirely
+const DEV_TOOLS_ENABLED = true;
 
 export const App: React.FC = () => {
   const [entered, setEntered] = useState(false);
@@ -63,6 +67,8 @@ export const App: React.FC = () => {
       {activeRecap && <RecapOverlay />}
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat />
+      {/* Dev tools — toggle via DEV_TOOLS_ENABLED */}
+      {DEV_TOOLS_ENABLED && <DevPanel />}
     </div>
   );
 };

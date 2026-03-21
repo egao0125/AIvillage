@@ -94,6 +94,34 @@ io.on('connection', (socket) => {
     });
   });
 
+  // --- Dev tools ---
+  socket.on('dev:pause', () => {
+    engine.pause();
+    io.emit('dev:status', { paused: !engine.isRunning });
+  });
+
+  socket.on('dev:resume', () => {
+    engine.start();
+    io.emit('dev:status', { paused: !engine.isRunning });
+  });
+
+  socket.on('dev:step', () => {
+    engine.singleTick();
+    io.emit('world:snapshot', engine.getSnapshot());
+  });
+
+  socket.on('dev:reset-vitals', () => {
+    const snapshot = engine.getSnapshot();
+    for (const agent of snapshot.agents) {
+      engine.resetAgentVitals(agent.id);
+    }
+    io.emit('world:snapshot', engine.getSnapshot());
+  });
+
+  socket.on('dev:status-request', () => {
+    socket.emit('dev:status', { paused: !engine.isRunning });
+  });
+
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
     spectatorLastComment.delete(socket.id);

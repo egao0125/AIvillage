@@ -294,6 +294,17 @@ export function sendSpectatorComment(message: string): void {
   socket?.emit('spectator:comment', { message });
 }
 
+// --- Dev tools ---
+export function devPause(): void { socket?.emit('dev:pause'); }
+export function devResume(): void { socket?.emit('dev:resume'); }
+export function devStep(): void { socket?.emit('dev:step'); }
+export function devResetVitals(): void { socket?.emit('dev:reset-vitals'); }
+export function devRequestStatus(): void { socket?.emit('dev:status-request'); }
+export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void {
+  socket?.on('dev:status', cb);
+  return () => { socket?.off('dev:status', cb); };
+}
+
 export function selectAgent(agentId: string): void {
   socket?.emit('agent:select', agentId);
   gameStore.selectAgent(agentId);
