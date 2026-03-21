@@ -3,8 +3,8 @@ import { BootScene } from './scenes/BootScene';
 import { VillageScene } from './scenes/VillageScene';
 
 export const TILE_SIZE = 32;
-export const MAP_WIDTH = 40;
-export const MAP_HEIGHT = 30;
+export const MAP_WIDTH = 68;
+export const MAP_HEIGHT = 45;
 
 export function createGameConfig(parent: string): Phaser.Types.Core.GameConfig {
   return {
