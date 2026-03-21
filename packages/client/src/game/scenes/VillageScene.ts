@@ -6,6 +6,7 @@ import {
   TREES,
   DECORATIONS,
   BUILDINGS,
+  FURNITURE,
 } from '../data/village-map';
 import { AgentSprite } from '../entities/AgentSprite';
 import { eventBus } from '../../core/EventBus';
@@ -23,22 +24,7 @@ const TILE_TEXTURE_MAP: Record<number, string> = {
   [TILE_TYPES.FOREST]: 'tile_forest',
   [TILE_TYPES.FLOWERS]: 'tile_flowers',
   [TILE_TYPES.BRIDGE]: 'tile_bridge',
-};
-
-const ROOF_COLORS: Record<string, { main: number; highlight: number; shadow: number }> = {
-  // Fallbacks by type
-  house: { main: 0x8b4513, highlight: 0xa05828, shadow: 0x6b3010 },
-  cafe: { main: 0xb85c3a, highlight: 0xd07050, shadow: 0x984828 },
-  shop: { main: 0x2e5a8b, highlight: 0x4070a0, shadow: 0x1e4070 },
-  // Per-building unique colors (keyed by label)
-  church: { main: 0x6b4e8a, highlight: 0x8060a0, shadow: 0x4a3568 },
-  school: { main: 0x2e6e8b, highlight: 0x4088a8, shadow: 0x1e5068 },
-  bakery: { main: 0xc4883a, highlight: 0xd8a050, shadow: 0xa06828 },
-  workshop: { main: 0x5a7a5a, highlight: 0x709070, shadow: 0x405a40 },
-  market: { main: 0x3a8b6b, highlight: 0x50a880, shadow: 0x2a6850 },
-  clinic: { main: 0xc85050, highlight: 0xe06868, shadow: 0xa83838 },
-  'town hall': { main: 0x8a7a4a, highlight: 0xa89058, shadow: 0x6a5a30 },
-  tavern: { main: 0x7a3a2a, highlight: 0x984a38, shadow: 0x5a2818 },
+  [TILE_TYPES.FLOOR_DARK]: 'tile_floor_dark',
 };
 
 export class VillageScene extends Phaser.Scene {
@@ -54,7 +40,9 @@ export class VillageScene extends Phaser.Scene {
 
   create(): void {
     this.drawTileMap();
-    this.drawBuildingRoofs();
+    this.drawBuildingShadows();
+    this.drawBuildingLabels();
+    this.placeFurniture();
     this.placeTrees();
     this.placeDecorations();
 
@@ -124,14 +112,47 @@ export class VillageScene extends Phaser.Scene {
 
   // ── Tilemap ───────────────────────────────────────────────
   private drawTileMap(): void {
+    // Pre-compute which building index each tile belongs to (for floor tinting)
+    const tileBuilding: (number | -1)[][] = Array.from({ length: MAP_HEIGHT }, () =>
+      Array(MAP_WIDTH).fill(-1)
+    );
+    for (let bi = 0; bi < BUILDINGS.length; bi++) {
+      const b = BUILDINGS[bi];
+      for (let by = b.y; by < b.y + b.h; by++) {
+        for (let bx = b.x; bx < b.x + b.w; bx++) {
+          if (by >= 0 && by < MAP_HEIGHT && bx >= 0 && bx < MAP_WIDTH) {
+            tileBuilding[by][bx] = bi;
+          }
+        }
+      }
+    }
+
     for (let y = 0; y < MAP_HEIGHT; y++) {
       for (let x = 0; x < MAP_WIDTH; x++) {
         const tileType = TILE_MAP[y]?.[x] ?? TILE_TYPES.GRASS;
-        // Check for variant textures
-        const variant = (x * 7 + y * 13) % 3;
-        const baseTex = TILE_TEXTURE_MAP[tileType] ?? 'tile_grass';
-        const variantTex = `${baseTex}_${variant}`;
-        const texKey = this.textures.exists(variantTex) ? variantTex : baseTex;
+
+        // Per-building floor color variant: buildingIndex % 3
+        // variant 0 = default texture, 1 = _b1, 2 = _b2
+        let texKey: string;
+        if (
+          (tileType === TILE_TYPES.FLOOR || tileType === TILE_TYPES.FLOOR_DARK) &&
+          tileBuilding[y][x] >= 0
+        ) {
+          const bVariant = tileBuilding[y][x] % 3;
+          const baseTex = TILE_TEXTURE_MAP[tileType] ?? 'tile_grass';
+          if (bVariant === 0) {
+            texKey = baseTex;
+          } else {
+            const candidateTex = `${baseTex}_b${bVariant}`;
+            texKey = this.textures.exists(candidateTex) ? candidateTex : baseTex;
+          }
+        } else {
+          // Non-floor tiles: use standard variant system
+          const variant = (x * 7 + y * 13) % 3;
+          const baseTex = TILE_TEXTURE_MAP[tileType] ?? 'tile_grass';
+          const variantTex = `${baseTex}_${variant}`;
+          texKey = this.textures.exists(variantTex) ? variantTex : baseTex;
+        }
 
         this.add
           .image(
@@ -144,65 +165,126 @@ export class VillageScene extends Phaser.Scene {
     }
   }
 
-  // ── Building roofs (drawn with Graphics) ──────────────────
-  private drawBuildingRoofs(): void {
-    for (const building of BUILDINGS) {
-      // Use per-building label for unique color, fall back to type
-      const labelKey = building.label?.toLowerCase() ?? '';
-      const colors = ROOF_COLORS[labelKey] ?? ROOF_COLORS[building.type] ?? ROOF_COLORS.house;
-      const roofG = this.add.graphics();
+  // ── 2.5D wall depth: front face + side face + ground shadows ──
+  private drawBuildingShadows(): void {
+    const g = this.add.graphics();
+    g.setDepth(1); // above floor, below furniture
 
-      const rx = building.x * TILE_SIZE;
-      const ry = building.y * TILE_SIZE - 10;
-      const rw = building.w * TILE_SIZE;
-      const rh = 12;
-      const overhang = 3;
+    const FRONT_H = 12; // south-facing front face height (px)
+    const SIDE_W = 8;   // east-facing side face width (px)
+    const FRONT_COLOR = 0x4a4846;  // dark warm gray (south face)
+    const SIDE_COLOR = 0x5a5854;   // slightly lighter (east face)
 
-      // Roof shadow
-      roofG.fillStyle(0x000000, 0.2);
-      roofG.fillRect(rx - overhang + 1, ry + 1, rw + overhang * 2, rh);
+    for (let y = 0; y < MAP_HEIGHT; y++) {
+      for (let x = 0; x < MAP_WIDTH; x++) {
+        const tile = TILE_MAP[y]?.[x];
+        if (tile !== TILE_TYPES.WALL) continue;
 
-      // Main roof body
-      roofG.fillStyle(colors.main);
-      roofG.fillRect(rx - overhang, ry, rw + overhang * 2, rh);
+        const below = TILE_MAP[y + 1]?.[x];
+        const right = TILE_MAP[y]?.[x + 1];
 
-      // Highlight strip (top edge)
-      roofG.fillStyle(colors.highlight);
-      roofG.fillRect(rx - overhang, ry, rw + overhang * 2, 3);
+        // East side face: darker strip on right edge of wall tile
+        if (right !== undefined && right !== TILE_TYPES.WALL) {
+          g.fillStyle(SIDE_COLOR, 1);
+          g.fillRect(
+            (x + 1) * TILE_SIZE - SIDE_W,
+            y * TILE_SIZE,
+            SIDE_W,
+            TILE_SIZE
+          );
+          // Thin shadow to the right
+          g.fillStyle(0x000000, 0.15);
+          g.fillRect(
+            (x + 1) * TILE_SIZE,
+            y * TILE_SIZE,
+            3,
+            TILE_SIZE
+          );
+        }
 
-      // Shadow strip (bottom edge)
-      roofG.fillStyle(colors.shadow);
-      roofG.fillRect(rx - overhang, ry + rh - 2, rw + overhang * 2, 2);
-
-      // Vertical tile lines
-      roofG.lineStyle(1, colors.shadow, 0.3);
-      for (let lx = rx; lx < rx + rw; lx += 5) {
-        roofG.lineBetween(lx, ry + 3, lx, ry + rh - 2);
-      }
-
-      // Ridge cap (horizontal line at peak)
-      roofG.fillStyle(colors.highlight);
-      roofG.fillRect(rx - overhang, ry, rw + overhang * 2, 1);
-
-      roofG.setDepth(building.y + 5);
-
-      // Building label
-      if (building.label) {
-        const label = this.add.text(
-          rx + rw / 2,
-          ry - 4,
-          building.label,
-          {
-            fontSize: '8px',
-            fontFamily: '"Press Start 2P", monospace',
-            color: '#ffffff',
-            stroke: '#000000',
-            strokeThickness: 3,
-            resolution: 2,
+        // South front face: darker strip on bottom edge of wall tile
+        // (drawn after east so south wins at corners)
+        if (below !== undefined && below !== TILE_TYPES.WALL) {
+          // Front face gradient: lighter at top, darker at bottom
+          const fr = (FRONT_COLOR >> 16) & 0xff;
+          const fg = (FRONT_COLOR >> 8) & 0xff;
+          const fb = FRONT_COLOR & 0xff;
+          for (let fy = 0; fy < FRONT_H; fy++) {
+            const py = (y + 1) * TILE_SIZE - FRONT_H + fy;
+            const shade = 1 - (fy / FRONT_H) * 0.15; // darken toward bottom
+            const c = (Math.round(fr * shade) << 16) | (Math.round(fg * shade) << 8) | Math.round(fb * shade);
+            g.fillStyle(c, 1);
+            g.fillRect(x * TILE_SIZE, py, TILE_SIZE, 1);
           }
-        );
-        label.setOrigin(0.5, 1);
-        label.setDepth(2000);
+          // Ground shadow below wall
+          g.fillStyle(0x000000, 0.25);
+          g.fillRect(
+            x * TILE_SIZE,
+            (y + 1) * TILE_SIZE,
+            TILE_SIZE,
+            5
+          );
+        }
+      }
+    }
+  }
+
+  // ── Building labels (12px, dark background panel, centered) ──
+  private drawBuildingLabels(): void {
+    for (const building of BUILDINGS) {
+      if (!building.label) continue;
+      const cx = (building.x + building.w / 2) * TILE_SIZE;
+      const cy = (building.y + building.h / 2) * TILE_SIZE;
+
+      // Create label text first to measure it
+      const label = this.add.text(cx, cy, building.label, {
+        fontSize: '12px',
+        fontFamily: '"Press Start 2P", monospace',
+        color: '#ffffff',
+        resolution: 2,
+      });
+      label.setOrigin(0.5, 0.5);
+      label.setDepth(2001);
+
+      // Semi-transparent dark background panel
+      const pad = 6;
+      const bg = this.add.rectangle(
+        cx, cy,
+        label.width + pad * 2,
+        label.height + pad * 2,
+        0x000000, 0.55
+      );
+      bg.setOrigin(0.5, 0.5);
+      bg.setDepth(2000);
+    }
+  }
+
+  // ── Furniture ───────────────────────────────────────────
+  private placeFurniture(): void {
+    const BUILDING_TINTS: Record<string, number> = {
+      'Church': 0xffe8c0, 'School': 0xe0e8f0, 'Cafe': 0xfff0d0,
+      'Bakery': 0xffe0b0, 'Town Hall': 0xf0e8e0, 'Workshop': 0xd8d0c8,
+      'Clinic': 0xf0f5ff, 'Tavern': 0xffd8a0, 'Market': 0xf8f0e0,
+    };
+
+    for (const item of FURNITURE) {
+      const texKey = `furn_${item.type}`;
+      if (!this.textures.exists(texKey)) continue;
+      const img = this.add.image(
+        item.x * TILE_SIZE + TILE_SIZE / 2,
+        item.y * TILE_SIZE + TILE_SIZE / 2,
+        texKey
+      );
+      img.setOrigin(0.5, 0.5);
+      img.setDepth(item.y + 1);
+
+      // Per-building tint
+      for (const b of BUILDINGS) {
+        if (item.x >= b.x && item.x < b.x + b.w && item.y >= b.y && item.y < b.y + b.h && b.label) {
+          const tint = BUILDING_TINTS[b.label];
+          if (tint) img.setTint(tint);
+          break;
+        }
       }
     }
   }
