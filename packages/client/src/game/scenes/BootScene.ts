@@ -56,8 +56,8 @@ function rgb(c: number): [number, number, number] {
 const GRASS_COLORS = [0x2d5a1e, 0x357024, 0x3a7a2a, 0x4a8c38, 0x3e8030, 0x468a34];
 const GRASS_HIGHLIGHT = 0x5ca048;
 const GRASS_DARK = 0x1e4416;
-const PATH_STONES = [0x8b8682, 0x9a9694, 0xa09c98, 0x7a7672, 0x929090];
-const PATH_MORTAR = 0x6b6560;
+const PATH_STONES = [0x9b7b5e, 0xa8876a, 0xb09070, 0x8a7058, 0x9c8264];
+const PATH_MORTAR = 0x7a6044;
 const WATER_DEEP = 0x1a4b7c;
 const WATER_MID = 0x2a6ba8;
 const WATER_LIGHT = 0x3a7bc8;
@@ -74,7 +74,7 @@ const FLOOR_KNOT = 0x5a4020;
 const WALL_STONE1 = 0x6b6b6b;
 const WALL_STONE2 = 0x7a7a7a;
 const WALL_STONE3 = 0x858585;
-const WALL_MORTAR = 0x555555;
+const WALL_MORTAR = 0x706e68;
 const WALL_SHADOW = 0x4a4a4a;
 const FOREST_BASE = 0x1a3a12;
 const FOREST_DARK = 0x142e0e;
@@ -229,6 +229,7 @@ export class BootScene extends Phaser.Scene {
     this.generateTileTextures();
     this.generateTreeTextures();
     this.generateDecorationTextures();
+    this.generateFurnitureTextures();
     this.generateAgentTextures();
     this.generateUITextures();
     this.scene.start('VillageScene');
@@ -243,6 +244,9 @@ export class BootScene extends Phaser.Scene {
     this.generateWaterTile();
     this.generateSandTile();
     this.generateFloorTile();
+    this.generateFloorVariants();
+    this.generateFloorDarkTile();
+    this.generateFloorDarkVariants();
     this.generateWallTile();
     this.generateForestFloorTile();
     this.generateFlowerTile();
@@ -488,47 +492,176 @@ export class BootScene extends Phaser.Scene {
     g.destroy();
   }
 
-  // ── Wall (stone blocks) ───────────────────────────────────
+  // ── Floor Variants (per-building wood tones) ───────────────
+  private generateFloorVariants(): void {
+    const tones = [
+      { base: 0x7a6b5e, dark: 0x5a4a3e, light: 0x8a7b6e, knot: 0x4a3a2e, seed: 5551 }, // cool ash
+      { base: 0x8b5f48, dark: 0x6b3f28, light: 0x9b7f68, knot: 0x5b2f18, seed: 5552 }, // reddish cedar
+    ];
+    for (let v = 0; v < tones.length; v++) {
+      const t = tones[v];
+      const g = this.add.graphics();
+      const rng = seeded(t.seed);
+      const plankHeights = [5, 6, 5, 6, 5, 5];
+      let py = 0;
+      for (let p = 0; p < plankHeights.length && py < T; p++) {
+        const ph = plankHeights[p];
+        for (let y = 0; y < ph && py + y < T; y++) {
+          for (let x = 0; x < T; x++) {
+            let color = t.base;
+            const grain = Math.sin(x * 1.5 + (py + y) * 0.3 + p * 20) * 0.15;
+            color = grain > 0 ? lighten(color, grain) : darken(color, -grain);
+            if (y === 0) color = t.dark;
+            if (p % 2 === 0) color = darken(color, 0.05);
+            px(g, x, py + y, color);
+          }
+        }
+        py += ph;
+      }
+      for (let i = 0; i < 2; i++) {
+        const kx = Math.floor(rng() * 26) + 3;
+        const ky = Math.floor(rng() * 26) + 3;
+        px(g, kx, ky, t.knot);
+        px(g, kx + 1, ky, darken(t.knot, 0.1));
+        px(g, kx, ky + 1, lighten(t.knot, 0.1));
+      }
+      for (let i = 0; i < 3; i++) {
+        const nx = Math.floor(rng() * 28) + 2;
+        const ny = Math.floor(rng() * 28) + 2;
+        px(g, nx, ny, 0x444444);
+      }
+      g.generateTexture(`tile_floor_b${v + 1}`, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Floor Dark (darker stone/tile for select rooms) ──────
+  private generateFloorDarkTile(): void {
+    const g = this.add.graphics();
+    const rng = seeded(556);
+
+    const DARK_BASE = 0x5a5060;
+    const DARK_LIGHT = 0x6a6070;
+    const DARK_SHADOW = 0x4a4050;
+    const DARK_GROUT = 0x3a3040;
+
+    // Draw stone tile grid (8x8 tiles within the 32x32 texture)
+    const tileSize = 8;
+    for (let ty = 0; ty < T; ty += tileSize) {
+      for (let tx = 0; tx < T; tx += tileSize) {
+        // Grout lines
+        for (let x = tx; x < tx + tileSize && x < T; x++) {
+          if (ty < T) px(g, x, ty, DARK_GROUT);
+        }
+        for (let y = ty; y < ty + tileSize && y < T; y++) {
+          if (tx < T) px(g, tx, y, DARK_GROUT);
+        }
+        // Fill tile interior
+        for (let y = ty + 1; y < ty + tileSize - 0 && y < T; y++) {
+          for (let x = tx + 1; x < tx + tileSize - 0 && x < T; x++) {
+            let c = DARK_BASE;
+            if (rng() < 0.15) c = DARK_LIGHT;
+            else if (rng() < 0.1) c = DARK_SHADOW;
+            // Subtle top-left highlight
+            if (y === ty + 1) c = lighten(c, 0.08);
+            if (x === tx + 1) c = lighten(c, 0.04);
+            px(g, x, y, c);
+          }
+        }
+      }
+    }
+
+    // A few scuff marks
+    for (let i = 0; i < 3; i++) {
+      const sx = Math.floor(rng() * 26) + 3;
+      const sy = Math.floor(rng() * 26) + 3;
+      px(g, sx, sy, darken(DARK_BASE, 0.15));
+      px(g, sx + 1, sy, darken(DARK_BASE, 0.12));
+    }
+
+    g.generateTexture('tile_floor_dark', T, T);
+    g.destroy();
+  }
+
+  // ── Floor Dark Variants (per-building stone tones) ─────────
+  private generateFloorDarkVariants(): void {
+    const tones = [
+      { base: 0x505a68, light: 0x606a78, shadow: 0x404a58, grout: 0x303a48, seed: 5561 }, // blue-gray
+      { base: 0x605850, light: 0x706860, shadow: 0x504840, grout: 0x403830, seed: 5562 }, // warm-gray
+    ];
+    for (let v = 0; v < tones.length; v++) {
+      const t = tones[v];
+      const g = this.add.graphics();
+      const rng = seeded(t.seed);
+      const tileSize = 8;
+      for (let ty = 0; ty < T; ty += tileSize) {
+        for (let tx = 0; tx < T; tx += tileSize) {
+          for (let x = tx; x < tx + tileSize && x < T; x++) {
+            if (ty < T) px(g, x, ty, t.grout);
+          }
+          for (let y = ty; y < ty + tileSize && y < T; y++) {
+            if (tx < T) px(g, tx, y, t.grout);
+          }
+          for (let y = ty + 1; y < ty + tileSize && y < T; y++) {
+            for (let x = tx + 1; x < tx + tileSize && x < T; x++) {
+              let c = t.base;
+              if (rng() < 0.15) c = t.light;
+              else if (rng() < 0.1) c = t.shadow;
+              if (y === ty + 1) c = lighten(c, 0.08);
+              if (x === tx + 1) c = lighten(c, 0.04);
+              px(g, x, y, c);
+            }
+          }
+        }
+      }
+      for (let i = 0; i < 3; i++) {
+        const sx = Math.floor(rng() * 26) + 3;
+        const sy = Math.floor(rng() * 26) + 3;
+        px(g, sx, sy, darken(t.base, 0.15));
+        px(g, sx + 1, sy, darken(t.base, 0.12));
+      }
+      g.generateTexture(`tile_floor_dark_b${v + 1}`, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Wall top face (smooth stone cap viewed from above — 2.5D) ──
   private generateWallTile(): void {
     const g = this.add.graphics();
     const rng = seeded(777);
 
-    // Mortar base
-    rect(g, 0, 0, T, T, WALL_MORTAR);
+    // Top face of wall: lighter warm stone, subtle block grid
+    const TOP_BASE = 0x8a8884;
+    const TOP_LIGHT = 0x969290;
+    const TOP_DARK = 0x7e7c78;
 
-    // Stone blocks in staggered rows
-    const blockH = 6;
-    let wy = 0;
-    let row = 0;
-    while (wy < T) {
-      let wx = row % 2 === 0 ? 0 : -5;
-      while (wx < T) {
-        const bw = 8 + Math.floor(rng() * 4); // 8-11px wide
-        const stoneColors = [WALL_STONE1, WALL_STONE2, WALL_STONE3];
-        const baseColor = stoneColors[Math.floor(rng() * stoneColors.length)];
-
-        for (let sy = 0; sy < blockH - 1; sy++) {
-          for (let sx = 0; sx < bw - 1; sx++) {
-            const rx = wx + sx;
-            const ry = wy + sy;
-            if (rx >= 0 && rx < T && ry >= 0 && ry < T) {
-              let c = baseColor;
-              // Top-left highlight
-              if (sy === 0) c = lighten(c, 0.12);
-              if (sx === 0 && sy > 0) c = lighten(c, 0.06);
-              // Bottom-right shadow
-              if (sy === blockH - 2) c = darken(c, 0.1);
-              if (sx === bw - 2) c = darken(c, 0.06);
-              // Surface texture noise
-              if (rng() > 0.85) c = darken(c, 0.08);
-              px(g, rx, ry, c);
-            }
-          }
-        }
-        wx += bw + 1;
+    // Smooth fill with subtle grain
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        let c = TOP_BASE;
+        const r = rng();
+        if (r < 0.15) c = TOP_LIGHT;
+        else if (r < 0.28) c = TOP_DARK;
+        // Edge highlight (north/west edges lighter — light from top-left)
+        if (y < 2) c = lighten(c, 0.10);
+        if (x < 2) c = lighten(c, 0.06);
+        if (y >= T - 2) c = darken(c, 0.06);
+        if (x >= T - 2) c = darken(c, 0.04);
+        px(g, x, y, c);
       }
-      wy += blockH;
-      row++;
+    }
+
+    // Faint block grid lines (barely visible — suggests stone slabs)
+    for (let by = 0; by < T; by += 8) {
+      for (let x = 0; x < T; x++) {
+        if (rng() > 0.25) px(g, x, by, darken(TOP_BASE, 0.10));
+      }
+    }
+    for (let bx = 0; bx < T; bx += 10) {
+      const off = (Math.floor(bx / 10) % 2) * 4; // stagger
+      for (let y = 0; y < T; y++) {
+        if (rng() > 0.35) px(g, bx + off < T ? bx + off : bx, y, darken(TOP_BASE, 0.08));
+      }
     }
 
     g.generateTexture('tile_wall', T, T);
@@ -1218,6 +1351,926 @@ export class BootScene extends Phaser.Scene {
     }
 
     g.generateTexture(key, S, S);
+    g.destroy();
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // FURNITURE TEXTURES (32x32)
+  // ═══════════════════════════════════════════════════════════
+  private generateFurnitureTextures(): void {
+    this.generateFurnTable();
+    this.generateFurnChair();
+    this.generateFurnCounter();
+    this.generateFurnBookshelf();
+    this.generateFurnBed();
+    this.generateFurnOven();
+    this.generateFurnWorkbench();
+    this.generateFurnBarrel();
+    this.generateFurnAltar();
+    this.generateFurnDesk();
+    this.generateFurnPew();
+    this.generateFurnBlackboard();
+    this.generateFurnAnvil();
+    this.generateFurnFireplace();
+    this.generateFurnCrate();
+  }
+
+  private generateFurnTable(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3001);
+    const wood = 0x7a5c3a;
+    const woodDark = darken(wood, 0.2);
+    const woodLight = lighten(wood, 0.12);
+
+    // Table surface (top-down rectangle with rounded corners)
+    for (let y = 4; y < 28; y++) {
+      for (let x = 3; x < 29; x++) {
+        if ((y === 4 || y === 27) && (x <= 4 || x >= 27)) continue;
+        let c = wood;
+        const grain = Math.sin(x * 0.6 + y * 0.15) * 0.08;
+        c = grain > 0 ? lighten(c, grain) : darken(c, -grain);
+        if (y === 4 || y === 5) c = woodLight;
+        if (y >= 26) c = woodDark;
+        if (x === 3 || x === 4) c = lighten(c, 0.05);
+        if (x >= 27) c = woodDark;
+        if (rng() > 0.88) c = darken(c, 0.08);
+        px(g, x, y, c);
+      }
+    }
+
+    // Table legs at corners
+    for (const [lx, ly] of [[5, 6], [26, 6], [5, 25], [26, 25]]) {
+      px(g, lx, ly, darken(wood, 0.3));
+      px(g, lx + 1, ly, darken(wood, 0.28));
+      px(g, lx, ly + 1, darken(wood, 0.28));
+    }
+
+    // Wood grain knots
+    px(g, 13, 14, darken(wood, 0.15));
+    px(g, 14, 14, darken(wood, 0.12));
+    px(g, 14, 15, darken(wood, 0.1));
+    px(g, 15, 15, darken(wood, 0.08));
+    px(g, 20, 20, darken(wood, 0.13));
+    px(g, 21, 20, darken(wood, 0.1));
+
+    g.generateTexture('furn_table', S, S);
+    g.destroy();
+  }
+
+  private generateFurnChair(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const wood = 0x6a4c2a;
+    const woodDark = darken(wood, 0.2);
+    const woodLight = lighten(wood, 0.12);
+
+    // Seat (top-down square)
+    for (let y = 14; y < 26; y++) {
+      for (let x = 10; x < 22; x++) {
+        let c = wood;
+        if (y === 14) c = woodLight;
+        if (y === 25) c = woodDark;
+        if (x === 10) c = lighten(c, 0.05);
+        if (x === 21) c = darken(c, 0.08);
+        px(g, x, y, c);
+      }
+    }
+
+    // Backrest (strip above seat)
+    for (let x = 10; x < 22; x++) {
+      for (let y = 8; y < 13; y++) {
+        let c = lighten(wood, 0.06);
+        if (x === 10 || x === 21) c = woodDark;
+        if (y === 12) c = darken(wood, 0.1);
+        px(g, x, y, c);
+      }
+    }
+
+    // Chair legs at corners
+    for (const [lx, ly] of [[10, 14], [21, 14], [10, 25], [21, 25]]) {
+      px(g, lx, ly, woodDark);
+      px(g, lx + 1, ly, darken(wood, 0.25));
+    }
+
+    // Backrest supports
+    for (let y = 8; y < 13; y++) {
+      px(g, 10, y, darken(wood, 0.25));
+      px(g, 21, y, darken(wood, 0.25));
+    }
+
+    g.generateTexture('furn_chair', S, S);
+    g.destroy();
+  }
+
+  private generateFurnCounter(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3003);
+    const top = 0x8b6b4a;
+    const front = 0x5a4020;
+
+    // Counter top surface
+    for (let y = 6; y < 18; y++) {
+      for (let x = 2; x < 30; x++) {
+        let c = top;
+        const grain = Math.sin(x * 0.45 + y * 0.1) * 0.07;
+        c = grain > 0 ? lighten(c, grain) : darken(c, -grain);
+        if (y === 6 || y === 7) c = lighten(top, 0.12);
+        if (y === 17) c = front;
+        if (x <= 3) c = lighten(c, 0.06);
+        if (x >= 28) c = darken(c, 0.08);
+        if (rng() > 0.9) c = darken(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // Front face
+    for (let y = 18; y < 28; y++) {
+      for (let x = 2; x < 30; x++) {
+        let c = front;
+        if (y === 18 || y === 19) c = darken(front, 0.15);
+        if (y >= 26) c = darken(front, 0.1);
+        if (x === 10 || x === 20) c = darken(front, 0.2);
+        if (rng() > 0.92) c = lighten(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // Edge lip shadow
+    for (let x = 2; x < 30; x++) px(g, x, 18, darken(front, 0.2));
+
+    g.generateTexture('furn_counter', S, S);
+    g.destroy();
+  }
+
+  private generateFurnBookshelf(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3004);
+    const frame = 0x5a3a1a;
+    const frameDark = darken(frame, 0.2);
+    const shelfPlank = 0x6a4a2a;
+
+    // Outer frame
+    for (let y = 2; y < 30; y++) {
+      px(g, 3, y, frame); px(g, 4, y, frame);
+      px(g, 27, y, frameDark); px(g, 28, y, frameDark);
+    }
+    for (let x = 3; x < 29; x++) {
+      px(g, x, 2, lighten(frame, 0.1)); px(g, x, 3, lighten(frame, 0.08));
+      px(g, x, 28, frameDark); px(g, x, 29, frameDark);
+    }
+
+    // Shelf planks (4 shelves)
+    for (const sy of [8, 14, 20, 25]) {
+      for (let x = 5; x < 27; x++) {
+        px(g, x, sy, shelfPlank);
+        px(g, x, sy + 1, darken(shelfPlank, 0.1));
+      }
+    }
+
+    // Books on shelves
+    const bookColors = [0xc03030, 0x3050b0, 0x2a8a40, 0xb08020, 0x8040a0, 0x206080, 0xa05030, 0x508040];
+    const rows = [
+      { y1: 4, y2: 7 },
+      { y1: 10, y2: 13 },
+      { y1: 16, y2: 19 },
+      { y1: 22, y2: 24 },
+      { y1: 27, y2: 28 },
+    ];
+
+    for (const row of rows) {
+      let bx = 5;
+      while (bx < 27) {
+        const bw = 1 + Math.floor(rng() * 3);
+        const bc = bookColors[Math.floor(rng() * bookColors.length)];
+        for (let by = row.y1; by <= row.y2; by++) {
+          for (let dx = 0; dx < bw && bx + dx < 27; dx++) {
+            let c = bc;
+            if (dx === 0 && bw > 1) c = darken(bc, 0.1);
+            if (by === row.y1) c = lighten(c, 0.08);
+            px(g, bx + dx, by, c);
+          }
+        }
+        bx += bw + (rng() > 0.7 ? 1 : 0);
+      }
+    }
+
+    g.generateTexture('furn_bookshelf', S, S);
+    g.destroy();
+  }
+
+  private generateFurnBed(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const frame = 0x6a4c2a;
+    const frameDark = darken(frame, 0.2);
+    const pillow = 0xe8e8e8;
+    const pillowShadow = darken(pillow, 0.12);
+    const blanket = 0x4060a0;
+    const blanketLight = lighten(blanket, 0.15);
+    const blanketDark = darken(blanket, 0.15);
+
+    // Bed frame outline
+    for (let y = 3; y < 29; y++) {
+      px(g, 3, y, frame); px(g, 4, y, frame);
+      px(g, 27, y, frameDark); px(g, 28, y, frameDark);
+    }
+    for (let x = 3; x < 29; x++) {
+      px(g, x, 3, lighten(frame, 0.1)); px(g, x, 4, lighten(frame, 0.08));
+      px(g, x, 27, frameDark); px(g, x, 28, frameDark);
+    }
+
+    // Headboard
+    for (let x = 5; x < 27; x++) {
+      px(g, x, 3, lighten(frame, 0.15));
+      px(g, x, 4, lighten(frame, 0.12));
+      px(g, x, 5, frame);
+      px(g, x, 6, darken(frame, 0.05));
+    }
+
+    // Pillow
+    for (let y = 7; y < 11; y++) {
+      for (let x = 7; x < 25; x++) {
+        let c = pillow;
+        if (x <= 8 || x >= 23) c = pillowShadow;
+        if (x === 15 || x === 16) c = pillowShadow;
+        if (y === 7) c = lighten(c, 0.05);
+        px(g, x, y, c);
+      }
+    }
+
+    // Blanket
+    for (let y = 11; y < 27; y++) {
+      for (let x = 5; x < 27; x++) {
+        let c = blanket;
+        if (y <= 12) c = blanketLight;
+        if (y === 13) c = lighten(blanket, 0.08);
+        if (y >= 24) c = blanketDark;
+        if (x <= 6) c = darken(c, 0.08);
+        if (x >= 25) c = darken(c, 0.1);
+        if (y <= 12 && x >= 9 && x <= 22) c = lighten(blanket, 0.2);
+        px(g, x, y, c);
+      }
+    }
+
+    // Frame posts
+    px(g, 3, 3, lighten(frame, 0.2)); px(g, 4, 3, lighten(frame, 0.18));
+    px(g, 27, 3, lighten(frame, 0.1)); px(g, 28, 3, lighten(frame, 0.08));
+    px(g, 3, 28, darken(frame, 0.1)); px(g, 28, 28, darken(frame, 0.25));
+
+    g.generateTexture('furn_bed', S, S);
+    g.destroy();
+  }
+
+  private generateFurnOven(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3006);
+    const stone = 0x6b6b6b;
+    const stoneDark = darken(stone, 0.2);
+    const stoneLight = lighten(stone, 0.12);
+    const fire = 0xf08030;
+    const fireGlow = 0xf0a050;
+    const fireBright = 0xf8c060;
+
+    // Oven body
+    for (let y = 5; y < 28; y++) {
+      for (let x = 5; x < 27; x++) {
+        let c = stone;
+        if (y <= 6) c = stoneLight;
+        if (y === 7) c = lighten(stone, 0.06);
+        if (y >= 26) c = stoneDark;
+        if (x <= 6) c = lighten(c, 0.05);
+        if (x >= 25) c = darken(c, 0.08);
+        if (rng() > 0.85) c = darken(c, 0.08);
+        if (rng() > 0.92) c = lighten(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // Oven opening
+    for (let y = 13; y < 24; y++) {
+      for (let x = 9; x < 23; x++) {
+        let c = 0x1a1010;
+        if (y >= 18) {
+          const intensity = rng();
+          if (intensity > 0.5) c = fire;
+          if (intensity > 0.7) c = fireGlow;
+          if (intensity > 0.85) c = fireBright;
+        }
+        if (y === 13 || y === 14) c = blend(0x1a1010, fire, 0.25);
+        if (y === 15 || y === 16) c = blend(0x1a1010, fire, 0.15);
+        px(g, x, y, c);
+      }
+    }
+
+    // Opening border (stone arch)
+    for (let x = 9; x < 23; x++) {
+      px(g, x, 11, stoneDark); px(g, x, 12, stoneDark);
+    }
+    for (let y = 13; y < 24; y++) {
+      px(g, 7, y, stoneDark); px(g, 8, y, stoneDark);
+      px(g, 23, y, stoneDark); px(g, 24, y, stoneDark);
+    }
+
+    // Chimney hint
+    rect(g, 14, 1, 4, 4, stone);
+    rect(g, 14, 3, 4, 2, stoneDark);
+    // Smoke
+    px(g, 15, 0, blend(stone, 0xaaaaaa, 0.5));
+    px(g, 16, 0, blend(stone, 0xaaaaaa, 0.3));
+
+    g.generateTexture('furn_oven', S, S);
+    g.destroy();
+  }
+
+  private generateFurnWorkbench(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3007);
+    const wood = 0x5a3a1a;
+    const woodLight = lighten(wood, 0.15);
+    const woodDark = darken(wood, 0.15);
+    const metal = 0x888888;
+    const metalDark = darken(metal, 0.2);
+
+    // Heavy workbench top
+    for (let y = 7; y < 19; y++) {
+      for (let x = 2; x < 30; x++) {
+        let c = wood;
+        const grain = Math.sin(x * 0.35 + y * 0.2) * 0.1;
+        c = grain > 0 ? lighten(c, grain) : darken(c, -grain);
+        if (y <= 8) c = woodLight;
+        if (y >= 17) c = woodDark;
+        if (x <= 3) c = lighten(c, 0.06);
+        if (x >= 28) c = darken(c, 0.08);
+        if (rng() > 0.9) c = lighten(c, 0.1);
+        px(g, x, y, c);
+      }
+    }
+
+    // Legs
+    for (let y = 19; y < 28; y++) {
+      rect(g, 4, y, 3, 1, woodDark);
+      rect(g, 25, y, 3, 1, woodDark);
+    }
+
+    // Cross brace
+    for (let x = 7; x < 25; x++) px(g, x, 24, darken(wood, 0.25));
+
+    // Hammer on surface
+    for (let x = 6; x < 13; x++) px(g, x, 12, 0x6a4a2a);
+    rect(g, 13, 10, 3, 4, metal);
+    rect(g, 14, 11, 2, 3, metalDark);
+
+    // Wrench
+    px(g, 20, 13, metal); px(g, 21, 13, metal); px(g, 22, 13, metal);
+    px(g, 23, 14, metalDark); px(g, 24, 14, metalDark);
+
+    // Scratch marks
+    px(g, 9, 9, lighten(wood, 0.2));
+    px(g, 10, 9, lighten(wood, 0.18));
+    px(g, 18, 10, lighten(wood, 0.15));
+
+    g.generateTexture('furn_workbench', S, S);
+    g.destroy();
+  }
+
+  private generateFurnBarrel(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3008);
+    const wood = 0x7a5c3a;
+    const woodDark = darken(wood, 0.15);
+    const band = 0x4a4a4a;
+    const bandLight = lighten(band, 0.15);
+
+    const cx = 15.5;
+    const cy = 15.5;
+    const radius = 11.5;
+
+    for (let y = 0; y < S; y++) {
+      for (let x = 0; x < S; x++) {
+        const dx = x - cx;
+        const dy = y - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > radius + 0.5) continue;
+
+        // Outer band
+        if (dist > radius - 1.5) {
+          let c = band;
+          if (dx < 0 && dy < 0) c = bandLight;
+          px(g, x, y, c);
+          continue;
+        }
+
+        // Inner band
+        if (dist > 6.5 && dist < 8.0) {
+          let c = band;
+          if (dx < 0 && dy < 0) c = bandLight;
+          px(g, x, y, c);
+          continue;
+        }
+
+        const angle = Math.atan2(dy, dx);
+        const staveIdx = Math.floor((angle + Math.PI) / (Math.PI / 5));
+        let c = staveIdx % 2 === 0 ? wood : woodDark;
+
+        if (dist < 3.5) c = lighten(c, 0.12);
+        else if (dist < 7) c = lighten(c, 0.05);
+
+        if (rng() > 0.88) c = darken(c, 0.08);
+        px(g, x, y, c);
+      }
+    }
+
+    // Center bung
+    rect(g, 14, 14, 4, 4, darken(wood, 0.3));
+    px(g, 15, 15, darken(wood, 0.35));
+    px(g, 16, 15, darken(wood, 0.35));
+
+    g.generateTexture('furn_barrel', S, S);
+    g.destroy();
+  }
+
+  private generateFurnAltar(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3009);
+    const stone = 0x9a9a9a;
+    const stoneDark = darken(stone, 0.15);
+    const stoneLight = lighten(stone, 0.1);
+    const gold = 0xd4a040;
+    const goldBright = lighten(gold, 0.2);
+    const goldDark = darken(gold, 0.2);
+
+    // Stone slab base
+    for (let y = 7; y < 26; y++) {
+      for (let x = 3; x < 29; x++) {
+        let c = stone;
+        if (y <= 8) c = stoneLight;
+        if (y === 9) c = lighten(stone, 0.05);
+        if (y >= 24) c = stoneDark;
+        if (x <= 4) c = lighten(c, 0.05);
+        if (x >= 27) c = darken(c, 0.08);
+        if (rng() > 0.87) c = darken(c, 0.06);
+        if (rng() > 0.93) c = lighten(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // Step below
+    for (let x = 2; x < 30; x++) {
+      px(g, x, 26, darken(stone, 0.2));
+      px(g, x, 27, darken(stone, 0.25));
+      px(g, x, 28, darken(stone, 0.3));
+    }
+
+    // Golden cloth
+    for (let y = 9; y < 20; y++) {
+      for (let x = 7; x < 25; x++) {
+        let c = gold;
+        if (y <= 10) c = goldBright;
+        if (y >= 18) c = goldDark;
+        if (x === 15 || x === 16) c = goldBright;
+        if (y === 14 && x >= 11 && x <= 20) c = goldBright;
+        if (y === 19 && (x <= 8 || x >= 23)) c = darken(gold, 0.25);
+        px(g, x, y, c);
+      }
+    }
+
+    // Cross symbol
+    px(g, 15, 12, 0xf0d870); px(g, 16, 12, 0xf0d870);
+    px(g, 14, 13, 0xf0d870); px(g, 15, 13, 0xf0d870); px(g, 16, 13, 0xf0d870); px(g, 17, 13, 0xf0d870);
+    px(g, 14, 14, 0xf0d870); px(g, 15, 14, 0xf0d870); px(g, 16, 14, 0xf0d870); px(g, 17, 14, 0xf0d870);
+    px(g, 15, 15, 0xf0d870); px(g, 16, 15, 0xf0d870);
+    px(g, 15, 16, 0xf0d870); px(g, 16, 16, 0xf0d870);
+
+    // Candles
+    for (const cx of [5, 26]) {
+      px(g, cx, 8, 0xe8e0d0); px(g, cx, 7, 0xe8e0d0);
+      px(g, cx, 6, 0xf0c040); px(g, cx, 5, 0xf0e080);
+      px(g, cx + 1, 8, 0xd8d0c0); px(g, cx + 1, 7, 0xd8d0c0);
+    }
+
+    g.generateTexture('furn_altar', S, S);
+    g.destroy();
+  }
+
+  private generateFurnDesk(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3010);
+    const wood = 0x7a5c3a;
+    const woodDark = darken(wood, 0.18);
+    const woodLight = lighten(wood, 0.12);
+    const paper = 0xe8e0d0;
+    const paperShadow = darken(paper, 0.1);
+
+    // Desk surface
+    for (let y = 5; y < 27; y++) {
+      for (let x = 3; x < 29; x++) {
+        let c = wood;
+        const grain = Math.sin(x * 0.5 + y * 0.12) * 0.08;
+        c = grain > 0 ? lighten(c, grain) : darken(c, -grain);
+        if (y <= 6) c = woodLight;
+        if (y >= 25) c = woodDark;
+        if (x <= 4) c = lighten(c, 0.05);
+        if (x >= 27) c = darken(c, 0.08);
+        if (rng() > 0.9) c = darken(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // Drawer
+    for (let y = 16; y < 24; y++) {
+      for (let x = 18; x < 27; x++) {
+        let c = woodDark;
+        if (y === 16) c = darken(wood, 0.25);
+        if (x === 18) c = darken(wood, 0.22);
+        px(g, x, y, c);
+      }
+    }
+    px(g, 21, 20, 0x888888); px(g, 22, 20, 0x888888);
+    px(g, 21, 21, 0x777777); px(g, 22, 21, 0x777777);
+
+    // Paper on desk
+    for (let y = 7; y < 17; y++) {
+      for (let x = 6; x < 17; x++) {
+        let c = paper;
+        if (y <= 7 || y >= 16) c = paperShadow;
+        if (x <= 6 || x >= 16) c = paperShadow;
+        px(g, x, y, c);
+      }
+    }
+
+    // Writing lines
+    const ink = 0x2a2a3a;
+    for (const ly of [9, 11, 13]) {
+      for (let x = 8; x < 15; x++) {
+        if (rng() > 0.3) px(g, x, ly, ink);
+      }
+    }
+
+    // Quill
+    px(g, 20, 9, 0x2a1a0a); px(g, 21, 8, 0x2a1a0a);
+    px(g, 22, 7, 0x2a1a0a); px(g, 23, 6, 0xe8e8e8); px(g, 24, 5, 0xe8e8e8);
+
+    // Ink pot
+    rect(g, 5, 20, 4, 4, 0x1a1a2a);
+    px(g, 6, 21, 0x2a2a4a); px(g, 7, 21, 0x2a2a4a);
+
+    g.generateTexture('furn_desk', S, S);
+    g.destroy();
+  }
+
+  // ── New furniture types ──────────────────────────────────
+
+  private generateFurnPew(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3011);
+    const wood = 0x6a4a28;
+    const woodDark = darken(wood, 0.2);
+    const woodLight = lighten(wood, 0.12);
+
+    // Seat plank (long horizontal bench, top-down)
+    for (let y = 12; y < 22; y++) {
+      for (let x = 2; x < 30; x++) {
+        let c = wood;
+        const grain = Math.sin(x * 0.3 + y * 0.15) * 0.08;
+        c = grain > 0 ? lighten(c, grain) : darken(c, -grain);
+        if (y <= 13) c = woodLight;
+        if (y >= 20) c = woodDark;
+        if (x <= 3) c = lighten(c, 0.04);
+        if (x >= 28) c = darken(c, 0.06);
+        if (rng() > 0.9) c = darken(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // Back rest (strip above seat)
+    for (let y = 5; y < 12; y++) {
+      for (let x = 2; x < 30; x++) {
+        let c = lighten(wood, 0.04);
+        if (y <= 6) c = woodLight;
+        if (y === 11) c = darken(wood, 0.1);
+        if (x <= 3 || x >= 28) c = woodDark;
+        px(g, x, y, c);
+      }
+    }
+
+    // Plank separations on seat
+    for (let x = 2; x < 30; x++) {
+      if (x === 10 || x === 20) {
+        for (let y = 12; y < 22; y++) px(g, x, y, woodDark);
+      }
+    }
+
+    // Support legs
+    for (let y = 22; y < 28; y++) {
+      rect(g, 4, y, 2, 1, woodDark);
+      rect(g, 15, y, 2, 1, woodDark);
+      rect(g, 26, y, 2, 1, woodDark);
+    }
+
+    // End supports for backrest
+    for (let y = 5; y < 22; y++) {
+      px(g, 2, y, darken(wood, 0.25));
+      px(g, 29, y, darken(wood, 0.25));
+    }
+
+    g.generateTexture('furn_pew', S, S);
+    g.destroy();
+  }
+
+  private generateFurnBlackboard(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3012);
+    const boardColor = 0x2a4a2a;
+    const boardLight = lighten(boardColor, 0.08);
+    const frame = 0x6a4a28;
+    const frameDark = darken(frame, 0.2);
+    const chalk = 0xe8e8e0;
+    const chalkFaint = darken(chalk, 0.3);
+
+    // Wood frame
+    for (let x = 2; x < 30; x++) {
+      rect(g, x, 2, 1, 2, lighten(frame, 0.1));
+      rect(g, x, 26, 1, 2, frameDark);
+    }
+    for (let y = 2; y < 28; y++) {
+      rect(g, 2, y, 2, 1, frame);
+      rect(g, 28, y, 2, 1, frameDark);
+    }
+
+    // Board surface (dark green)
+    for (let y = 4; y < 26; y++) {
+      for (let x = 4; x < 28; x++) {
+        let c = boardColor;
+        if (rng() > 0.85) c = boardLight;
+        if (rng() > 0.95) c = darken(boardColor, 0.08);
+        px(g, x, y, c);
+      }
+    }
+
+    // Chalk writing marks (scattered lines suggesting text)
+    for (let row = 0; row < 4; row++) {
+      const ry = 7 + row * 5;
+      let cx = 7;
+      while (cx < 25) {
+        const wordLen = 2 + Math.floor(rng() * 5);
+        for (let i = 0; i < wordLen && cx + i < 25; i++) {
+          if (rng() > 0.2) px(g, cx + i, ry, rng() > 0.3 ? chalk : chalkFaint);
+          if (rng() > 0.6) px(g, cx + i, ry + 1, chalkFaint);
+        }
+        cx += wordLen + 1 + Math.floor(rng() * 2);
+      }
+    }
+
+    // Chalk tray at bottom of frame
+    for (let x = 6; x < 26; x++) {
+      px(g, x, 26, lighten(frame, 0.05));
+      px(g, x, 27, frame);
+    }
+    // Chalk pieces on tray
+    rect(g, 8, 26, 3, 1, 0xf0f0e8);
+    rect(g, 15, 26, 2, 1, 0xf0e8a0);
+    rect(g, 21, 26, 2, 1, 0xe0e0d8);
+
+    g.generateTexture('furn_blackboard', S, S);
+    g.destroy();
+  }
+
+  private generateFurnAnvil(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3013);
+    const iron = 0x5a5a5a;
+    const ironDark = darken(iron, 0.2);
+    const ironLight = lighten(iron, 0.15);
+    const stump = 0x6a4a28;
+    const stumpDark = darken(stump, 0.2);
+
+    // Wooden stump base (circular, bottom half)
+    const scx = 15.5;
+    const scy = 22;
+    for (let y = 18; y < 30; y++) {
+      for (let x = 6; x < 26; x++) {
+        const dx = x - scx;
+        const dy = (y - scy) * 0.8;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 10) continue;
+        let c = stump;
+        if (dist > 8) c = stumpDark;
+        if (y <= 19) c = lighten(stump, 0.08);
+        if (rng() > 0.88) c = darken(c, 0.08);
+        px(g, x, y, c);
+      }
+    }
+
+    // Anvil body (T-shape from above)
+    // Main body (narrow center)
+    for (let y = 8; y < 20; y++) {
+      for (let x = 10; x < 22; x++) {
+        let c = iron;
+        if (y <= 9) c = ironLight;
+        if (y >= 18) c = ironDark;
+        if (x <= 11) c = lighten(c, 0.05);
+        if (x >= 20) c = darken(c, 0.08);
+        if (rng() > 0.85) c = darken(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // Horn (left extension)
+    for (let y = 11; y < 17; y++) {
+      for (let x = 4; x < 10; x++) {
+        const taper = (10 - x) * 0.3;
+        if (y < 11 + taper || y > 17 - taper) continue;
+        let c = iron;
+        if (y <= 12) c = ironLight;
+        if (x <= 5) c = ironLight;
+        px(g, x, y, c);
+      }
+    }
+
+    // Heel (right extension)
+    for (let y = 10; y < 18; y++) {
+      for (let x = 22; x < 28; x++) {
+        let c = iron;
+        if (y <= 11) c = ironLight;
+        if (x >= 26) c = ironDark;
+        px(g, x, y, c);
+      }
+    }
+
+    // Top surface highlight
+    for (let x = 10; x < 22; x++) {
+      px(g, x, 8, lighten(iron, 0.2));
+      px(g, x, 9, lighten(iron, 0.12));
+    }
+
+    // Tool marks (dents)
+    px(g, 14, 12, lighten(iron, 0.15));
+    px(g, 17, 14, lighten(iron, 0.12));
+    px(g, 15, 16, darken(iron, 0.1));
+
+    g.generateTexture('furn_anvil', S, S);
+    g.destroy();
+  }
+
+  private generateFurnFireplace(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3014);
+    const stone = 0x7a7a7a;
+    const stoneDark = darken(stone, 0.2);
+    const stoneLight = lighten(stone, 0.1);
+    const fire = 0xf08030;
+    const fireGlow = 0xf0a050;
+    const fireBright = 0xf8c060;
+    const ember = 0xc04020;
+    const ash = 0x4a4a4a;
+    const logBrown = 0x5a3a1a;
+
+    // Stone U-hearth walls
+    // Left wall
+    for (let y = 2; y < 28; y++) {
+      for (let x = 2; x < 8; x++) {
+        let c = stone;
+        if (x <= 3) c = stoneLight;
+        if (x >= 6) c = stoneDark;
+        if (rng() > 0.85) c = darken(c, 0.1);
+        px(g, x, y, c);
+      }
+    }
+    // Right wall
+    for (let y = 2; y < 28; y++) {
+      for (let x = 24; x < 30; x++) {
+        let c = stone;
+        if (x <= 25) c = stoneDark;
+        if (x >= 28) c = stoneLight;
+        if (rng() > 0.85) c = darken(c, 0.1);
+        px(g, x, y, c);
+      }
+    }
+    // Back wall
+    for (let y = 2; y < 8; y++) {
+      for (let x = 8; x < 24; x++) {
+        let c = stone;
+        if (y <= 3) c = stoneLight;
+        if (y >= 6) c = stoneDark;
+        if (rng() > 0.85) c = darken(c, 0.1);
+        px(g, x, y, c);
+      }
+    }
+
+    // Interior floor (dark ash)
+    for (let y = 8; y < 28; y++) {
+      for (let x = 8; x < 24; x++) {
+        let c = 0x2a2020;
+        if (rng() > 0.8) c = ash;
+        px(g, x, y, c);
+      }
+    }
+
+    // Logs
+    for (let x = 10; x < 22; x++) {
+      px(g, x, 18, logBrown);
+      px(g, x, 19, darken(logBrown, 0.15));
+    }
+    for (let x = 12; x < 20; x++) {
+      px(g, x, 16, lighten(logBrown, 0.1));
+      px(g, x, 17, logBrown);
+    }
+
+    // Fire
+    for (let y = 10; y < 18; y++) {
+      for (let x = 11; x < 21; x++) {
+        const intensity = rng();
+        if (intensity < 0.3) continue;
+        let c = fire;
+        if (intensity > 0.6) c = fireGlow;
+        if (intensity > 0.8) c = fireBright;
+        if (y >= 16) c = ember;
+        if (y <= 11 && intensity > 0.5) c = 0xf8e080;
+        px(g, x, y, c);
+      }
+    }
+
+    // Ember glow on walls
+    for (let y = 10; y < 20; y++) {
+      px(g, 8, y, blend(stoneDark, fire, 0.2));
+      px(g, 23, y, blend(stoneDark, fire, 0.2));
+    }
+
+    // Ash at bottom
+    for (let x = 9; x < 23; x++) {
+      if (rng() > 0.4) px(g, x, 22, ash);
+      if (rng() > 0.5) px(g, x, 23, darken(ash, 0.15));
+    }
+
+    g.generateTexture('furn_fireplace', S, S);
+    g.destroy();
+  }
+
+  private generateFurnCrate(): void {
+    const g = this.add.graphics();
+    const S = 32;
+    const rng = seeded(3015);
+    const wood = 0x8a6a40;
+    const woodDark = darken(wood, 0.18);
+    const woodLight = lighten(wood, 0.1);
+    const nail = 0x5a5a5a;
+
+    // Crate top (planked lid from above)
+    for (let y = 3; y < 29; y++) {
+      for (let x = 3; x < 29; x++) {
+        let c = wood;
+        const grain = Math.sin(x * 0.4 + y * 0.08) * 0.06;
+        c = grain > 0 ? lighten(c, grain) : darken(c, -grain);
+        // Plank divisions (horizontal)
+        const plank = Math.floor((y - 3) / 5);
+        if ((y - 3) % 5 === 0) c = woodDark;
+        if (plank % 2 === 0) c = darken(c, 0.04);
+        // Edges
+        if (x <= 4) c = lighten(c, 0.04);
+        if (x >= 27) c = woodDark;
+        if (y <= 4) c = woodLight;
+        if (y >= 27) c = woodDark;
+        if (rng() > 0.9) c = darken(c, 0.06);
+        px(g, x, y, c);
+      }
+    }
+
+    // X-brace on lid
+    for (let i = 0; i < 24; i++) {
+      const x1 = 4 + i;
+      const y1 = 4 + i;
+      const y2 = 27 - i;
+      if (x1 < 28 && y1 < 28) px(g, x1, y1, darken(wood, 0.2));
+      if (x1 < 28 && y2 >= 4) px(g, x1, y2, darken(wood, 0.2));
+    }
+
+    // Frame edges (thicker border planks)
+    for (let x = 3; x < 29; x++) {
+      px(g, x, 3, woodDark); px(g, x, 28, darken(wood, 0.25));
+    }
+    for (let y = 3; y < 29; y++) {
+      px(g, 3, y, woodDark); px(g, 28, y, darken(wood, 0.25));
+    }
+
+    // Nail heads at corners and X-brace intersections
+    for (const [nx, ny] of [[5, 5], [26, 5], [5, 26], [26, 26], [15, 15], [16, 16]]) {
+      px(g, nx, ny, nail);
+      px(g, nx + 1, ny, darken(nail, 0.15));
+    }
+
+    g.generateTexture('furn_crate', S, S);
     g.destroy();
   }
 
