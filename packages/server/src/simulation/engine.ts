@@ -550,7 +550,7 @@ export class SimulationEngine {
         // Check conversation pair cooldown (min 600 ticks between same pair)
         const pairKey = [a1.id, a2.id].sort().join(':');
         const lastTick = this.lastConversationPair.get(pairKey);
-        if (lastTick !== undefined && (this.tickCount - lastTick) < 600) continue;
+        if (lastTick !== undefined && (this.tickCount - lastTick) < 3600) continue;
 
         // Check if both are available (not sleeping, conversing, or API exhausted)
         const c1 = this.controllers.get(a1.id);
@@ -804,7 +804,7 @@ export class SimulationEngine {
         // Check pair cooldown
         const pairKey = [initiatorId, targetId].sort().join(':');
         const lastTick = this.lastConversationPair.get(pairKey);
-        if (lastTick !== undefined && (this.tickCount - lastTick) < 600) return false;
+        if (lastTick !== undefined && (this.tickCount - lastTick) < 3600) return false;
 
         const a1 = this.world.getAgent(initiatorId);
         if (!a1) return false;
