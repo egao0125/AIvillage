@@ -370,6 +370,32 @@ Relationships: ${mentalModels}`;
     },
   );
 
+  // POST /api/agents/:id/reset-vitals — reset health/hunger/energy (requires ownership)
+  router.post(
+    '/api/agents/:id/reset-vitals',
+    rateLimit(10, 60_000),
+    requireAuth,
+    (req, res) => {
+      const id = req.params.id as string;
+      const snapshot = engine.getSnapshot();
+      const agent = snapshot.agents.find(a => a.id === id);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      if (agent.ownerId !== req.userId) {
+        res.status(403).json({ error: 'You can only reset your own agents' });
+        return;
+      }
+      const success = engine.resetAgentVitals(id);
+      if (!success) {
+        res.status(400).json({ error: 'Agent vitals cannot be reset (agent is dead)' });
+        return;
+      }
+      res.json({ success: true, vitals: { health: 100, hunger: 0, energy: 100 } });
+    },
+  );
+
   // POST /api/agents/:id/resume — resume agent (requires ownership)
   router.post(
     '/api/agents/:id/resume',
