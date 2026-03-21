@@ -396,6 +396,16 @@ export class SimulationEngine {
     return true;
   }
 
+  resetAgentVitals(id: string): boolean {
+    const agent = this.world.getAgent(id);
+    if (!agent || agent.alive === false) return false;
+
+    agent.vitals = { health: 100, hunger: 0, energy: 100 };
+    this.broadcaster.agentAction(id, 'vitals reset');
+    console.log(`[Engine] Agent vitals reset: ${agent.config.name}`);
+    return true;
+  }
+
   start(): void {
     if (this.tickInterval) return;
 
