@@ -504,4 +504,5 @@ export interface WorldSnapshot {
   technologies: Technology[];
   narratives?: NarrativeEntry[];
   storylines?: Storyline[];
+  weeklySummary?: string | null;
 }

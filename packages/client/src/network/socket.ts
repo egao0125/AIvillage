@@ -53,6 +53,7 @@ export function connectSocket(): Socket {
     if (snapshot.technologies) gameStore.setTechnologies(snapshot.technologies);
     if (snapshot.narratives) gameStore.setNarratives(snapshot.narratives);
     if (snapshot.storylines) gameStore.setStorylines(snapshot.storylines);
+    if (snapshot.weeklySummary) gameStore.setWeeklySummary(snapshot.weeklySummary);
 
     // Check if we need a recap (returning after 2+ game days absence)
     const lastSeenDay = parseInt(localStorage.getItem('ai-village-last-seen-day') || '0');
@@ -274,6 +275,10 @@ export function connectSocket(): Socket {
     gameStore.setActiveRecap(recap);
   });
 
+  socket.on('weekly-summary:ready', (data: { summary: string | null }) => {
+    if (data.summary) gameStore.setWeeklySummary(data.summary);
+  });
+
   // Update last-seen day periodically
   setInterval(() => {
     const time = gameStore.getState().time;
@@ -318,9 +323,3 @@ export function unwatchThoughts(): void {
   socket?.emit('agent:unwatch-thoughts');
 }
 
-export function requestWeeklySummary(callback: (summary: string | null) => void): void {
-  socket?.emit('weekly-summary:request');
-  socket?.once('weekly-summary:ready', (data: { summary: string | null }) => {
-    callback(data.summary);
-  });
-}
