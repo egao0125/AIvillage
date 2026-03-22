@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar';
 import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
 import { SpectatorChat } from './components/SpectatorChat';
+import { FeedButton } from './components/FeedButton';
 import { NarrativeBar } from './components/NarrativeBar';
 import { CharacterPage } from './components/CharacterPage';
 import { RecapOverlay } from './components/RecapOverlay';
@@ -67,6 +68,8 @@ export const App: React.FC = () => {
       {activeRecap && <RecapOverlay />}
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat />
+      {/* Feed — floating button next to chat */}
+      <FeedButton />
       {/* Dev tools — toggle via DEV_TOOLS_ENABLED */}
       {DEV_TOOLS_ENABLED && <DevPanel />}
     </div>
