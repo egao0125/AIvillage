@@ -38,6 +38,7 @@ export class AgentController {
   pendingConversationTarget: string | null = null;
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
+  private pendingReplan: boolean = false;
   onDeath?: (agentId: string, cause: string) => void;
   private thinkCooldown: number = 0;
 
@@ -148,7 +149,12 @@ export class AgentController {
       case 'performing': {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
-          this.followNextIntention();
+          if (this.pendingReplan) {
+            this.pendingReplan = false;
+            void this.replanAfterConversation();
+          } else {
+            this.followNextIntention();
+          }
         }
         break;
       }
@@ -444,9 +450,9 @@ export class AgentController {
           this.agent.mood = output.mood;
           this.broadcaster.agentMood(this.agent.id, output.mood);
         }
-        // Handle replan
+        // Defer replan until current activity finishes — prevents constant distraction
         if (output.replan) {
-          void this.replanAfterConversation();
+          this.pendingReplan = true;
         }
       }).catch((err) => { this.handleApiFailure(err); });
     }
