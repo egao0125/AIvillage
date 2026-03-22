@@ -3,14 +3,12 @@ import { useAgents, useSelectedAgent, useBoard, useArtifacts, useStorylines } fr
 import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
 import { AgentProfile } from './AgentProfile';
-import { ChatLog } from './ChatLog';
 import { VillageDashboard } from './VillageDashboard';
-import { GossipFeed } from './GossipFeed';
 import { ConfessionalPanel } from './ConfessionalPanel';
 import { StorylinePanel } from './StorylinePanel';
 import { COLORS, FONTS } from '../styles';
 
-type Tab = 'villagers' | 'feed' | 'village' | 'confessional' | 'stories';
+type Tab = 'villagers' | 'village' | 'confessional' | 'stories';
 
 export const Sidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('villagers');
@@ -31,8 +29,6 @@ export const Sidebar: React.FC = () => {
     switch (tab) {
       case 'villagers':
         return `Villagers (${agents.length})`;
-      case 'feed':
-        return 'Feed';
       case 'village':
         return `Village${villageCount > 0 ? ` (${villageCount})` : ''}`;
       case 'confessional':
@@ -76,7 +72,7 @@ export const Sidebar: React.FC = () => {
           borderBottom: `1px solid ${COLORS.border}`,
         }}
       >
-        {(['villagers', 'feed', 'village', 'confessional', 'stories'] as Tab[]).map((tab) => (
+        {(['villagers', 'village', 'confessional', 'stories'] as Tab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -129,9 +125,7 @@ export const Sidebar: React.FC = () => {
           <ConfessionalPanel />
         ) : activeTab === 'stories' ? (
           <StorylinePanel />
-        ) : (
-          <ChatLog />
-        )}
+        ) : null}
       </div>
     </div>
   );
