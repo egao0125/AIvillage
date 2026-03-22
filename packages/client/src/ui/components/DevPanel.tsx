@@ -23,7 +23,7 @@ export const DevPanel: React.FC = () => {
 
   return (
     <div style={{
-      position: 'absolute',
+      position: 'fixed',
       top: 8,
       left: '50%',
       transform: 'translateX(-50%)',
