@@ -598,7 +598,7 @@ export class AgentController {
 
     // Hunger increases every game hour
     if (this.world.time.minute === 0) {
-      v.hunger = Math.min(100, v.hunger + 0.5);
+      v.hunger = Math.min(100, v.hunger + 0.25);
     }
 
     // Energy depletes during activity, restores during sleep/rest
