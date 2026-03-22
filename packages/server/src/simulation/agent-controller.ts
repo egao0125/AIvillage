@@ -407,7 +407,8 @@ export class AgentController {
     const foodLocations = ['cafe', 'bakery', 'tavern'];
     const atFoodLocation = foodLocations.includes(this.currentAreaId ?? '');
 
-    if (isFoodActivity || atFoodLocation || isGatherActivity) {
+    const wantsToEat = isFoodActivity || atFoodLocation || (isGatherActivity && this.agent.vitals && this.agent.vitals.hunger >= 40);
+    if (wantsToEat) {
       const foodItem = this.agent.inventory.find(i => i.type === 'food');
       if (foodItem) {
         // Consume food from inventory
