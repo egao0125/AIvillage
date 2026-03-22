@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Memory } from '@ai-village/shared';
 import { TFIDFEmbedder } from './embeddings.js';
+import { diversifyResults } from './diversity.js';
 
 interface MemoryStore {
   add(memory: Memory): Promise<void>;
@@ -65,6 +66,7 @@ export class SupabaseMemoryStore implements MemoryStore {
         related_agent_ids: memory.relatedAgentIds ?? [],
         visibility: memory.visibility ?? 'private',
         emotional_valence: memory.emotionalValence ?? 0,
+        is_core: memory.isCore ?? false,
       });
     } catch (err) {
       console.error('[SupabaseMemoryStore] add() failed:', err);
@@ -117,15 +119,21 @@ export class SupabaseMemoryStore implements MemoryStore {
       const importanceScore = (memory.importance - 1) / 9;
 
       // Combined score — importance-weighted so significant memories surface over noise
-      const score = queryEmbedding.length > 0
+      const baseScore = queryEmbedding.length > 0
         ? 0.15 * keywordScore + 0.30 * semanticScore + 0.20 * recencyScore + 0.35 * importanceScore
         : 0.25 * keywordScore + 0.25 * recencyScore + 0.50 * importanceScore;
+
+      // Core identity memories get a retrieval boost
+      const coreBonus = memory.isCore ? 0.2 : 0;
+      const score = baseScore + coreBonus;
 
       return { memory, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, limit).map(s => s.memory);
+    const candidates = scored.slice(0, limit * 3);
+    const diverse = diversifyResults(candidates, limit, embedder);
+    return diverse.map(s => s.memory);
   }
 
   async getRecent(agentId: string, limit = 20): Promise<Memory[]> {
@@ -189,6 +197,7 @@ export class SupabaseMemoryStore implements MemoryStore {
       relatedAgentIds: (row.related_agent_ids as string[]) ?? [],
       visibility: (row.visibility as Memory['visibility']) ?? 'private',
       emotionalValence: (row.emotional_valence as number) ?? 0,
+      isCore: (row.is_core as boolean) ?? false,
     };
   }
 }

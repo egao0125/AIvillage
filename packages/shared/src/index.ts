@@ -232,6 +232,7 @@ export interface Memory {
   // Consequence: some memories are private, some public. Emotional weight affects recall.
   visibility?: 'private' | 'shared' | 'public';
   emotionalValence?: number; // -1 (painful) to +1 (joyful). High-valence = recalled more.
+  isCore?: boolean; // Core identity memories — never pruned, boosted in retrieval
 }
 
 // --- Conversation ---
