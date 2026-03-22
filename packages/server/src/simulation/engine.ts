@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
+import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { World } from './world.js';
@@ -165,6 +165,7 @@ export class SimulationEngine {
           homeArea,
           this.createActionExecutor(),
         );
+        controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
 
         // Restore mutable controller state
         if (ctrlData) {
@@ -259,6 +260,7 @@ export class SimulationEngine {
       'plaza',
       this.createActionExecutor(),
     );
+    controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     this.controllers.set(id, controller);
 
     console.log(
@@ -390,6 +392,7 @@ export class SimulationEngine {
       'plaza',
       this.createActionExecutor(),
     );
+    controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     this.controllers.set(id, controller);
 
     // Set state to idle and place at plaza
@@ -767,6 +770,21 @@ export class SimulationEngine {
     }
   }
 
+  /**
+   * Called by controller onDeath callback — controller already handled world state + broadcast.
+   * We handle cleanup (remove controller/cognition) and aftermath (diary + notify agents).
+   */
+  private onControllerDeath(agentId: string, cause: string): void {
+    const agent = this.world.getAgent(agentId);
+    if (!agent) return;
+
+    // Cleanup
+    this.controllers.delete(agentId);
+    this.cognitions.delete(agentId);
+
+    this.handleDeathAftermath(agent, cause);
+  }
+
   killAgent(agentId: string, cause: string): void {
     const agent = this.world.getAgent(agentId);
     if (!agent || agent.alive === false) return;
@@ -780,15 +798,28 @@ export class SimulationEngine {
     // Broadcast death
     this.broadcaster.agentDeath(agentId, cause);
 
-    // Create diary artifact from agent's memories (their final legacy)
+    this.handleDeathAftermath(agent, cause);
+  }
+
+  /**
+   * Called after an agent dies — creates diary, board post, and notifies all living agents.
+   * Separated so both killAgent() and the controller onDeath callback can use it.
+   */
+  private handleDeathAftermath(agent: Agent, cause: string): void {
+    const agentId = agent.id;
+    const name = agent.config.name;
+    const areaId = this.world.getAreaAt(agent.position)?.id;
+    const areaLabel = areaId?.replace(/_/g, ' ') ?? 'the village';
+
+    // Create diary artifact (their final legacy)
     const artifact = {
       id: crypto.randomUUID(),
-      title: `Diary of ${agent.config.name}`,
-      content: `${agent.config.name}${agent.config.occupation ? ', ' + agent.config.occupation + ',' : ''} lived ${this.world.time.day} days in the village. They died of ${cause}. They had ${agent.currency} gold and ${agent.skills.length} skills.`,
+      title: `Diary of ${name}`,
+      content: `${name}${agent.config.occupation ? ', ' + agent.config.occupation + ',' : ''} lived ${this.world.time.day} days in the village. They died of ${cause}. They had ${agent.currency} gold and ${agent.skills.length} skills.`,
       type: 'diary' as const,
       creatorId: agentId,
-      creatorName: agent.config.name,
-      location: this.world.getAreaAt(agent.position)?.id,
+      creatorName: name,
+      location: areaId,
       visibility: 'public' as const,
       reactions: [],
       createdAt: Date.now(),
@@ -797,7 +828,36 @@ export class SimulationEngine {
     this.world.addArtifact(artifact);
     this.broadcaster.artifactCreated(artifact);
 
-    console.log(`[Engine] ${agent.config.name} has died: ${cause}. Diary created.`);
+    // Post death notice to village board so agents see it in conversation prompts
+    this.world.addBoardPost({
+      id: crypto.randomUUID(),
+      authorId: 'system',
+      authorName: 'Village Notice',
+      type: 'announcement' as BoardPostType,
+      content: `${name} has died of ${cause} at ${areaLabel}. May they rest in peace.`,
+      timestamp: Date.now(),
+      day: this.world.time.day,
+    });
+    this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+
+    // Create a memory for every living agent so they know about the death
+    for (const [id, cognition] of this.cognitions) {
+      if (id === agentId) continue;
+      const livingAgent = this.world.getAgent(id);
+      if (!livingAgent || livingAgent.alive === false) continue;
+
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: id,
+        type: 'observation',
+        content: `${name} died of ${cause} at ${areaLabel} on day ${this.world.time.day}. Their belongings were scattered on the ground.`,
+        importance: 9,
+        timestamp: Date.now(),
+        relatedAgentIds: [agentId],
+      });
+    }
+
+    console.log(`[Engine] ${name} has died: ${cause}. Diary created, all agents notified.`);
   }
 
   getSnapshot(): WorldSnapshot {

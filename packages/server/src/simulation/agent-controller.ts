@@ -38,6 +38,7 @@ export class AgentController {
   pendingConversationTarget: string | null = null;
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
+  onDeath?: (agentId: string, cause: string) => void;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -604,6 +605,13 @@ export class AgentController {
       v.health = Math.min(100, v.health + 0.02);
     }
 
+    // Death check — health reaching 0 is fatal
+    if (v.health <= 0) {
+      const cause = v.hunger >= 80 ? 'starvation' : 'exhaustion';
+      this.die(cause);
+      return;
+    }
+
     // Broadcast vitals every 30 ticks
     if (this.world.time.totalMinutes % 30 === 0) {
       this.broadcaster.agentVitals(this.agent.id, v);
@@ -665,6 +673,11 @@ export class AgentController {
 
     this.broadcaster.agentDeath(this.agent.id, cause);
     this.broadcaster.agentAction(this.agent.id, `died: ${cause}`, '\u{1F480}');
+
+    // Notify engine for cleanup + other agent notification
+    if (this.onDeath) {
+      this.onDeath(this.agent.id, cause);
+    }
   }
 
   /**
