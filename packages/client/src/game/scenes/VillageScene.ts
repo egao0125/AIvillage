@@ -362,6 +362,8 @@ export class VillageScene extends Phaser.Scene {
     this.cleanupFns.push(
       eventBus.on('world:snapshot', (snapshot: { agents: Agent[]; time?: GameTime }) => {
         for (const agent of snapshot.agents) {
+          // Skip dead agents
+          if (agent.alive === false) continue;
           if (!this.agentSprites.has(agent.id)) {
             this.spawnAgent(agent);
           } else {
@@ -390,6 +392,14 @@ export class VillageScene extends Phaser.Scene {
 
       eventBus.on('agent:spawn', (agent: Agent) => {
         this.spawnAgent(agent);
+      }),
+
+      eventBus.on('agent:death', (data: { agentId: string; cause: string }) => {
+        this.despawnAgent(data.agentId);
+      }),
+
+      eventBus.on('agent:leave', (data: { agentId: string }) => {
+        this.despawnAgent(data.agentId);
       }),
 
       eventBus.on('world:time', (time: GameTime) => {
@@ -428,6 +438,22 @@ export class VillageScene extends Phaser.Scene {
     );
     if (agent.currentAction) agentSprite.setAction(agent.currentAction);
     this.agentSprites.set(agent.id, agentSprite);
+  }
+
+  private despawnAgent(agentId: string): void {
+    const sprite = this.agentSprites.get(agentId);
+    if (!sprite) return;
+
+    // Fade out then destroy
+    this.tweens.add({
+      targets: sprite,
+      alpha: 0,
+      duration: 1500,
+      onComplete: () => {
+        sprite.destroy();
+        this.agentSprites.delete(agentId);
+      },
+    });
   }
 
   private selectAgent(agentId: string): void {

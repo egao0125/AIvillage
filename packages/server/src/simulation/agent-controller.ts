@@ -604,12 +604,19 @@ export class AgentController {
       v.hunger = Math.max(0, v.hunger - 0.1);
     }
 
-    // Vitals affect mood but never kill — health floors at 10
+    // Vitals affect health — starvation and exhaustion drain it
     if (v.hunger >= 80) {
-      v.health = Math.max(10, v.health - 0.05);
+      v.health = Math.max(0, v.health - 0.05);
     }
     if (v.energy <= 5) {
-      v.health = Math.max(10, v.health - 0.03);
+      v.health = Math.max(0, v.health - 0.03);
+    }
+
+    // Death: health reaches zero
+    if (v.health <= 0) {
+      const cause = v.hunger >= 80 ? 'starvation' : 'exhaustion';
+      this.die(cause);
+      return;
     }
     // Passive health regen when not starving/exhausted
     if (v.hunger < 60 && v.energy > 20) {
