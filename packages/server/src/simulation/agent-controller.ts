@@ -1,4 +1,4 @@
-import type { Agent, AgentLesson, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import { AgentCognition } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
@@ -38,7 +38,6 @@ export class AgentController {
   pendingConversationTarget: string | null = null;
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
-  lessons: AgentLesson[] = [];
   private pendingReplan: boolean = false;
   private currentPerformingActivity: string = '';
   onDeath?: (agentId: string, cause: string) => void;
@@ -262,7 +261,7 @@ export class AgentController {
       }
 
       const worldCtx = (institutionContext + buildingContext) || undefined;
-      const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx, this.lessons);
+      const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx);
       this.intentions = plan;
       this.currentIntentionIndex = 0;
       console.log(
@@ -568,7 +567,7 @@ export class AgentController {
     this.world.updateAgentState(this.agent.id, 'active', 'reflecting');
 
     try {
-      const result = await this.cognition.reflect(this.lessons, this.world.time.day);
+      const result = await this.cognition.reflect();
       this.handleApiSuccess();
 
       // Update mental models from reflection
@@ -576,10 +575,9 @@ export class AgentController {
         this.agent.mentalModels = result.mentalModels;
       }
 
-      // Store extracted lessons
-      if (result.lessons) {
-        this.lessons = result.lessons;
-        console.log(`[Agent] ${this.agent.config.name} extracted ${result.lessons.length} lessons`);
+      // WorldView is updated internally by cognition.reflect() → updateWorldView()
+      if (result.updatedWorldView) {
+        console.log(`[Agent] ${this.agent.config.name} evolved worldView`);
       }
 
       // Use mood from LLM response, fall back to keyword parsing
@@ -845,11 +843,7 @@ export class AgentController {
       // LLM replan (skip if API exhausted)
       if (!this.apiExhausted) {
         try {
-          const survivalLessons = this.lessons.filter(l => l.category === 'survival');
-          const lessonsHint = survivalLessons.length > 0
-            ? `\nWHAT YOU KNOW:\n${survivalLessons.map(l => `- ${l.content}`).join('\n')}`
-            : '';
-          const urgencyContext = `URGENT: You are starving (hunger: ${this.agent.vitals?.hunger}). You MUST find food immediately or your health will drop. Focus on: gathering food from farm/garden/lake/forest, trading for food, or asking someone who has food.${lessonsHint}`;
+          const urgencyContext = `URGENT: You are starving (hunger: ${this.agent.vitals?.hunger}). You MUST find food immediately or your health will drop. Focus on: gathering food from farm/garden/lake/forest, trading for food, or asking someone who has food.`;
           const plan = await this.cognition.plan(
             { day: this.world.time.day, hour: this.world.time.hour },
             this.world.getBoardSummary(),

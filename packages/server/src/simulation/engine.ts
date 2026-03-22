@@ -150,7 +150,9 @@ export class SimulationEngine {
 
         // Create cognition with Supabase-backed memory + throttled LLM
         const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
-        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider);
+        const ctrlDataForWorldView = controllerDataMap.get(agent.id);
+        const savedWorldView = (ctrlDataForWorldView as any)?.worldView as string | undefined;
+        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedWorldView);
         this.cognitions.set(agent.id, cognition);
 
         // Restore controller
@@ -183,7 +185,6 @@ export class SimulationEngine {
           controller.currentIntentionIndex = (ctrlData as any).currentIntentionIndex ?? (ctrlData as any).currentPlanIndex ?? 0;
           controller.activityTimer = ctrlData.activityTimer ?? 0;
           controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
-          controller.lessons = (ctrlData as any).lessons ?? [];
         }
 
         this.controllers.set(agent.id, controller);
