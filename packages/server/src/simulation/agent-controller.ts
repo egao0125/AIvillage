@@ -373,9 +373,10 @@ export class AgentController {
     this.pendingConversationTarget = null;
 
     this.state = 'performing';
-    this.activityTimer = duration;
     this.world.updateAgentState(this.agent.id, 'active', activity);
     this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
+
+    let actionCompleted = false; // Track if the intention was fulfilled immediately
 
     const lowerActivity = activity.toLowerCase();
     const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick') || lowerActivity.includes('find food') || lowerActivity.includes('get food') || lowerActivity.includes('look for food') || lowerActivity.includes('mushroom') || lowerActivity.includes('wheat') || lowerActivity.includes('wood') || lowerActivity.includes('herb') || lowerActivity.includes('crop') || lowerActivity.includes('vegetable');
@@ -386,6 +387,7 @@ export class AgentController {
       const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
       if (gathered) {
         this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
+        actionCompleted = true;
         // Emergency: starving agents eat immediately, others keep for trading
         if (gathered.type === 'food' && this.agent.vitals && this.agent.vitals.hunger >= 60) {
           this.world.removeItem(gathered.id);
@@ -413,6 +415,7 @@ export class AgentController {
         }
         this.broadcaster.agentAction(this.agent.id, `ate ${foodItem.name}`, '🍽️');
         console.log(`[Agent] ${this.agent.config.name} ate ${foodItem.name} (hunger: ${this.agent.vitals?.hunger})`);
+        actionCompleted = true;
       }
     }
 
@@ -426,8 +429,13 @@ export class AgentController {
         this.world.removeItem(medicineItem.id);
         this.agent.vitals.health = Math.min(100, this.agent.vitals.health + 20);
         console.log(`[Agent] ${this.agent.config.name} used ${medicineItem.name} to heal (health: ${this.agent.vitals.health})`);
+        actionCompleted = true;
       }
     }
+
+    // Set timer: if action already completed, brief pause then move on.
+    // Otherwise, allow time for think() to fire and produce actions (e.g. post on board).
+    this.activityTimer = actionCompleted ? 3 : 15;
 
     // Think — let agent react to what they're doing at this location (skip if API exhausted)
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
