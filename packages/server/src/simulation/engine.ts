@@ -788,6 +788,26 @@ export class SimulationEngine {
     return this.characterTimeline.getTimeline(agentId, limit);
   }
 
+  async generateThoughtFor(agentId: string): Promise<string | null> {
+    const controller = this.controllers.get(agentId);
+    if (!controller || controller.apiExhausted) return null;
+    const agent = this.world.getAgent(agentId);
+    if (!agent || agent.alive === false || agent.state === 'sleeping') return null;
+
+    const cognition = this.cognitions.get(agentId);
+    if (!cognition) return null;
+
+    try {
+      const thought = await cognition.innerMonologue(
+        `reflecting on what I'm doing`,
+        `Currently: ${agent.currentAction || 'idle'}. Mood: ${agent.mood}. Location: ${agent.state}.`
+      );
+      return thought || null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Get or create a throttled LLM provider for a given API key.
    * All agents sharing the same key share the same concurrency limit.

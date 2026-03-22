@@ -295,16 +295,6 @@ export class AgentController {
     const areaId = this.resolveLocation(item.location);
     const targetPos = getRandomPositionInArea(areaId);
 
-    // Inner monologue — what are they REALLY thinking? (skip if API exhausted)
-    if (!this.apiExhausted) {
-      void this.cognition.innerMonologue(
-        `about to ${item.activity}`,
-        `Going to ${item.location}. Mood: ${this.agent.mood}. Gold: ${this.agent.currency}.`
-      ).then(thought => {
-        if (thought) this.broadcaster.agentThought(this.agent.id, thought);
-      }).catch(() => {});
-    }
-
     console.log(
       `[Agent] ${this.agent.config.name} → ${item.activity} at ${item.location}${item.emoji ? ' ' + item.emoji : ''}`,
     );
