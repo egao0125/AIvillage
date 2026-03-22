@@ -1,5 +1,6 @@
 import type { Memory } from '@ai-village/shared';
 import { TFIDFEmbedder } from './embeddings.js';
+import { diversifyResults } from './diversity.js';
 
 interface MemoryStore {
   add(memory: Memory): Promise<void>;
@@ -70,15 +71,21 @@ export class InMemoryStore implements MemoryStore {
 
       // Combined score — importance-weighted so significant memories surface over noise
       const hasEmbedding = memory.embedding && memory.embedding.length > 0;
-      const score = hasEmbedding
+      const baseScore = hasEmbedding
         ? 0.15 * keywordScore + 0.30 * semanticScore + 0.20 * recencyScore + 0.35 * importanceScore
         : 0.25 * keywordScore + 0.25 * recencyScore + 0.50 * importanceScore;
+
+      // Core identity memories get a retrieval boost
+      const coreBonus = memory.isCore ? 0.2 : 0;
+      const score = baseScore + coreBonus;
 
       return { memory, score };
     });
 
     scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, limit).map(s => s.memory);
+    const candidates = scored.slice(0, limit * 3);
+    const diverse = diversifyResults(candidates, limit, embedder);
+    return diverse.map(s => s.memory);
   }
 
   async getRecent(agentId: string, limit = 20): Promise<Memory[]> {

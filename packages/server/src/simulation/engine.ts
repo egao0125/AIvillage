@@ -234,6 +234,20 @@ export class SimulationEngine {
     const cognition = new AgentCognition(agent, memoryStore, llmProvider);
     this.cognitions.set(id, cognition);
 
+    // Seed core identity memories — these survive pruning and get boosted in retrieval
+    void cognition.addMemory({
+      id: crypto.randomUUID(), agentId: id, type: 'reflection',
+      content: `I am ${config.name}. ${config.backstory}`,
+      importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+    });
+    if (config.goal) {
+      void cognition.addMemory({
+        id: crypto.randomUUID(), agentId: id, type: 'reflection',
+        content: `My goal: ${config.goal}`,
+        importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+      });
+    }
+
     // Create controller (homeArea defaults to 'plaza' — just a fallback sleeping spot)
     const controller = new AgentController(
       agent,

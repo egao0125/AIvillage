@@ -336,6 +336,44 @@ export class ConversationManager {
         console.error(`[Memory] Failed to store conversation memory for ${participant.config.name}:`, err);
       }
     }
+
+    // Extract commitments — scan each agent's lines for promise language
+    // Stored as separate high-importance memories so they surface in planDay()
+    for (const participantId of conversation.participants) {
+      const cognition = cognitions.get(participantId);
+      const participant = this.world.getAgent(participantId);
+      if (!cognition || !participant) continue;
+
+      const agentLines = messages
+        .filter(m => m.agentId === participantId)
+        .map(m => m.content);
+
+      const commitmentPattern = /\b(i('ll| will| promise| swear)|tomorrow|at dawn|meet (you|me)|i('m| am) (going|coming)|you have my word|count on me|i won't (bail|forget|flake))\b/i;
+
+      const commitmentLines = agentLines.filter(line => commitmentPattern.test(line));
+
+      if (commitmentLines.length > 0) {
+        const otherNames = conversation.participants
+          .filter(id => id !== participantId)
+          .map(id => this.world.getAgent(id)?.config.name)
+          .filter(Boolean);
+
+        try {
+          await cognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: participantId,
+            type: 'plan',
+            content: `COMMITMENT I made to ${otherNames.join(', ')}: ${commitmentLines.join(' ')}`,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: conversation.participants.filter(id => id !== participantId),
+          });
+          console.log(`[Memory] ${participant.config.name} stored commitment to ${otherNames.join(', ')}`);
+        } catch (err) {
+          console.error(`[Memory] Failed to store commitment for ${participant.config.name}:`, err);
+        }
+      }
+    }
   }
 
   /**

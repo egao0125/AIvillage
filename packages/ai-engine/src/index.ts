@@ -292,13 +292,51 @@ Output a JSON array ONLY, no other text:
     // Remove excess, preferring low-importance observations
     const toRemove = sorted.slice(0, allMemories.length - 400); // prune to 400 to avoid constant churn
     const idsToRemove = toRemove
-      .filter(m => m.type === 'observation' || m.importance <= 3)
+      .filter(m => !m.isCore && (m.type === 'observation' || m.importance <= 3))
       .map(m => m.id);
 
     if (idsToRemove.length > 0) {
       await this.memory.removeBatch(idsToRemove);
       console.log(`[Memory] ${this.agent.config.name}: pruned ${idsToRemove.length} old observations (${allMemories.length} → ${allMemories.length - idsToRemove.length})`);
     }
+
+    // Auto-expire old commitments (>48 real hours ≈ 2 game-days at 12x speed)
+    // Demote importance so they stop dominating planDay, but don't delete
+    const twoDaysAgo = Date.now() - 48 * 60 * 60 * 1000;
+    const oldCommitments = allMemories.filter(m =>
+      m.type === 'plan' && m.content.startsWith('COMMITMENT') && m.timestamp < twoDaysAgo && m.importance > 5
+    );
+    for (const commitment of oldCommitments) {
+      commitment.importance = 5;
+      await this.memory.add(commitment); // re-upsert with lower importance
+    }
+    if (oldCommitments.length > 0) {
+      console.log(`[Memory] ${this.agent.config.name}: demoted ${oldCommitments.length} expired commitments`);
+    }
+  }
+
+  /**
+   * Inject identity-relevant memories into a retrieval result.
+   * Ensures the agent's core identity (goal, occupation, backstory) is always represented,
+   * preventing topic echo chambers from drowning out who the agent fundamentally is.
+   */
+  private async anchorIdentity(memories: Memory[], limit: number): Promise<Memory[]> {
+    const { config } = this.agent;
+    const identityQuery = `${config.goal ?? ''} ${config.occupation ?? ''} ${config.backstory?.slice(0, 100) ?? ''}`;
+    if (!identityQuery.trim()) return memories;
+
+    const identityMemories = await this.memory.retrieve(this.agent.id, identityQuery, 5);
+    const existingIds = new Set(memories.map(m => m.id));
+    const anchors = identityMemories.filter(m => !existingIds.has(m.id)).slice(0, 2);
+
+    if (anchors.length === 0) return memories;
+
+    const result = [...memories];
+    for (const anchor of anchors) {
+      if (result.length >= limit) result.pop(); // Drop lowest-scored to make room
+      result.push(anchor);
+    }
+    return result;
   }
 
   /**
@@ -306,7 +344,9 @@ Output a JSON array ONLY, no other text:
    * Searches memory stream for experiences related to current situation.
    */
   async retrieve(currentContext: string): Promise<Memory[]> {
-    return this.memory.retrieve(this.agent.id, currentContext, 10);
+    let memories = await this.memory.retrieve(this.agent.id, currentContext, 10);
+    memories = await this.anchorIdentity(memories, 10);
+    return memories;
   }
 
   /**
@@ -469,11 +509,12 @@ Format: MOOD: <mood>`;
    */
   async preConversationAgenda(otherAgents: Agent[]): Promise<string> {
     const otherNames = otherAgents.map(a => a.config.name).join(', ');
-    const memories = await this.memory.retrieve(
+    let memories = await this.memory.retrieve(
       this.agent.id,
       otherAgents.map(a => a.config.name).join(' '),
       5
     );
+    memories = await this.anchorIdentity(memories, 5);
     const memoryContext = memories.length > 0
       ? `\nWhat you remember about them:\n${memories.map(m => m.content).join('\n')}`
       : '';
@@ -514,11 +555,12 @@ What's your agenda for this conversation?`;
   async converse(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string, agenda?: string): Promise<string> {
     const { config } = this.agent;
     const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
-    const memories = await this.memory.retrieve(
+    let memories = await this.memory.retrieve(
       this.agent.id,
       memoryQuery,
       10
     );
+    memories = await this.anchorIdentity(memories, 10);
 
     const soulText = config.soul || `${config.backstory}\nGoal: ${config.goal}`;
 
@@ -605,11 +647,12 @@ Your turn to speak:`;
     const { config } = this.agent;
     const soulText = config.soul || `${config.backstory}\nGoal: ${config.goal}`;
 
-    const memories = await this.memory.retrieve(
+    let memories = await this.memory.retrieve(
       this.agent.id,
       `${speaker.config.name} ${snippet}`,
       5
     );
+    memories = await this.anchorIdentity(memories, 5);
 
     const memoryContext = memories.length > 0
       ? `\nYour memories related to this:\n${memories.map((m) => m.content).join("\n")}`
@@ -653,7 +696,14 @@ What do you do?`;
         allMemories.push(m);
       }
     }
-    const memoryContext = allMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
+    // Separate commitments for prominent display in the prompt
+    const commitments = allMemories.filter(m => m.type === 'plan' && m.content.startsWith('COMMITMENT'));
+    const otherMemories = allMemories.filter(m => !(m.type === 'plan' && m.content.startsWith('COMMITMENT')));
+
+    const memoryContext = otherMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
+    const commitmentSection = commitments.length > 0
+      ? `\n\nPROMISES YOU MADE (keep these or explain why not):\n${commitments.map(m => `- ${m.content}`).join('\n')}`
+      : '';
 
     const soulText = this.agent.config.soul || `${this.agent.config.backstory}\nGoal: ${this.agent.config.goal}`;
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
@@ -669,7 +719,7 @@ WHAT YOU KNOW ABOUT THIS PLACE:
 ${this.getKnownLocations()}${boardContext ? `\n\nVILLAGE BOARD:\n${boardContext}` : ''}${worldSection}`;
 
     const userPrompt = `Your recent experiences:
-${memoryContext || 'No recent memories yet.'}
+${memoryContext || 'No recent memories yet.'}${commitmentSection}
 
 Plan your day from hour ${currentTime.hour}.
 Return JSON array: [{"time": <hour>, "duration": <minutes>, "activity": "<what>", "location": "<where>", "emoji": "<optional>"}]
