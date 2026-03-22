@@ -8,9 +8,16 @@ import { ConfessionalPanel } from './ConfessionalPanel';
 import { StorylinePanel } from './StorylinePanel';
 import { COLORS, FONTS } from '../styles';
 
+export const SIDEBAR_WIDTH = 500;
+
 type Tab = 'villagers' | 'village' | 'confessional' | 'recap';
 
-export const Sidebar: React.FC = () => {
+interface SidebarProps {
+  collapsed: boolean;
+  onToggle: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ collapsed }) => {
   const [activeTab, setActiveTab] = useState<Tab>('villagers');
   const agents = useAgents();
   const selectedAgent = useSelectedAgent();
@@ -37,14 +44,16 @@ export const Sidebar: React.FC = () => {
   return (
     <div
       style={{
-        width: 420,
+        width: collapsed ? 0 : SIDEBAR_WIDTH,
         height: '100%',
         background: COLORS.bg,
-        borderLeft: `1px solid ${COLORS.border}`,
+        borderLeft: collapsed ? 'none' : `1px solid ${COLORS.border}`,
         display: 'flex',
         flexDirection: 'column',
         flexShrink: 0,
         overflow: 'hidden',
+        transition: 'width 0.25s ease',
+        position: 'relative',
       }}
     >
       {/* Header */}
@@ -56,6 +65,7 @@ export const Sidebar: React.FC = () => {
           fontSize: '14px',
           color: COLORS.textAccent,
           letterSpacing: 1,
+          whiteSpace: 'nowrap',
         }}
       >
         AI VILLAGE

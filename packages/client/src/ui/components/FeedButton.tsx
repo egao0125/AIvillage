@@ -37,7 +37,7 @@ export const FeedButton: React.FC = () => {
           style={{
             position: 'fixed',
             bottom: 80,
-            left: 20,
+            left: 330,
             width: 340,
             height: 450,
             background: COLORS.bg,

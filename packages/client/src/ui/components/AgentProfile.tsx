@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import type { Agent, Item, Skill } from '@ai-village/shared';
 import { nameToColor, hexToString } from '../../utils/color';
-import { useReputation, useAgents, useBoard, useArtifacts } from '../../core/hooks';
+import { useReputation, useAgents, useBoard, useArtifacts, useWorldTime } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 import { authHeaders, getUserId } from '../../utils/auth';
+import { PixelAvatar } from './PixelAvatar';
+import { getAreaName } from '../../utils/areaLookup';
 
 // --- Leave / Return Village Button ---
 
@@ -239,11 +241,11 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
   agent,
   onClose,
 }) => {
-  const color = hexToString(nameToColor(agent.config.name));
   const reputation = useReputation();
   const allAgents = useAgents();
   const board = useBoard();
   const artifacts = useArtifacts();
+  const time = useWorldTime();
   const agentReputation = reputation.filter((r) => r.fromAgentId === agent.id);
 
   // Helper to resolve agent ID to name
@@ -328,28 +330,18 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
           marginBottom: 14,
         }}
       >
-        <div
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: '50%',
-            background: color,
-            border: `2px solid ${COLORS.accent}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '18px',
-            flexShrink: 0,
-          }}
-        >
-          {agent.config.name[0]}
+        <div style={{ flexShrink: 0, background: COLORS.bgCard, borderRadius: 6, padding: 4 }}>
+          <PixelAvatar name={agent.config.name} size={56} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: '11px', marginBottom: 4, fontFamily: FONTS.pixel }}>
             {agent.config.name}
           </div>
-          <div style={{ color: COLORS.textDim, fontSize: '13px' }}>
+          <div style={{ color: COLORS.textDim, fontSize: '12px', marginBottom: 2 }}>
             age {agent.config.age}
+          </div>
+          <div style={{ color: COLORS.textDim, fontSize: '11px' }}>
+            {time.day} {time.day === 1 ? 'day' : 'days'} in village
           </div>
         </div>
         <button
@@ -365,6 +357,23 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         >
           {'\u2715'}
         </button>
+      </div>
+
+      {/* Location */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginBottom: 14,
+        padding: '6px 12px',
+        background: COLORS.bgCard,
+        borderRadius: 4,
+        border: `1px solid ${COLORS.border}`,
+      }}>
+        <span style={{ fontSize: '12px' }}>{'\u{1F4CD}'}</span>
+        <span style={{ color: COLORS.textDim, fontSize: '12px' }}>
+          {getAreaName(agent.position.x, agent.position.y)}
+        </span>
       </div>
 
       {/* Mood */}
@@ -418,56 +427,6 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
               </div>
             );
           })}
-        </div>
-      )}
-
-      {/* Drives */}
-      {agent.drives && agent.alive !== false && (
-        <div style={{ marginBottom: 14 }}>
-          <div style={sectionLabel}>DRIVES</div>
-          {(['survival', 'safety', 'belonging', 'status', 'meaning'] as const).map(drive => {
-            const value = agent.drives![drive];
-            const driveColors: Record<string, string> = {
-              survival: '#ef4444',
-              safety: '#f59e0b',
-              belonging: '#ec4899',
-              status: '#a855f7',
-              meaning: '#06b6d4',
-            };
-            const driveEmojis: Record<string, string> = {
-              survival: '\u{2764}\u{FE0F}',
-              safety: '\u{1F6E1}\u{FE0F}',
-              belonging: '\u{1F91D}',
-              status: '\u{1F451}',
-              meaning: '\u{2B50}',
-            };
-            return (
-              <div key={drive} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <span style={{ fontSize: '11px', width: 16 }}>{driveEmojis[drive]}</span>
-                <span style={{ color: COLORS.textDim, fontSize: '10px', width: 62, textTransform: 'capitalize' }}>{drive}</span>
-                <div style={{ flex: 1, height: 4, background: COLORS.border, borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{
-                    width: `${value}%`,
-                    height: '100%',
-                    background: driveColors[drive],
-                    borderRadius: 2,
-                    transition: 'width 0.3s',
-                  }} />
-                </div>
-                <span style={{ color: COLORS.textDim, fontSize: '10px', width: 24, textAlign: 'right', fontFamily: FONTS.pixel }}>{Math.round(value)}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Soul */}
-      {agent.config.soul && (
-        <div style={{ marginBottom: 14 }}>
-          <div style={sectionLabel}>SOUL</div>
-          <div style={{ color: COLORS.textDim, lineHeight: '1.6', fontSize: '12px' }}>
-            {agent.config.soul}
-          </div>
         </div>
       )}
 

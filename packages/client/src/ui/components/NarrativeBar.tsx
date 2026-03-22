@@ -3,7 +3,11 @@ import { useNarratives, useAgents } from '../../core/hooks';
 import { nameToColor, hexToString } from '../../utils/color';
 import { FONTS } from '../styles';
 
-export const NarrativeBar: React.FC = () => {
+interface NarrativeBarProps {
+  sidebarWidth?: number;
+}
+
+export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500 }) => {
   const narratives = useNarratives();
   const agents = useAgents();
   const [displayedText, setDisplayedText] = useState('');
@@ -84,7 +88,8 @@ export const NarrativeBar: React.FC = () => {
         position: 'absolute',
         bottom: 0,
         left: 0,
-        width: 'calc(100% - 420px)',
+        width: `calc(100% - ${sidebarWidth}px)`,
+        transition: 'width 0.25s ease',
         zIndex: 15,
       }}
     >
