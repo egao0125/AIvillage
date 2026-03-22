@@ -39,6 +39,7 @@ export class AgentController {
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
   private pendingReplan: boolean = false;
+  private currentPerformingActivity: string = '';
   onDeath?: (agentId: string, cause: string) => void;
   private thinkCooldown: number = 0;
 
@@ -149,6 +150,7 @@ export class AgentController {
       case 'performing': {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
+          this.currentPerformingActivity = '';
           if (this.pendingReplan) {
             this.pendingReplan = false;
             void this.replanAfterConversation();
@@ -373,6 +375,7 @@ export class AgentController {
     this.pendingConversationTarget = null;
 
     this.state = 'performing';
+    this.currentPerformingActivity = activity;
     this.world.updateAgentState(this.agent.id, 'active', activity);
     this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
 
@@ -433,9 +436,14 @@ export class AgentController {
       }
     }
 
-    // Set timer: if action already completed, brief pause then move on.
-    // Otherwise, allow time for think() to fire and produce actions (e.g. post on board).
-    this.activityTimer = actionCompleted ? 3 : 15;
+    // Rest/relax activities need longer to be meaningful
+    const isRestActivity = lowerActivity.includes('rest') || lowerActivity.includes('relax') || lowerActivity.includes('nap') || lowerActivity.includes('sit') || lowerActivity.includes('meditat');
+
+    // Set timer based on what happened:
+    // - Action completed instantly (gather/eat/heal): brief pause then move on
+    // - Resting/relaxing: long enough to actually restore energy
+    // - Everything else: moderate time for think() to fire
+    this.activityTimer = actionCompleted ? 3 : isRestActivity ? 30 : 15;
 
     // Think — let agent react to what they're doing at this location (skip if API exhausted)
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
@@ -589,10 +597,15 @@ export class AgentController {
       v.hunger = Math.min(100, v.hunger + 0.5);
     }
 
-    // Energy depletes during activity, restores during sleep
-    // Also slowly restores during idle/performing (resting at tavern, sitting in park, etc.)
+    // Energy depletes during activity, restores during sleep/rest
     if (this.state === 'performing' || this.state === 'moving') {
-      v.energy = Math.max(0, v.energy - 0.05);
+      const lower = this.currentPerformingActivity.toLowerCase();
+      const isResting = lower.includes('rest') || lower.includes('relax') || lower.includes('nap') || lower.includes('sit') || lower.includes('meditat');
+      if (isResting) {
+        v.energy = Math.min(100, v.energy + 0.1);
+      } else {
+        v.energy = Math.max(0, v.energy - 0.05);
+      }
     } else if (this.state === 'idle') {
       v.energy = Math.min(100, v.energy + 0.02);
     } else if (this.state === 'sleeping') {
