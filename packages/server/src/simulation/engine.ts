@@ -445,6 +445,19 @@ export class SimulationEngine {
     agent.vitals = { health: 100, hunger: 0, energy: 100 };
     agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
 
+    // Give starting food so they don't immediately starve again
+    for (let i = 0; i < 3; i++) {
+      this.world.addItem({
+        id: crypto.randomUUID(),
+        name: 'bread',
+        description: 'A loaf of bread',
+        ownerId: id,
+        createdBy: 'system',
+        value: 5,
+        type: 'food',
+      });
+    }
+
     // Recreate cognition
     const keyData = this.agentApiKeys.get(id);
     const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
