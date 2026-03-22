@@ -44,6 +44,7 @@ export interface Agent {
   currentAction: string;
   currency: number;
   createdAt: number;
+  joinedDay?: number;   // game day when agent was added
   ownerId: string;
   mood: Mood;
   inventory: Item[];

@@ -97,16 +97,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Recap request — per-viewer
-  socket.on('recap:request', async (data: { sinceDay: number }) => {
-    if (typeof data?.sinceDay !== 'number' || data.sinceDay < 0) return;
-    try {
-      const recap = await engine.recapGenerator.generateRecap(data.sinceDay);
-      socket.emit('recap:ready', recap);
-    } catch (err) {
-      console.error('[Recap] Failed to generate recap:', err);
-    }
-  });
+  // Recap request — DISABLED (only weekly recap uses the global API key)
 
 
   // Spectator chat — relay to all clients
