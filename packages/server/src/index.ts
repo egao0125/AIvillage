@@ -53,6 +53,8 @@ if (isProduction) {
 
 // Spectator comment rate limit: 1 per 10 seconds per socket
 const spectatorLastComment: Map<string, number> = new Map();
+// On-demand thought generation: one interval per watching socket
+const watchIntervals: Map<string, { interval: NodeJS.Timeout; agentId: string }> = new Map();
 
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
@@ -62,6 +64,37 @@ io.on('connection', (socket) => {
 
   socket.on('agent:select', (agentId: string) => {
     console.log(`Client selected agent: ${agentId}`);
+  });
+
+  // On-demand thought generation — only when a viewer is watching
+  socket.on('agent:watch-thoughts', (agentId: string) => {
+    if (typeof agentId !== 'string' || !agentId) return;
+    const existing = watchIntervals.get(socket.id);
+    if (existing) clearInterval(existing.interval);
+
+    const emit = (thought: string | null) => {
+      const current = watchIntervals.get(socket.id);
+      if (thought && current && current.agentId === agentId) {
+        socket.emit('agent:thought', { agentId, thought });
+      }
+    };
+
+    // Generate one immediately
+    engine.generateThoughtFor(agentId).then(emit);
+
+    // Then every 10 seconds
+    const interval = setInterval(() => {
+      engine.generateThoughtFor(agentId).then(emit);
+    }, 10_000);
+    watchIntervals.set(socket.id, { interval, agentId });
+  });
+
+  socket.on('agent:unwatch-thoughts', () => {
+    const existing = watchIntervals.get(socket.id);
+    if (existing) {
+      clearInterval(existing.interval);
+      watchIntervals.delete(socket.id);
+    }
   });
 
   // Recap request — per-viewer
@@ -97,6 +130,11 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
     spectatorLastComment.delete(socket.id);
+    const existing = watchIntervals.get(socket.id);
+    if (existing) {
+      clearInterval(existing.interval);
+      watchIntervals.delete(socket.id);
+    }
   });
 });
 

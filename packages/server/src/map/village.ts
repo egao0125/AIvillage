@@ -1,8 +1,8 @@
 import type { MapArea, Position } from '@ai-village/shared';
 
 export const TILE_SIZE = 32;
-export const MAP_WIDTH = 40;
-export const MAP_HEIGHT = 30;
+export const MAP_WIDTH = 68;
+export const MAP_HEIGHT = 45;
 
 // Tile types:
 // 0 = grass
@@ -14,267 +14,346 @@ export const MAP_HEIGHT = 30;
 // 6 = forest_floor
 // 7 = flowers
 // 8 = bridge
+// 9 = floor_dark (darker stone/tile floor)
+
+/**
+ * Build the 60x45 tile map with 3x larger buildings in a 3×3 grid.
+ * Must match client/src/game/data/village-map.ts exactly.
+ */
+function buildTileMap(): number[][] {
+  const m: number[][] = Array.from({ length: MAP_HEIGHT }, () => Array(MAP_WIDTH).fill(0));
+
+  const X_OFF = 4;
+  const fill = (sx: number, sy: number, w: number, h: number, t: number) => {
+    for (let y = sy; y < sy + h && y < MAP_HEIGHT; y++)
+      for (let x = sx + X_OFF; x < sx + X_OFF + w && x < MAP_WIDTH; x++)
+        m[y][x] = t;
+  };
+  const set = (x: number, y: number, t: number) => {
+    const ax = x + X_OFF;
+    if (y >= 0 && y < MAP_HEIGHT && ax >= 0 && ax < MAP_WIDTH) m[y][ax] = t;
+  };
+
+  const buildShape = (
+    rects: {x: number, y: number, w: number, h: number}[],
+    walls: [string, number, number, number][],
+    dark: number[][], doors: number[][], ents: number[][],
+  ) => {
+    const inShape = (tx: number, ty: number) =>
+      rects.some(r => tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h);
+
+    for (const r of rects) fill(r.x, r.y, r.w, r.h, 4);
+
+    for (const r of rects) {
+      for (let y = r.y; y < r.y + r.h; y++) {
+        for (let x = r.x; x < r.x + r.w; x++) {
+          if (!inShape(x - 1, y) || !inShape(x + 1, y) || !inShape(x, y - 1) || !inShape(x, y + 1))
+            set(x, y, 5);
+        }
+      }
+    }
+
+    for (const [t, pos, from, to] of walls) {
+      if (t === 'v') for (let y = from; y <= to; y++) set(pos, y, 5);
+      else for (let x = from; x <= to; x++) set(x, pos, 5);
+    }
+    for (const d of dark) fill(d[0], d[1], d[2], d[3], 9);
+    for (const d of doors) set(d[0], d[1], 4);
+    for (const e of ents) set(e[0], e[1], 4);
+  };
+
+  // ═══ Step 1: Borders ═══
+  // Left forest — organic wavy edge (absolute coords, no X_OFF)
+  for (let y = 0; y < MAP_HEIGHT; y++) {
+    const wave = Math.sin(y * 0.2) * 1.0 + Math.sin(y * 0.5) * 0.5 + Math.cos(y * 0.13) * 0.7;
+    const edge = 5.0 + wave;
+    for (let x = 0; x < Math.min(Math.ceil(edge) + 1, MAP_WIDTH); x++) {
+      if (x + 0.5 < edge) m[y][x] = 6;
+    }
+  }
+  for (let y = 0; y < MAP_HEIGHT; y++) {
+    const wave = Math.sin(y * 0.15) * 0.8 + Math.sin(y * 0.35) * 0.4;
+    const cx = 63.5 + wave;
+    for (let x = 59; x < MAP_WIDTH; x++) {
+      const d = Math.abs(x + 0.5 - cx);
+      if (d < 1.5) m[y][x] = 2;
+      else if (d < 2.8) m[y][x] = 3;
+    }
+  }
+  const topFlowers = [
+    [4,0],[7,0],[12,1],[15,0],[17,1],[22,1],[26,0],[30,0],
+    [33,1],[38,1],[42,1],[45,0],[48,1],[50,0],[52,1],
+  ];
+  for (const [fx, fy] of topFlowers) set(fx, fy, 7);
+
+  for (let y = 39; y < MAP_HEIGHT; y++)
+    for (let x = 2; x < 55; x++) {
+      const hash = (x * 7 + y * 13) % 13;
+      if (hash === 0 || hash === 4 || hash === 9) set(x, y, 7);
+    }
+
+  // Scattered flowers along N-S path edges
+  for (let y = 2; y < 39; y++) {
+    if ((y * 3 + 7) % 11 === 0) set(17, y, 7);
+    if ((y * 5 + 3) % 11 === 0) set(20, y, 7);
+    if ((y * 7 + 2) % 11 === 0) set(36, y, 7);
+    if ((y * 4 + 9) % 11 === 0) set(39, y, 7);
+  }
+
+  // ═══ Step 2: Paths ═══
+  for (let x = 2; x <= 55; x++) {
+    set(x, 13, 1); set(x, 14, 1);
+    set(x, 26, 1); set(x, 27, 1);
+  }
+  for (let y = 0; y < MAP_HEIGHT; y++) {
+    set(18, y, 1); set(19, y, 1);
+    set(37, y, 1); set(38, y, 1);
+  }
+
+  // ═══ Step 3: Buildings (non-rectangular shapes) ═══
+
+  // Church — T-shape: tower + nave
+  buildShape(
+    [{x:2, y:2, w:16, h:11}, {x:7, y:0, w:6, h:3}],
+    [['h', 7, 3, 16]],
+    [[3, 3, 14, 4]],
+    [[8, 7], [9, 7]],
+    [[9, 12], [10, 12]],
+  );
+
+  // School — L-shape: main + wing
+  buildShape(
+    [{x:20, y:4, w:11, h:8}, {x:30, y:2, w:7, h:7}],
+    [['v', 30, 5, 11]],
+    [[31, 3, 5, 4]],
+    [[30, 7], [30, 10], [33, 8]],
+    [[27, 12], [28, 12]],
+  );
+
+  // Cafe — L-shape with left bump
+  buildShape(
+    [{x:42, y:2, w:13, h:11}, {x:39, y:5, w:4, h:7}],
+    [['v', 48, 3, 11]],
+    [[40, 6, 3, 5]],
+    [[48, 5], [48, 9], [44, 7]],
+    [[49, 12], [50, 12]],
+  );
+
+  // Bakery — L-shape with top-right oven
+  buildShape(
+    [{x:2, y:17, w:14, h:8}, {x:12, y:15, w:6, h:4}],
+    [['h', 21, 3, 14], ['v', 9, 22, 24]],
+    [[3, 22, 6, 3]],
+    [[7, 21], [8, 21], [13, 21], [9, 23]],
+    [[9, 25], [10, 25]],
+  );
+
+  // Town Hall — L-shape with bottom wing
+  buildShape(
+    [{x:20, y:15, w:17, h:8}, {x:20, y:22, w:9, h:4}],
+    [['v', 28, 16, 22], ['h', 20, 21, 35]],
+    [[29, 16, 7, 4]],
+    [[28, 18], [28, 24], [25, 20], [32, 20]],
+    [[27, 15], [28, 15]],
+  );
+
+  // Workshop — chimney bump
+  buildShape(
+    [{x:39, y:17, w:15, h:8}, {x:44, y:15, w:5, h:3}],
+    [['h', 21, 40, 52], ['v', 48, 18, 20]],
+    [[49, 18, 4, 3]],
+    [[48, 19], [44, 21], [45, 21], [51, 21]],
+    [[46, 25], [47, 25]],
+  );
+
+  // Clinic — bump left
+  buildShape(
+    [{x:4, y:28, w:11, h:10}, {x:2, y:31, w:3, h:5}],
+    [['v', 9, 29, 36], ['h', 33, 10, 14]],
+    [[10, 29, 4, 4]],
+    [[9, 31], [9, 35], [12, 33]],
+    [[9, 28], [10, 28]],
+  );
+
+  // Tavern — L-shape right
+  buildShape(
+    [{x:20, y:28, w:14, h:10}, {x:33, y:30, w:4, h:8}],
+    [['v', 28, 29, 37], ['h', 34, 21, 33]],
+    [[21, 29, 7, 5], [29, 35, 7, 3]],
+    [[28, 31], [28, 36], [24, 34], [33, 33]],
+    [[27, 28], [28, 28]],
+  );
+
+  // Market — inverted L
+  buildShape(
+    [{x:39, y:28, w:17, h:8}, {x:47, y:35, w:8, h:4}],
+    [['v', 49, 29, 35]],
+    [[50, 29, 5, 6]],
+    [[49, 32], [49, 37]],
+    [[46, 28], [47, 28]],
+  );
+
+  return m;
+}
 
 // prettier-ignore
-export const TILE_MAP: number[][] = [
-  // Row 0: top edge — forest NW, grass center, park/lake NE
-  [6,6,6,6,6,6,6,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,2,2,2,3,3],
-  // Row 1: forest, church walls, school walls, lake
-  [6,6,6,6,6,6,6,6,0,0,5,5,5,5,5,0,0,0,5,5,5,5,5,0,0,0,0,0,0,0,0,0,3,3,2,2,2,2,3,3],
-  // Row 2: forest, church interior, school interior, lake
-  [6,6,6,0,6,6,6,6,0,0,5,4,4,4,5,0,0,0,5,4,4,4,5,0,0,0,0,0,0,0,0,3,3,2,2,2,2,2,3,3],
-  // Row 3: forest, church interior, school interior, lake
-  [6,6,0,0,0,6,6,6,0,0,5,4,4,4,5,0,0,0,5,4,4,4,5,0,0,0,0,0,0,0,0,3,2,2,2,2,2,2,3,0],
-  // Row 4: forest, church + school entrances on path, park/lake
-  [6,6,6,0,6,6,6,6,0,0,5,5,4,5,5,0,0,0,5,5,4,5,5,0,0,0,0,0,0,0,0,0,3,3,2,2,2,3,3,0],
-  // Row 5: forest edge, paths from church/school south, park
-  [6,6,6,6,6,6,6,6,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,3,3,0,0],
-  // Row 6: grass, paths continue south
-  [6,6,6,6,6,6,6,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 7: grass, paths continue, north-south connector
-  [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 8: grass, paths merge into main path area
-  [0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 9: bakery top wall, connector path, workshop top wall
-  [0,0,0,5,5,5,5,5,0,0,5,5,5,5,5,0,0,0,0,0,1,0,0,0,5,5,5,5,5,0,0,5,5,5,5,5,0,0,0,0],
-  // Row 10: cafe top wall, bakery interior, workshop interior, market top wall
-  [0,0,0,5,4,4,4,5,0,0,5,4,4,4,5,0,0,0,0,0,1,0,0,0,5,4,4,4,5,0,0,5,4,4,4,5,0,0,0,0],
-  // Row 11: cafe interior, bakery interior, path, workshop interior, market interior
-  [0,0,0,5,4,4,4,5,0,0,5,4,4,4,5,0,0,0,0,0,1,0,0,0,5,4,4,4,5,0,0,5,4,4,4,5,0,0,0,0],
-  // Row 12: MAIN EAST-WEST PATH — all buildings open onto this row
-  [1,1,1,1,4,4,4,1,1,1,1,4,4,4,1,1,1,1,1,1,1,1,1,1,1,4,4,4,1,1,1,1,4,4,4,1,1,1,1,1],
-  // Row 13: cafe bottom, bakery bottom, workshop bottom, market bottom
-  [0,0,0,5,4,4,4,5,0,0,5,5,5,5,5,0,0,0,0,0,1,0,0,0,5,5,5,5,5,0,0,5,4,4,4,5,0,0,0,0],
-  // Row 14: cafe bottom wall, path, market bottom wall
-  [0,0,0,5,5,5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,5,5,5,5,5,0,0,0,0],
-  // Row 15: plaza starts, paths to plaza
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 16: plaza
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 17: plaza center
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 18: plaza
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 19: plaza
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 20: plaza ends, path south from plaza
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 21: hospital top, town hall top, tavern top, farm/garden area
-  [0,0,5,5,5,5,5,0,0,5,5,5,5,5,0,0,0,0,1,0,5,5,5,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  // Row 22: hospital interior, town hall interior, tavern interior, garden/farm
-  [0,0,5,4,4,4,5,0,0,5,4,4,4,5,0,0,0,0,1,0,5,4,4,4,5,0,0,7,7,7,7,7,7,0,0,0,6,6,6,6],
-  // Row 23: hospital interior, town hall interior, tavern interior, garden/farm
-  [0,0,5,4,4,4,5,0,0,5,4,4,4,5,0,0,0,0,1,0,5,4,4,4,5,0,0,7,7,0,0,7,7,0,0,0,6,6,6,6],
-  // Row 24: hospital + town hall + tavern entrances on path
-  [0,0,1,4,4,4,1,1,1,1,4,4,4,1,1,1,1,1,1,1,1,4,4,4,1,1,1,7,7,0,0,7,7,0,0,0,6,6,6,6],
-  // Row 25: paths from buildings, garden, farm area, forest south
-  [0,0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,7,7,7,7,0,0,0,6,6,6,6,6],
-  // Row 26: grass, farm area, forest
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6,6,6,6,6],
-  // Row 27: farm area continues, forest
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,6,6,6,6,6,6],
-  // Row 28: farm field tiles
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,7,0,7,7,0,7,7,0,0,0,0,0,6,6,6,6,6,6,6],
-  // Row 29: bottom edge, farm fields
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,7,7,0,7,7,0,7,7,0,0,0,0,6,6,6,6,6,6,6,6],
-];
+export const TILE_MAP: number[][] = buildTileMap();
 
 export const AREAS: MapArea[] = [
-  // Forest (top-left / north)
   {
     id: 'forest',
     name: 'Whispering Forest',
     type: 'forest',
-    bounds: { x: 0, y: 0, width: 8, height: 8 },
+    bounds: { x: 0, y: 0, width: 6, height: 45 },
     objects: [
-      { id: 'tree_1', name: 'Old Oak', position: { x: 2, y: 2 }, status: 'standing' },
-      { id: 'tree_2', name: 'Pine Tree', position: { x: 5, y: 1 }, status: 'standing' },
-      { id: 'mushroom_1', name: 'Mushroom Patch', position: { x: 3, y: 5 }, status: 'growing' },
+      { id: 'tree_1', name: 'Old Oak', position: { x: 2, y: 15 }, status: 'standing' },
+      { id: 'mushroom_1', name: 'Mushroom Patch', position: { x: 2, y: 10 }, status: 'growing' },
     ],
   },
-  // Church (top-center-left)
   {
     id: 'church',
     name: 'Village Church',
     type: 'house',
-    bounds: { x: 10, y: 1, width: 5, height: 4 },
+    bounds: { x: 6, y: 0, width: 16, height: 13 },
     objects: [
-      { id: 'altar', name: 'Altar', position: { x: 12, y: 2 }, status: 'consecrated' },
-      { id: 'pew_1', name: 'Pew', position: { x: 11, y: 3 }, status: 'empty' },
+      { id: 'altar', name: 'Altar', position: { x: 10, y: 4 }, status: 'consecrated' },
+      { id: 'pew_1', name: 'Pew', position: { x: 10, y: 7 }, status: 'empty' },
     ],
   },
-  // School (top-center-right)
   {
     id: 'school',
     name: 'Village School',
     type: 'house',
-    bounds: { x: 18, y: 1, width: 5, height: 4 },
+    bounds: { x: 24, y: 2, width: 17, height: 10 },
     objects: [
-      { id: 'chalkboard', name: 'Chalkboard', position: { x: 20, y: 2 }, status: 'written on' },
-      { id: 'bookshelf', name: 'Library Shelf', position: { x: 19, y: 3 }, status: 'stocked' },
+      { id: 'chalkboard', name: 'Chalkboard', position: { x: 26, y: 4 }, status: 'written on' },
+      { id: 'bookshelf', name: 'Library Shelf', position: { x: 35, y: 3 }, status: 'stocked' },
     ],
   },
-  // Park (top-right)
-  {
-    id: 'park',
-    name: 'Sunrise Park',
-    type: 'park',
-    bounds: { x: 30, y: 0, width: 10, height: 7 },
-    objects: [
-      { id: 'bench_1', name: 'Park Bench', position: { x: 32, y: 5 }, status: 'empty' },
-    ],
-  },
-  // Lake (top-right, inside park area)
-  {
-    id: 'lake',
-    name: 'Mirror Lake',
-    type: 'lake',
-    bounds: { x: 33, y: 0, width: 6, height: 5 },
-    objects: [],
-  },
-  // Cafe (left-center)
   {
     id: 'cafe',
     name: 'Village Cafe',
     type: 'cafe',
-    bounds: { x: 3, y: 9, width: 5, height: 6 },
+    bounds: { x: 43, y: 2, width: 16, height: 11 },
     objects: [
-      { id: 'counter', name: 'Counter', position: { x: 4, y: 10 }, status: 'open' },
-      { id: 'table_1', name: 'Table', position: { x: 6, y: 10 }, status: 'empty' },
-      { id: 'table_2', name: 'Table', position: { x: 6, y: 13 }, status: 'empty' },
+      { id: 'counter', name: 'Counter', position: { x: 44, y: 10 }, status: 'open' },
+      { id: 'table_1', name: 'Table', position: { x: 45, y: 4 }, status: 'empty' },
     ],
   },
-  // Bakery (center-left, next to cafe)
   {
     id: 'bakery',
     name: 'Village Bakery',
     type: 'shop',
-    bounds: { x: 10, y: 9, width: 5, height: 5 },
+    bounds: { x: 6, y: 15, width: 16, height: 10 },
     objects: [
-      { id: 'oven', name: 'Bread Oven', position: { x: 12, y: 10 }, status: 'warm' },
-      { id: 'display', name: 'Bread Display', position: { x: 11, y: 11 }, status: 'stocked' },
+      { id: 'oven', name: 'Bread Oven', position: { x: 17, y: 16 }, status: 'warm' },
+      { id: 'display', name: 'Bread Display', position: { x: 8, y: 16 }, status: 'stocked' },
     ],
   },
-  // Workshop (center-right)
-  {
-    id: 'workshop',
-    name: 'Craftsman Workshop',
-    type: 'shop',
-    bounds: { x: 24, y: 9, width: 5, height: 5 },
-    objects: [
-      { id: 'workbench', name: 'Workbench', position: { x: 26, y: 10 }, status: 'in use' },
-      { id: 'tool_rack', name: 'Tool Rack', position: { x: 25, y: 11 }, status: 'stocked' },
-    ],
-  },
-  // Market (right-center, old shop position)
-  {
-    id: 'market',
-    name: 'Village Market',
-    type: 'shop',
-    bounds: { x: 31, y: 9, width: 5, height: 6 },
-    objects: [
-      { id: 'shelf_1', name: 'Supply Shelf', position: { x: 32, y: 10 }, status: 'stocked' },
-      { id: 'register', name: 'Register', position: { x: 34, y: 10 }, status: 'open' },
-    ],
-  },
-  // Plaza (center)
-  {
-    id: 'plaza',
-    name: 'Village Plaza',
-    type: 'plaza',
-    bounds: { x: 16, y: 15, width: 6, height: 6 },
-    objects: [
-      { id: 'fountain', name: 'Fountain', position: { x: 19, y: 17 }, status: 'flowing' },
-      { id: 'notice_board', name: 'Notice Board', position: { x: 16, y: 15 }, status: 'posted' },
-    ],
-  },
-  // Hospital (bottom-left)
-  {
-    id: 'hospital',
-    name: 'Village Clinic',
-    type: 'house',
-    bounds: { x: 2, y: 21, width: 5, height: 4 },
-    objects: [
-      { id: 'medical_bed', name: 'Medical Bed', position: { x: 4, y: 22 }, status: 'empty' },
-      { id: 'medicine_shelf', name: 'Medicine Shelf', position: { x: 3, y: 23 }, status: 'stocked' },
-    ],
-  },
-  // Town Hall (bottom-center-left)
   {
     id: 'town_hall',
     name: 'Town Hall',
     type: 'house',
-    bounds: { x: 9, y: 21, width: 5, height: 4 },
+    bounds: { x: 24, y: 15, width: 17, height: 11 },
     objects: [
-      { id: 'mayor_desk', name: 'Mayor\'s Desk', position: { x: 11, y: 22 }, status: 'occupied' },
-      { id: 'town_notice', name: 'Town Notice Board', position: { x: 10, y: 23 }, status: 'posted' },
+      { id: 'mayor_desk', name: 'Mayor\'s Desk', position: { x: 28, y: 17 }, status: 'occupied' },
+      { id: 'town_notice', name: 'Town Notice Board', position: { x: 25, y: 16 }, status: 'posted' },
     ],
   },
-  // Tavern (bottom-center)
+  {
+    id: 'workshop',
+    name: 'Craftsman Workshop',
+    type: 'shop',
+    bounds: { x: 43, y: 15, width: 16, height: 10 },
+    objects: [
+      { id: 'workbench', name: 'Workbench', position: { x: 46, y: 17 }, status: 'in use' },
+      { id: 'tool_rack', name: 'Tool Rack', position: { x: 44, y: 20 }, status: 'stocked' },
+    ],
+  },
+  {
+    id: 'hospital',
+    name: 'Village Clinic',
+    type: 'house',
+    bounds: { x: 6, y: 28, width: 13, height: 10 },
+    objects: [
+      { id: 'medical_bed', name: 'Medical Bed', position: { x: 16, y: 30 }, status: 'empty' },
+      { id: 'medicine_shelf', name: 'Medicine Shelf', position: { x: 16, y: 35 }, status: 'stocked' },
+    ],
+  },
   {
     id: 'tavern',
     name: 'The Hearthstone Tavern',
     type: 'cafe',
-    bounds: { x: 20, y: 21, width: 5, height: 4 },
+    bounds: { x: 24, y: 28, width: 17, height: 10 },
     objects: [
-      { id: 'bar_counter', name: 'Bar Counter', position: { x: 22, y: 22 }, status: 'open' },
-      { id: 'tavern_table', name: 'Tavern Table', position: { x: 21, y: 23 }, status: 'empty' },
-      { id: 'fireplace', name: 'Fireplace', position: { x: 23, y: 22 }, status: 'burning' },
+      { id: 'bar_counter', name: 'Bar Counter', position: { x: 26, y: 29 }, status: 'open' },
+      { id: 'tavern_table', name: 'Tavern Table', position: { x: 27, y: 33 }, status: 'empty' },
     ],
   },
-  // Garden (bottom-center-right)
+  {
+    id: 'market',
+    name: 'Village Market',
+    type: 'shop',
+    bounds: { x: 43, y: 28, width: 17, height: 11 },  // includes storage extension
+    objects: [
+      { id: 'shelf_1', name: 'Supply Shelf', position: { x: 45, y: 30 }, status: 'stocked' },
+      { id: 'register', name: 'Register', position: { x: 56, y: 35 }, status: 'open' },
+    ],
+  },
+  {
+    id: 'park',
+    name: 'Northern Meadow',
+    type: 'park',
+    bounds: { x: 6, y: 0, width: 55, height: 2 },
+    objects: [
+      { id: 'bench_1', name: 'Meadow Bench', position: { x: 32, y: 1 }, status: 'empty' },
+    ],
+  },
+  {
+    id: 'plaza',
+    name: 'Village Crossroads',
+    type: 'plaza',
+    bounds: { x: 19, y: 13, width: 8, height: 2 },
+    objects: [
+      { id: 'notice_board', name: 'Notice Board', position: { x: 22, y: 13 }, status: 'posted' },
+    ],
+  },
   {
     id: 'garden',
-    name: 'Herb Garden',
+    name: 'Village Garden',
     type: 'park',
-    bounds: { x: 27, y: 22, width: 6, height: 4 },
+    bounds: { x: 6, y: 39, width: 25, height: 6 },
     objects: [
-      { id: 'herb_patch', name: 'Herb Patch', position: { x: 28, y: 23 }, status: 'growing' },
-      { id: 'flower_bed', name: 'Flower Bed', position: { x: 31, y: 23 }, status: 'blooming' },
+      { id: 'flower_bed', name: 'Flower Bed', position: { x: 16, y: 40 }, status: 'blooming' },
     ],
   },
-  // Farm (bottom-center, south of path)
   {
     id: 'farm',
     name: 'Village Farm',
     type: 'shop',
-    bounds: { x: 18, y: 27, width: 10, height: 3 },
+    bounds: { x: 31, y: 39, width: 25, height: 6 },
     objects: [
-      { id: 'crop_field_1', name: 'Wheat Field', position: { x: 20, y: 28 }, status: 'growing' },
-      { id: 'crop_field_2', name: 'Vegetable Patch', position: { x: 24, y: 28 }, status: 'growing' },
-      { id: 'scarecrow', name: 'Scarecrow', position: { x: 22, y: 29 }, status: 'standing' },
-    ],
-  },
-  // Forest (bottom-right / south)
-  {
-    id: 'forest_south',
-    name: 'Southern Woods',
-    type: 'forest',
-    bounds: { x: 34, y: 22, width: 6, height: 8 },
-    objects: [
-      { id: 'tree_3', name: 'Cedar Tree', position: { x: 37, y: 24 }, status: 'standing' },
+      { id: 'crop_field_1', name: 'Wheat Field', position: { x: 39, y: 41 }, status: 'growing' },
     ],
   },
 ];
 
 // Area entrance positions (walkable tile near each area)
 const AREA_ENTRANCES: Record<string, Position> = {
-  forest: { x: 3, y: 7 },
-  church: { x: 12, y: 5 },
-  school: { x: 20, y: 5 },
-  park: { x: 32, y: 5 },
-  lake: { x: 33, y: 5 },
-  cafe: { x: 4, y: 12 },
-  bakery: { x: 11, y: 12 },
-  workshop: { x: 25, y: 12 },
-  market: { x: 32, y: 12 },
-  plaza: { x: 18, y: 15 },
-  hospital: { x: 3, y: 24 },
-  town_hall: { x: 10, y: 24 },
-  tavern: { x: 21, y: 24 },
-  garden: { x: 27, y: 24 },
-  farm: { x: 20, y: 27 },
-  forest_south: { x: 36, y: 22 },
+  forest: { x: 3, y: 15 },
+  church: { x: 13, y: 12 },       // nave south door
+  school: { x: 31, y: 12 },      // main south door
+  cafe: { x: 53, y: 12 },        // main south door
+  bakery: { x: 13, y: 25 },       // main south door
+  town_hall: { x: 31, y: 15 },   // main north entrance
+  workshop: { x: 50, y: 25 },    // main south door
+  hospital: { x: 13, y: 28 },     // main north entrance
+  tavern: { x: 31, y: 28 },      // main north entrance
+  market: { x: 50, y: 28 },      // main north entrance
+  park: { x: 23, y: 0 },
+  plaza: { x: 22, y: 13 },
+  garden: { x: 23, y: 40 },
+  farm: { x: 41, y: 40 },
 };
 
 /**
@@ -335,7 +414,7 @@ export function getAreaEntrance(areaId: string): Position {
   if (entrance) return entrance;
   // Fallback: find center of area bounds and search for nearest walkable
   const area = AREAS.find(a => a.id === areaId);
-  if (!area) return { x: 20, y: 12 }; // center of map fallback
+  if (!area) return { x: 30, y: 22 }; // center of map fallback
   const cx = Math.floor(area.bounds.x + area.bounds.width / 2);
   const cy = Math.floor(area.bounds.y + area.bounds.height / 2);
   // Spiral search for nearest walkable

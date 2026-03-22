@@ -138,8 +138,8 @@ What are you REALLY thinking right now? Not what you'd say out loud. Not what's 
 
     const thought = await this.llm.complete(systemPrompt, userPrompt);
 
-    // Score importance dynamically — a paranoid thought about betrayal matters more than idle musing
-    const importance = await this.scoreImportance(thought, 'thought');
+    // Fixed importance — saves one LLM call per thought
+    const importance = 3;
 
     // Store as private memory
     await this.addMemory({
