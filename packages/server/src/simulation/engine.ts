@@ -174,8 +174,9 @@ export class SimulationEngine {
           controller.state = (restoredState === 'moving' || restoredState === 'performing' || restoredState === 'conversing')
             ? 'idle'
             : restoredState;
-          controller.dayPlan = ctrlData.dayPlan as typeof controller.dayPlan;
-          controller.currentPlanIndex = ctrlData.currentPlanIndex ?? 0;
+          controller.intentions = (ctrlData as any).intentions ??
+            (ctrlData as any).dayPlan?.items?.map((i: any) => i.activity) ?? [];
+          controller.currentIntentionIndex = (ctrlData as any).currentIntentionIndex ?? (ctrlData as any).currentPlanIndex ?? 0;
           controller.activityTimer = ctrlData.activityTimer ?? 0;
           controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
         }
@@ -609,10 +610,10 @@ export class SimulationEngine {
           continue;
         }
 
-        // Reduced probability — intentional conversations supplement this
-        const prob = 0.08;
-
-        if (Math.random() < prob) {
+        // Conversations start from agent initiative (plan intention or think ACTION: approach)
+        const c1WantsC2 = c1.pendingConversationTarget === a2.id;
+        const c2WantsC1 = c2.pendingConversationTarget === a1.id;
+        if (c1WantsC2 || c2WantsC1) {
           // Start conversation
           const location = { ...a1.position };
           const convId = this.conversationManager.startConversation(a1.id, a2.id, location);
@@ -701,13 +702,25 @@ export class SimulationEngine {
           relatedAgentIds: conv.participants,
         }).catch(() => {});
 
-        // Small chance the agent decides to join the conversation
-        if (Math.random() < 0.1) {
-          const controller = this.controllers.get(agent.id);
-          if (controller?.isAvailable) {
-            this.conversationManager.addParticipant(conv.id, agent.id);
-            controller.enterConversation();
-            console.log(`[Engine] ${agent.config.name} overheard and joined conversation`);
+        // think()-driven overhear decision (one think per agent per conversation, with cooldown)
+        const controller = this.controllers.get(agent.id);
+        if (controller?.isAvailable && !controller.apiExhausted) {
+          const cognition = this.cognitions.get(agent.id);
+          if (cognition) {
+            void cognition.think(
+              `overheard ${lastMessage.agentName} say: "${snippet}"`,
+              `You weren't part of the conversation — you just caught a snippet.`
+            ).then(output => {
+              const joinActions = output.actions?.some(a => {
+                const lower = a.toLowerCase();
+                return lower.includes('approach') || lower.includes('join') || lower.includes('confront');
+              });
+              if (joinActions && controller.isAvailable) {
+                this.conversationManager.addParticipant(conv.id, agent.id);
+                controller.enterConversation();
+                console.log(`[Engine] ${agent.config.name} overheard and decided to join conversation`);
+              }
+            }).catch(() => {});
           }
         }
       }
@@ -882,11 +895,11 @@ export class SimulationEngine {
     if (!cognition) return null;
 
     try {
-      const thought = await cognition.innerMonologue(
+      const output = await cognition.think(
         `reflecting on what I'm doing`,
         `Currently: ${agent.currentAction || 'idle'}. Mood: ${agent.mood}. Location: ${agent.state}.`
       );
-      return thought || null;
+      return output.thought || null;
     } catch {
       return null;
     }

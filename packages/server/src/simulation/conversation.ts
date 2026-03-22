@@ -39,14 +39,8 @@ export class ConversationManager {
     }
 
     const id = crypto.randomUUID();
-    // Variable conversation length — some are a quick "hey" / "hey", others go deep
-    // Weighted toward shorter: 40% short (2-4), 35% medium (5-8), 25% long (9-14)
-    const roll = Math.random();
-    const maxTurns = roll < 0.4
-      ? 2 + Math.floor(Math.random() * 3)   // 2-4 turns
-      : roll < 0.75
-      ? 5 + Math.floor(Math.random() * 4)   // 5-8 turns
-      : 9 + Math.floor(Math.random() * 6);  // 9-14 turns
+    // Safety valve only — goodbye detection handles natural endings
+    const maxTurns = 20;
 
     const conversation: Conversation = {
       id,
@@ -156,20 +150,11 @@ export class ConversationManager {
           }).join('\n')
         : undefined;
 
-      // Generate agenda on speaker's first turn — gives them a goal for the conversation
-      if (!active.agendas.has(speakerId)) {
-        try {
-          const agenda = await cognition.preConversationAgenda(otherAgents);
-          active.agendas.set(speakerId, agenda);
-        } catch {
-          // Non-fatal — conversation proceeds without agenda
-        }
-      }
       const agenda = active.agendas.get(speakerId);
 
       let response: string;
       try {
-        response = await cognition.converse(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext, agenda);
+        response = await cognition.talk(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext, agenda);
       } catch (err) {
         // No fallback dialogue — end conversation when LLM fails
         console.error(`[Conversation] LLM failed for ${speakerAgent.config.name}:`, err);
@@ -443,12 +428,17 @@ export class ConversationManager {
       const targetBalance = this.world.updateAgentCurrency(targetId, amount);
       this.broadcaster.agentCurrency(actorId, newBalance, -amount, `gave gold to ${this.world.getAgent(targetId)?.config.name}`);
       this.broadcaster.agentCurrency(targetId, targetBalance, amount, `received gold from ${actorName}`);
-      // Mid-day mood reaction on gift recipient
+      // Store gift event as memory — mood updates organically during next think() cycle
       const giftRecipientCog = cognitions?.get(targetId);
-      const giftTarget = this.world.getAgent(targetId);
-      if (giftRecipientCog && giftTarget) {
-        void giftRecipientCog.quickMoodReaction(`${actorName} gave me ${amount} gold as a gift!`).then(mood => {
-          if (mood) { giftTarget.mood = mood; this.broadcaster.agentMood(targetId, mood); }
+      if (giftRecipientCog) {
+        void giftRecipientCog.addMemory({
+          id: crypto.randomUUID(),
+          agentId: targetId,
+          type: 'observation',
+          content: `${actorName} gave me ${amount} gold as a gift!`,
+          importance: 7,
+          timestamp: Date.now(),
+          relatedAgentIds: [actorId],
         }).catch(() => {});
       }
       console.log(`[Social] ${actorName} gave ${amount}G to ${this.world.getAgent(targetId)?.config.name}`);
@@ -469,14 +459,17 @@ export class ConversationManager {
           this.broadcaster.agentCurrency(actorId, actorBalance, taken, `took gold from ${target.config.name}`);
           console.log(`[Social] ${actorName} took ${taken}G from ${target.config.name}`);
 
-          // Mid-day mood reaction on victim
+          // Store theft event as memory — mood updates organically during next think() cycle
           const victimCognition = cognitions?.get(targetId);
           if (victimCognition) {
-            void victimCognition.quickMoodReaction(`${actorName} stole ${taken} gold from me!`).then(mood => {
-              if (mood) {
-                target.mood = mood;
-                this.broadcaster.agentMood(targetId, mood);
-              }
+            void victimCognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: targetId,
+              type: 'observation',
+              content: `${actorName} stole ${taken} gold from me!`,
+              importance: 8,
+              timestamp: Date.now(),
+              relatedAgentIds: [actorId],
             }).catch(() => {});
           }
         }
@@ -503,12 +496,15 @@ export class ConversationManager {
             relatedAgentIds: [actorId],
           });
 
-          // Mid-day mood reaction on victim
-          void victimCognition.quickMoodReaction(`${actorName} demanded ${amount} gold from me!`).then(mood => {
-            if (mood) {
-              target.mood = mood;
-              this.broadcaster.agentMood(targetId, mood);
-            }
+          // Store demand event as memory — mood updates organically during next think() cycle
+          void victimCognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: targetId,
+            type: 'observation',
+            content: `${actorName} demanded ${amount} gold from me!`,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: [actorId],
           }).catch(() => {});
         }
         // Broadcast the demand (everyone sees it happened)
@@ -758,8 +754,7 @@ export class ConversationManager {
         const victim = this.findAgentByName(victimName);
         if (victim) {
           const item = victim.inventory.find(i => i.name.toLowerCase() === itemName);
-          // 50% chance of success
-          if (item && Math.random() < 0.5) {
+          if (item) {
             this.world.transferItem(item.id, victim.id, actorId);
             this.broadcaster.agentInventory(actorId, actor.inventory);
             this.broadcaster.agentInventory(victim.id, victim.inventory);
@@ -870,57 +865,23 @@ export class ConversationManager {
           s.holderId === actorId && s.aboutAgentId === target.id
         );
         if (heldSecret) {
-          // 40% chance target pays, 60% chance they refuse
-          if (Math.random() < 0.4) {
-            // Target pays — 10-30 gold
-            const amount = 10 + Math.floor(Math.random() * 21);
-            const taken = Math.min(amount, target.currency);
-            if (taken > 0) {
-              const targetBalance = this.world.updateAgentCurrency(target.id, -taken);
-              const actorBalance = this.world.updateAgentCurrency(actorId, taken);
-              this.broadcaster.agentCurrency(target.id, targetBalance, -taken, `blackmailed by ${actorName}`);
-              this.broadcaster.agentCurrency(actorId, actorBalance, taken, `blackmailed ${target.config.name}`);
-            }
-            this.world.updateReputation(target.id, actorId, -15, `blackmailed me`);
-            this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
-            // Mid-day mood reaction on blackmail victim
-            const victimCog = cognitions?.get(target.id);
-            if (victimCog) {
-              void victimCog.quickMoodReaction(`${actorName} blackmailed me and I had to pay ${taken} gold!`).then(mood => {
-                if (mood) { target.mood = mood; this.broadcaster.agentMood(target.id, mood); }
-              }).catch(() => {});
-            }
-            console.log(`[Social] ${actorName} blackmailed ${target.config.name} for ${taken}G`);
-          } else {
-            // Target refuses — secret gets exposed as board rumor
-            this.world.addBoardPost({
+          // Store blackmail demand as high-importance memory on victim — they decide during next think/talk
+          const victimCognition = cognitions?.get(target.id);
+          if (victimCognition) {
+            void victimCognition.addMemory({
               id: crypto.randomUUID(),
-              authorId: target.id,
-              authorName: target.config.name,
-              type: 'rumor',
-              content: `${actorName} tried to blackmail me! They claimed: "${secretText}"`,
+              agentId: target.id,
+              type: 'observation',
+              content: `${actorName} is blackmailing me with: "${secretText}". I need to decide whether to pay or resist.`,
+              importance: 9,
               timestamp: Date.now(),
-              day: this.world.time.day,
-              targetIds: [actorId],
+              relatedAgentIds: [actorId],
             });
-            this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
-            // Village-wide rep hit for blackmailer
-            for (const agent of this.world.agents.values()) {
-              if (agent.id !== actorId && agent.alive !== false) {
-                this.world.updateReputation(agent.id, actorId, -5, `attempted blackmail against ${target.config.name}`);
-              }
-            }
-            this.world.updateReputation(target.id, actorId, -25, `tried to blackmail me`);
-            this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
-            // Mid-day mood reaction on blackmail victim (refused — may feel angry/empowered)
-            const refusedVictimCog = cognitions?.get(target.id);
-            if (refusedVictimCog) {
-              void refusedVictimCog.quickMoodReaction(`${actorName} tried to blackmail me but I refused and exposed them!`).then(mood => {
-                if (mood) { target.mood = mood; this.broadcaster.agentMood(target.id, mood); }
-              }).catch(() => {});
-            }
-            console.log(`[Social] ${actorName} failed to blackmail ${target.config.name} — secret exposed!`);
           }
+          this.world.updateReputation(target.id, actorId, -15, 'blackmailed me');
+          this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
+          this.broadcaster.agentAction(actorId, `blackmailing ${target.config.name}`, '🔒');
+          console.log(`[Social] ${actorName} blackmailing ${target.config.name} — victim will decide`);
         } else {
           console.log(`[Social] ${actorName} tried to blackmail ${target.config.name} but holds no secret about them`);
         }

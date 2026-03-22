@@ -5,8 +5,8 @@ import type { AgentController } from '../simulation/agent-controller.js';
 
 export interface ControllerData {
   controllerState: string;
-  dayPlan: unknown;
-  currentPlanIndex: number;
+  intentions: string[];
+  currentIntentionIndex: number;
   activityTimer: number;
   conversationCooldown: number;
   wakeHour: number;
@@ -92,8 +92,8 @@ export class SupabasePersistence {
         agent_id: agentId,
         data: {
           controllerState: ctrl.state,
-          dayPlan: ctrl.dayPlan,
-          currentPlanIndex: ctrl.currentPlanIndex,
+          intentions: ctrl.intentions,
+          currentIntentionIndex: ctrl.currentIntentionIndex,
           activityTimer: ctrl.activityTimer,
           conversationCooldown: ctrl.conversationCooldown,
           wakeHour: ctrl.wakeHour,
