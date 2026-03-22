@@ -473,6 +473,15 @@ export interface DayPlan {
   items: DayPlanItem[];
 }
 
+// --- Think Output (v2 cognition) ---
+
+export interface ThinkOutput {
+  thought: string;
+  actions?: string[];   // parsed [ACTION: ...] tags
+  mood?: Mood;          // parsed MOOD: <word>
+  replan?: string;      // parsed REPLAN: <reason>
+}
+
 // --- Village Board ---
 
 export type BoardPostType = 'decree' | 'rule' | 'announcement' | 'rumor' | 'threat' | 'alliance' | 'bounty';
