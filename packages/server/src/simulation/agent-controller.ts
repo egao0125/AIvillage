@@ -379,6 +379,14 @@ export class AgentController {
       const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
       if (gathered) {
         this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
+        // Emergency: starving agents eat immediately, others keep for trading
+        if (gathered.type === 'food' && this.agent.vitals && this.agent.vitals.hunger >= 60) {
+          this.world.removeItem(gathered.id);
+          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
+          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
+          this.broadcaster.agentAction(this.agent.id, `ate ${gathered.name}`, '🍽️');
+          this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
+        }
       }
     }
 
@@ -562,7 +570,7 @@ export class AgentController {
 
     // Hunger increases every game hour
     if (this.world.time.minute === 0) {
-      v.hunger = Math.min(100, v.hunger + 1.0);
+      v.hunger = Math.min(100, v.hunger + 0.5);
     }
 
     // Energy depletes during activity, restores during sleep
