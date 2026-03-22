@@ -380,9 +380,10 @@ export class ConversationManager {
     // e.g. "decree - no one enters the tavern after dark"
     // e.g. "rule - everyone must pay 10 gold tax"
     // e.g. "announce - village meeting at the plaza"
-    const boardMatch = lower.match(/^(decree|rule|announce(?:ment)?|rumor|threat|alliance|bounty)\s*[-:]\s*(.+)/);
+    const boardMatch = lower.match(/^(post|decree|rule|announce(?:ment)?|rumor|threat|alliance|bounty)\s*[-:"']\s*["']?(.+?)["']?\s*$/);
     if (boardMatch) {
       const typeMap: Record<string, BoardPostType> = {
+        post: 'announcement',
         decree: 'decree', rule: 'rule',
         announce: 'announcement', announcement: 'announcement',
         rumor: 'rumor', threat: 'threat',
@@ -1376,7 +1377,7 @@ export class ConversationManager {
     });
 
     // If it sounds like a public statement, post to board
-    const speechPatterns = /^(announce|shout|proclaim|declare|call out|yell)/i;
+    const speechPatterns = /^(post|announce|shout|proclaim|declare|call out|yell)/i;
     if (speechPatterns.test(rawAction)) {
       const actorName = this.world.getAgent(actorId)?.config.name ?? 'Unknown';
       this.world.addBoardPost({
