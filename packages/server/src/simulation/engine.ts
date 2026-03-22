@@ -109,6 +109,10 @@ export class SimulationEngine {
         this.world.artifacts = (worldData.artifacts ?? []) as typeof this.world.artifacts;
         this.world.technologies = (worldData.technologies ?? []) as typeof this.world.technologies;
         this.world.materialSpawns = (worldData.materialSpawns ?? this.world.materialSpawns) as typeof this.world.materialSpawns;
+        // Reset spawn timers — prevents stale lastGathered from previous sessions blocking all gathering
+        for (const spawn of this.world.materialSpawns) {
+          spawn.lastGathered = undefined;
+        }
         this.world.conversations = recordToMap(worldData.conversations ?? {}) as typeof this.world.conversations;
         this.world.elections = recordToMap(worldData.elections ?? {}) as typeof this.world.elections;
         this.world.properties = recordToMap(worldData.properties ?? {}) as typeof this.world.properties;
