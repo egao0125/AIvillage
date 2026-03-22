@@ -249,7 +249,7 @@ export class World {
     spawn.lastGathered = now;
 
     // Edible materials become food items
-    const edibleMaterials = ['mushrooms', 'fish', 'vegetables', 'bread', 'coffee', 'stew'];
+    const edibleMaterials = ['mushrooms', 'fish', 'vegetables', 'bread', 'coffee', 'stew', 'wheat', 'herbs'];
     const isFood = edibleMaterials.includes(spawn.material.toLowerCase());
 
     const item: Item = {
