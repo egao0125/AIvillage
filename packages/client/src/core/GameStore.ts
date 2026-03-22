@@ -19,6 +19,12 @@ import type {
   Recap,
 } from '@ai-village/shared';
 
+export interface ActionLogEntry {
+  action: string;
+  emoji?: string;
+  time: number;
+}
+
 interface GameState {
   agents: Map<string, Agent>;
   selectedAgentId: string | null;
@@ -41,6 +47,7 @@ interface GameState {
   characterPageAgentId: string | null;
   activeRecap: Recap | null;
   weeklySummary: string | null;
+  actionLog: Map<string, ActionLogEntry[]>;
 }
 
 export interface ChatEntry {
@@ -83,6 +90,7 @@ class GameStore {
     characterPageAgentId: null,
     activeRecap: null,
     weeklySummary: null,
+    actionLog: new Map(),
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -123,12 +131,22 @@ class GameStore {
     this.notify();
   }
 
-  updateAgentAction(agentId: string, action: string): void {
+  updateAgentAction(agentId: string, action: string, emoji?: string): void {
     const agent = this.state.agents.get(agentId);
     if (!agent) return;
     const newAgents = new Map(this.state.agents);
     newAgents.set(agentId, { ...agent, currentAction: action });
-    this.state = { ...this.state, agents: newAgents };
+
+    // Push to action log (cap 5, skip consecutive duplicates)
+    const newLog = new Map(this.state.actionLog);
+    const existing = newLog.get(agentId) || [];
+    const last = existing[0];
+    if (!last || last.action !== action) {
+      const entry: ActionLogEntry = { action, emoji, time: Date.now() };
+      newLog.set(agentId, [entry, ...existing].slice(0, 5));
+    }
+
+    this.state = { ...this.state, agents: newAgents, actionLog: newLog };
     this.notify();
   }
 

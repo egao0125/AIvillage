@@ -129,7 +129,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
               id: a.id || `existing-${i}`,
               name: a.name,
               occupation: a.occupation,
-              soul: '',
+              soul: a.soul || '',
               startingGold: a.currency ?? 100,
             })),
           );

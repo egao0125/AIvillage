@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { gameStore, type ChatEntry, type ThoughtEntry } from './GameStore';
+import { gameStore, type ChatEntry, type ThoughtEntry, type ActionLogEntry } from './GameStore';
 import type {
   Agent,
   BoardPost,
@@ -160,5 +160,14 @@ export function useWeeklySummary(): string | null {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().weeklySummary
+  );
+}
+
+const EMPTY_ACTION_LOG: ActionLogEntry[] = [];
+
+export function useActionLog(agentId: string): ActionLogEntry[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().actionLog.get(agentId) ?? EMPTY_ACTION_LOG
   );
 }

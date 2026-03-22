@@ -105,7 +105,7 @@ export function connectSocket(): Socket {
   socket.on(
     'agent:action',
     (data: { agentId: string; action: string; emoji?: string }) => {
-      gameStore.updateAgentAction(data.agentId, data.action);
+      gameStore.updateAgentAction(data.agentId, data.action, data.emoji);
       eventBus.emit('agent:action', data);
     }
   );

@@ -154,9 +154,11 @@ export class AgentController {
           if (this.pendingReplan) {
             this.pendingReplan = false;
             void this.replanAfterConversation();
-          } else {
-            this.followNextIntention();
           }
+          // Always go through idle gap — replan just changes the intention list
+          this.state = 'idle';
+          this.idleTimer = 0;
+          this.world.updateAgentState(this.agent.id, 'idle', 'between activities');
         }
         break;
       }
@@ -394,7 +396,7 @@ export class AgentController {
         // Emergency: starving agents eat immediately, others keep for trading
         if (gathered.type === 'food' && this.agent.vitals && this.agent.vitals.hunger >= 60) {
           this.world.removeItem(gathered.id);
-          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
+          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 40);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
           this.broadcaster.agentAction(this.agent.id, `ate ${gathered.name}`, '🍽️');
           this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
@@ -414,7 +416,7 @@ export class AgentController {
         // Consume food from inventory
         this.world.removeItem(foodItem.id);
         if (this.agent.vitals) {
-          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
+          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 40);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
         }
         this.broadcaster.agentAction(this.agent.id, `ate ${foodItem.name}`, '🍽️');
@@ -444,11 +446,11 @@ export class AgentController {
     // - Action completed instantly (gather/eat/heal): brief pause then move on
     // - Resting/relaxing: long enough to actually restore energy
     // - Everything else: moderate time for think() to fire
-    this.activityTimer = actionCompleted ? 3 : isRestActivity ? 30 : 15;
+    this.activityTimer = actionCompleted ? 8 : isRestActivity ? 60 : 45;
 
     // Think — let agent react to what they're doing at this location (skip if API exhausted)
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
-    if (ticksSinceLast >= 30 && !isFoodActivity && !isHealingActivity && !isGatherActivity && this.soloActionExecutor && !this.apiExhausted) {
+    if (ticksSinceLast >= 120 && !isFoodActivity && !isHealingActivity && !isGatherActivity && this.soloActionExecutor && !this.apiExhausted) {
       this.lastSoloActionTick = this.world.time.totalMinutes;
       void this.cognition.think(
         `doing: ${activity}`,
@@ -518,7 +520,7 @@ export class AgentController {
    */
   private async replanAfterConversation(): Promise<void> {
     if (this.planningInProgress || this.apiExhausted) {
-      this.followNextIntention();
+      // Already planning or API dead — let idle timer handle next intention
       return;
     }
 
@@ -540,15 +542,15 @@ export class AgentController {
       console.log(
         `[Agent] ${this.agent.config.name} replanned after conversation: ${plan.length} new intentions`,
       );
-
-      this.followNextIntention();
     } catch (err) {
-      // Replanning failed — track failure, follow existing plan
+      // Replanning failed — track failure, idle timer will follow existing plan
       console.log(`[Agent] ${this.agent.config.name} couldn't replan, continuing existing plan`);
       this.handleApiFailure(err);
-      this.followNextIntention();
     } finally {
       this.planningInProgress = false;
+      // Always return to idle — let the idle timer's 30-tick gap handle next intention
+      this.state = 'idle';
+      this.idleTimer = 0;
     }
   }
 
@@ -927,13 +929,13 @@ export class AgentController {
     // Hospital can't fix hunger. Don't send a starving agent to a cardiologist.
 
     // Emergency hunger: force food-seeking
-    if (d.survival > 60 || v.hunger >= 60) {
+    if (d.survival > 60 || v.hunger >= 80) {
       void this.forceFoodPlan();
       return true;
     }
 
     // Urgent hunger: insert food if next plan item isn't food-related
-    if (d.survival > 40 || v.hunger >= 40) {
+    if (d.survival > 40 || v.hunger >= 60) {
       if (this.currentIntentionIndex < this.intentions.length) {
         const nextItem = this.intentions[this.currentIntentionIndex];
         if (!this.isFoodActivity(nextItem)) {

@@ -134,6 +134,14 @@ export function createRouter(engine: SimulationEngine): Router {
         occupation: a.config.occupation,
         personality: a.config.personality,
         currency: a.currency,
+        soul: a.config.soul,
+        backstory: a.config.backstory,
+        goal: a.config.goal,
+        fears: a.config.fears,
+        desires: a.config.desires,
+        coreValues: a.config.coreValues,
+        contradictions: a.config.contradictions,
+        speechPattern: a.config.speechPattern,
       })),
     });
   });
