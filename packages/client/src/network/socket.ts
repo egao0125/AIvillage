@@ -298,3 +298,11 @@ export function selectAgent(agentId: string): void {
   socket?.emit('agent:select', agentId);
   gameStore.selectAgent(agentId);
 }
+
+export function watchThoughts(agentId: string): void {
+  socket?.emit('agent:watch-thoughts', agentId);
+}
+
+export function unwatchThoughts(): void {
+  socket?.emit('agent:unwatch-thoughts');
+}

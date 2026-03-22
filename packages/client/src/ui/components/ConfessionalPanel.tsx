@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useThoughts, useAgents } from '../../core/hooks';
+import { watchThoughts, unwatchThoughts } from '../../network/socket';
 import { nameToColor, hexToString } from '../../utils/color';
 import { COLORS, FONTS } from '../styles';
 
@@ -26,6 +27,19 @@ export const ConfessionalPanel: React.FC = () => {
   useEffect(() => {
     setCurrentIdx(Math.max(0, filteredThoughts.length - 1));
   }, [filterAgentId]);
+
+  // On-demand thought generation: watch when a specific agent is selected
+  useEffect(() => {
+    if (filterAgentId) {
+      watchThoughts(filterAgentId);
+      return () => unwatchThoughts();
+    } else {
+      unwatchThoughts();
+    }
+  }, [filterAgentId]);
+
+  // Safety net: unwatch on unmount (e.g. switching sidebar tabs)
+  useEffect(() => () => unwatchThoughts(), []);
 
   const currentThought = filteredThoughts[Math.min(currentIdx, filteredThoughts.length - 1)];
 
