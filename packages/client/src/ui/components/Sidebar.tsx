@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAgents, useSelectedAgent, useBoard, useArtifacts, useStorylines } from '../../core/hooks';
+import { useAgents, useSelectedAgent, useBoard } from '../../core/hooks';
 import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
 import { AgentProfile } from './AgentProfile';
@@ -8,22 +8,18 @@ import { ConfessionalPanel } from './ConfessionalPanel';
 import { StorylinePanel } from './StorylinePanel';
 import { COLORS, FONTS } from '../styles';
 
-type Tab = 'villagers' | 'village' | 'confessional' | 'stories';
+type Tab = 'villagers' | 'village' | 'confessional' | 'recap';
 
 export const Sidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('villagers');
   const agents = useAgents();
   const selectedAgent = useSelectedAgent();
   const board = useBoard();
-  const artifacts = useArtifacts();
-  const storylines = useStorylines();
 
   // Count village items: rules + decrees + alliances + announcements
   const villageCount = board.filter(p =>
     (p.type === 'decree' || p.type === 'rule' || p.type === 'announcement' || p.type === 'alliance') && !p.revoked
   ).length;
-
-  const activeStorylines = storylines.filter(s => s.status === 'developing' || s.status === 'climax').length;
 
   const tabLabel = (tab: Tab): string => {
     switch (tab) {
@@ -33,8 +29,8 @@ export const Sidebar: React.FC = () => {
         return `Village${villageCount > 0 ? ` (${villageCount})` : ''}`;
       case 'confessional':
         return 'Thoughts';
-      case 'stories':
-        return `Stories${activeStorylines > 0 ? ` (${activeStorylines})` : ''}`;
+      case 'recap':
+        return 'Recap';
     }
   };
 
@@ -72,7 +68,7 @@ export const Sidebar: React.FC = () => {
           borderBottom: `1px solid ${COLORS.border}`,
         }}
       >
-        {(['villagers', 'village', 'confessional', 'stories'] as Tab[]).map((tab) => (
+        {(['villagers', 'village', 'confessional', 'recap'] as Tab[]).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -123,7 +119,7 @@ export const Sidebar: React.FC = () => {
           <VillageDashboard />
         ) : activeTab === 'confessional' ? (
           <ConfessionalPanel />
-        ) : activeTab === 'stories' ? (
+        ) : activeTab === 'recap' ? (
           <StorylinePanel />
         ) : null}
       </div>

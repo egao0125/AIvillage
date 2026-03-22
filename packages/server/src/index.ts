@@ -108,6 +108,16 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Weekly summary — on-demand per-viewer
+  socket.on('weekly-summary:request', async () => {
+    try {
+      const summary = await engine.generateWeeklySummary();
+      socket.emit('weekly-summary:ready', { summary });
+    } catch (err) {
+      console.error('[WeeklySummary] Failed:', err);
+    }
+  });
+
   // Spectator chat — relay to all clients
   socket.on('spectator:comment', (data: { message: string }) => {
     if (!data.message || typeof data.message !== 'string') return;
