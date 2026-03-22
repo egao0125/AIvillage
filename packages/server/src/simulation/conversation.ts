@@ -1,4 +1,4 @@
-import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, ArtifactReaction, Building, Institution, InstitutionMember, Agent } from '@ai-village/shared';
+import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
 import type { AgentCognition } from '@ai-village/ai-engine';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -362,1037 +362,340 @@ export class ConversationManager {
   }
 
   /**
-   * Parse and execute a social action from an agent's conversation.
-   * Actions can affect the world state: post to the board, transfer currency, etc.
+   * Parse and execute a social action from an agent's conversation or think() output.
+   * Uses LLM resolver to break freeform actions into 6 world primitives.
    */
-  executeSocialAction(
+  async executeSocialAction(
     actorId: string,
     actorName: string,
     targetId: string,
     rawAction: string,
     cognition: AgentCognition,
     cognitions?: Map<string, AgentCognition>,
-  ): void {
-    const lower = rawAction.toLowerCase();
+    requestConversation?: (initiatorId: string, targetId: string) => boolean,
+  ): Promise<void> {
     console.log(`[Social] ${actorName} action: ${rawAction}`);
+    const actor = this.world.getAgent(actorId);
+    if (!actor) return;
 
-    // --- DECREE / RULE / ANNOUNCEMENT ---
-    // e.g. "decree - no one enters the tavern after dark"
-    // e.g. "rule - everyone must pay 10 gold tax"
-    // e.g. "announce - village meeting at the plaza"
-    const boardMatch = lower.match(/^(post|decree|rule|announce(?:ment)?|rumor|threat|alliance|bounty)\s*[-:"']\s*["']?(.+?)["']?\s*$/);
-    if (boardMatch) {
-      const typeMap: Record<string, BoardPostType> = {
-        post: 'announcement',
-        decree: 'decree', rule: 'rule',
-        announce: 'announcement', announcement: 'announcement',
-        rumor: 'rumor', threat: 'threat',
-        alliance: 'alliance', bounty: 'bounty',
-      };
-      const postType = typeMap[boardMatch[1]] || 'announcement';
-      const content = boardMatch[2].trim();
-      const target = this.world.getAgent(targetId);
+    const area = this.world.getAreaAt(actor.position);
+    const nearby = this.world.getNearbyAgents(actor.position, 8)
+      .filter(a => a.id !== actorId && a.alive !== false)
+      .map(a => a.config.name);
 
-      this.world.addBoardPost({
-        id: crypto.randomUUID(),
-        authorId: actorId,
-        authorName: actorName,
-        type: postType,
-        content,
-        timestamp: Date.now(),
-        day: this.world.time.day,
-        targetIds: target ? [targetId] : undefined,
+    let ops: { op: string; [key: string]: any }[];
+    try {
+      ops = await cognition.resolveAction(rawAction, {
+        location: area?.id ?? 'unknown',
+        nearbyAgents: nearby,
+        inventory: actor.inventory.map(i => `${i.name} (${i.type})`),
+        gold: actor.currency,
       });
-
-      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
-      this.broadcaster.agentAction(actorId, `posted ${postType}: "${content.slice(0, 60)}"`, '\u{1F4CB}');
-
-      // Store as memory for the actor
-      void cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: actorId,
-        type: 'plan',
-        content: `I posted a ${postType} to the village board: "${content}"`,
-        importance: 8,
-        timestamp: Date.now(),
-        relatedAgentIds: [],
-      });
-      return;
+    } catch (err) {
+      console.error(`[Social] Resolve failed for ${actorName}:`, err);
+      ops = [{ op: 'observe', observation: rawAction }];
     }
 
-    // --- GIVE / PAY / TRIBUTE ---
-    // e.g. "give 10 gold to Mei"
-    // e.g. "demand 20 gold from Yuki"
-    const goldGiveMatch = lower.match(/(?:give|pay|send)\s+(\d+)\s*(?:gold|coins?|g)\s+to\s+(\w+)/);
-    if (goldGiveMatch) {
-      const amount = parseInt(goldGiveMatch[1]);
-      const newBalance = this.world.updateAgentCurrency(actorId, -amount);
-      const targetBalance = this.world.updateAgentCurrency(targetId, amount);
-      this.broadcaster.agentCurrency(actorId, newBalance, -amount, `gave gold to ${this.world.getAgent(targetId)?.config.name}`);
-      this.broadcaster.agentCurrency(targetId, targetBalance, amount, `received gold from ${actorName}`);
-      // Store gift event as memory — mood updates organically during next think() cycle
-      const giftRecipientCog = cognitions?.get(targetId);
-      if (giftRecipientCog) {
-        void giftRecipientCog.addMemory({
-          id: crypto.randomUUID(),
-          agentId: targetId,
-          type: 'observation',
-          content: `${actorName} gave me ${amount} gold as a gift!`,
-          importance: 7,
-          timestamp: Date.now(),
-          relatedAgentIds: [actorId],
-        }).catch(() => {});
-      }
-      this.broadcaster.agentAction(actorId, `gave ${amount}G to ${this.world.getAgent(targetId)?.config.name}`, '\u{1F4B0}');
-      console.log(`[Social] ${actorName} gave ${amount}G to ${this.world.getAgent(targetId)?.config.name}`);
-      return;
+    for (const op of ops) {
+      this.executeOp(actorId, actorName, op, cognition, cognitions, requestConversation);
     }
+  }
 
-    // Instant theft — victim has no say (50% fail chance via steal item pattern)
-    const goldStealMatch = lower.match(/(?:take|steal|tax)\s+(\d+)\s*(?:gold|coins?|g)\s+from\s+(\w+)/);
-    if (goldStealMatch) {
-      const amount = parseInt(goldStealMatch[1]);
-      const target = this.world.getAgent(targetId);
-      if (target) {
-        const taken = Math.min(amount, target.currency);
-        if (taken > 0) {
-          const targetBalance = this.world.updateAgentCurrency(targetId, -taken);
-          const actorBalance = this.world.updateAgentCurrency(actorId, taken);
-          this.broadcaster.agentCurrency(targetId, targetBalance, -taken, `${actorName} took gold`);
-          this.broadcaster.agentCurrency(actorId, actorBalance, taken, `took gold from ${target.config.name}`);
-          this.broadcaster.agentAction(actorId, `stole ${taken}G from ${target.config.name}`, '\u{1F4B0}');
-          console.log(`[Social] ${actorName} took ${taken}G from ${target.config.name}`);
+  /**
+   * Execute a single world primitive operation.
+   * 6 cases: create, remove, modify, transfer, interact, observe.
+   */
+  private executeOp(
+    actorId: string, actorName: string,
+    op: { op: string; [key: string]: any },
+    cognition: AgentCognition,
+    cognitions?: Map<string, AgentCognition>,
+    requestConversation?: (initiatorId: string, targetId: string) => boolean,
+  ): void {
+    const actor = this.world.getAgent(actorId);
+    if (!actor) return;
 
-          // Store theft event as memory — mood updates organically during next think() cycle
-          const victimCognition = cognitions?.get(targetId);
-          if (victimCognition) {
-            void victimCognition.addMemory({
-              id: crypto.randomUUID(),
-              agentId: targetId,
-              type: 'observation',
-              content: `${actorName} stole ${taken} gold from me!`,
-              importance: 8,
-              timestamp: Date.now(),
-              relatedAgentIds: [actorId],
-            }).catch(() => {});
-          }
-        }
-      }
-      return;
-    }
+    switch (op.op) {
 
-    // Victim-agency demands — stored as memory, victim decides
-    const goldDemandMatch = lower.match(/(?:demand|extort)\s+(\d+)\s*(?:gold|coins?|g)\s+from\s+(\w+)/);
-    if (goldDemandMatch) {
-      const amount = parseInt(goldDemandMatch[1]);
-      const target = this.world.getAgent(targetId);
-      if (target) {
-        // Store demand as high-importance memory on victim — they'll decide during next action
-        const victimCognition = cognitions?.get(targetId);
-        if (victimCognition) {
-          void victimCognition.addMemory({
+      case 'create': {
+        const type = op.type;
+        const data = op.data || op;
+
+        if (type === 'board_post') {
+          const post = {
             id: crypto.randomUUID(),
-            agentId: targetId,
-            type: 'observation',
-            content: `${actorName} demanded ${amount} gold from me. I need to decide whether to comply or resist.`,
-            importance: 9,
-            timestamp: Date.now(),
-            relatedAgentIds: [actorId],
-          });
-
-          // Store demand event as memory — mood updates organically during next think() cycle
-          void victimCognition.addMemory({
-            id: crypto.randomUUID(),
-            agentId: targetId,
-            type: 'observation',
-            content: `${actorName} demanded ${amount} gold from me!`,
-            importance: 8,
-            timestamp: Date.now(),
-            relatedAgentIds: [actorId],
-          }).catch(() => {});
-        }
-        // Broadcast the demand (everyone sees it happened)
-        this.broadcaster.agentAction(actorId, `demanded ${amount}G from ${target.config.name}`, '💰');
-        console.log(`[Social] ${actorName} demanded ${amount}G from ${target.config.name} — victim will decide`);
-      }
-      return;
-    }
-
-    // --- EAT FOOD ---
-    // e.g. "eat fish", "eat - mushrooms"
-    const eatMatch = lower.match(/^eat\s*[-:]?\s*(.+)/);
-    if (eatMatch) {
-      const foodName = eatMatch[1].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const foodItem = actor.inventory.find(i => i.type === 'food' && i.name.toLowerCase().includes(foodName));
-        if (foodItem && actor.vitals) {
-          this.world.removeItem(foodItem.id);
-          actor.vitals.hunger = Math.max(0, actor.vitals.hunger - 30);
-          actor.vitals.energy = Math.min(100, actor.vitals.energy + 10);
-          this.broadcaster.agentAction(actorId, `ate ${foodItem.name}`, '🍽️');
-          this.broadcaster.agentInventory(actorId, actor.inventory);
-          console.log(`[Social] ${actorName} ate ${foodItem.name}`);
-        }
-      }
-      return;
-    }
-
-    // --- GATHER MATERIAL ---
-    // e.g. "gather - wood", "gather wheat", "gather some mushrooms"
-    const gatherMatch = lower.match(/^gather\s*[-:]?\s*(?:some\s+)?(.+)/);
-    if (gatherMatch) {
-      const material = gatherMatch[1].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const area = this.world.getAreaAt(actor.position);
-        const areaId = area?.id ?? '';
-        const item = this.world.gatherMaterial(actorId, areaId);
-        if (item) {
-          this.broadcaster.agentInventory(actorId, actor.inventory);
-          this.broadcaster.agentAction(actorId, `gathered ${material}`, '🪓');
-        } else {
-          console.log(`[Social] ${actorName} tried to gather ${material} but nothing available`);
-        }
-      }
-      return;
-    }
-
-    // --- CRAFT ITEM ---
-    // e.g. "craft - wooden chair from wood"
-    const craftMatch = lower.match(/^craft\s*[-:]\s*(.+?)\s+from\s+(.+)/);
-    if (craftMatch) {
-      const itemName = craftMatch[1].trim();
-      const materialName = craftMatch[2].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const materialItem = actor.inventory.find(i => i.name.toLowerCase() === materialName && i.type === 'material');
-        if (materialItem) {
-          this.world.removeItem(materialItem.id);
-          // Skill multiplier: crafting-related skills boost value
-          const craftSkill = actor.skills.find(s => s.name.toLowerCase().includes('craft') || s.name.toLowerCase().includes(materialName));
-          const skillMultiplier = craftSkill ? 1 + craftSkill.level * 0.1 : 1.0;
-          // Building crafting_bonus: check for workshop-type building at current location
-          const actorArea = this.world.getAreaAt(actor.position);
-          let buildingMultiplier = 1.0;
-          if (actorArea) {
-            for (const building of this.world.buildings.values()) {
-              if (building.areaId === actorArea.id && building.effects.includes('crafting_bonus') && building.durability > 0) {
-                buildingMultiplier = 1.5;
-                break;
-              }
-            }
-          }
-          const craftedItem: Item = {
-            id: crypto.randomUUID(),
-            name: itemName,
-            description: `${itemName} crafted by ${actorName} from ${materialName}`,
-            ownerId: actorId,
-            createdBy: actorId,
-            value: Math.floor(materialItem.value * 2 * skillMultiplier * buildingMultiplier),
-            type: 'other',
+            authorId: actorId, authorName: actorName,
+            type: (data.type || 'announcement') as BoardPostType,
+            content: data.content || '',
+            timestamp: Date.now(), day: this.world.time.day,
+            targetIds: data.targetName ? [this.findAgentByName(data.targetName)?.id].filter(Boolean) as string[] : undefined,
           };
-          this.world.addItem(craftedItem);
-          this.broadcaster.agentInventory(actorId, actor.inventory);
-          this.broadcaster.agentAction(actorId, `crafted ${itemName}`, '🔨');
-          console.log(`[Social] ${actorName} crafted ${itemName} from ${materialName} (skill: x${skillMultiplier.toFixed(1)}, building: x${buildingMultiplier})`);
-        } else {
-          console.log(`[Social] ${actorName} tried to craft ${itemName} but lacks ${materialName}`);
+          this.world.addBoardPost(post);
+          this.broadcaster.boardPost(post);
+          this.broadcaster.agentAction(actorId, `posted: "${(data.content || '').slice(0, 60)}"`, '\u{1F4CB}');
         }
-      }
-      return;
-    }
-
-    // --- COOK FOOD ---
-    // e.g. "cook - mushroom soup from mushrooms"
-    const cookMatch = lower.match(/^cook\s*[-:]\s*(.+?)\s+from\s+(.+)/);
-    if (cookMatch) {
-      const dishName = cookMatch[1].trim();
-      const ingredientName = cookMatch[2].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const ingredient = actor.inventory.find(i =>
-          i.name.toLowerCase() === ingredientName && (i.type === 'material' || i.type === 'food')
-        );
-        if (ingredient) {
-          this.world.removeItem(ingredient.id);
-          // Skill multiplier: cooking-related skills boost value
-          const cookSkill = actor.skills.find(s => s.name.toLowerCase().includes('cook') || s.name.toLowerCase().includes('chef'));
-          const cookSkillMult = cookSkill ? 1 + cookSkill.level * 0.1 : 1.0;
-          // Building crafting_bonus: check for workshop/kitchen building at current location
-          const cookArea = this.world.getAreaAt(actor.position);
-          let cookBuildingMult = 1.0;
-          if (cookArea) {
-            for (const building of this.world.buildings.values()) {
-              if (building.areaId === cookArea.id && building.effects.includes('crafting_bonus') && building.durability > 0) {
-                cookBuildingMult = 1.5;
-                break;
-              }
-            }
-          }
-          const cookedItem: Item = {
-            id: crypto.randomUUID(),
-            name: dishName,
-            description: `${dishName} cooked by ${actorName} from ${ingredientName}`,
-            ownerId: actorId,
-            createdBy: actorId,
-            value: Math.floor(ingredient.value * 2 * cookSkillMult * cookBuildingMult),
-            type: 'food',
+        else if (type === 'item') {
+          const item: Item = {
+            id: crypto.randomUUID(), name: data.name || 'item',
+            description: data.description || `${data.name} created by ${actorName}`,
+            ownerId: actorId, createdBy: actorId,
+            value: data.value || 5, type: data.itemType || 'other',
           };
-          this.world.addItem(cookedItem);
+          this.world.addItem(item);
           this.broadcaster.agentInventory(actorId, actor.inventory);
-          this.broadcaster.agentAction(actorId, `cooked ${dishName}`, '\u{1F373}');
-          console.log(`[Social] ${actorName} cooked ${dishName} from ${ingredientName}`);
-        } else {
-          console.log(`[Social] ${actorName} tried to cook ${dishName} but lacks ${ingredientName}`);
+          this.broadcaster.agentAction(actorId, `created ${item.name}`, '\u{1F528}');
         }
-      }
-      return;
-    }
-
-    // --- GIVE ITEM ---
-    // e.g. "give item - wooden chair to Yuki"
-    const giveItemMatch = lower.match(/^give\s+item\s*[-:]\s*(.+?)\s+to\s+(.+)/);
-    if (giveItemMatch) {
-      const itemName = giveItemMatch[1].trim();
-      const recipientName = giveItemMatch[2].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const item = actor.inventory.find(i => i.name.toLowerCase() === itemName);
-        const recipient = this.findAgentByName(recipientName);
-        if (item && recipient) {
-          this.world.transferItem(item.id, actorId, recipient.id);
-          this.broadcaster.agentInventory(actorId, actor.inventory);
-          this.broadcaster.agentInventory(recipient.id, recipient.inventory);
-          console.log(`[Social] ${actorName} gave ${itemName} to ${recipient.config.name}`);
+        else if (type === 'artifact') {
+          const artifact: Artifact = {
+            id: crypto.randomUUID(), title: data.title || 'Untitled',
+            content: data.content || '', type: data.artifactType || 'poem',
+            creatorId: actorId, creatorName: actorName,
+            location: this.world.getAreaAt(actor.position)?.id,
+            visibility: data.addressedTo ? 'addressed' as const : (data.artifactType === 'diary' ? 'private' as const : 'public' as const),
+            addressedTo: data.addressedTo ? [this.findAgentByName(data.addressedTo)?.id].filter(Boolean) as string[] : [],
+            reactions: [], createdAt: Date.now(), day: this.world.time.day,
+          };
+          this.world.addArtifact(artifact);
+          this.broadcaster.artifactCreated(artifact);
+          this.broadcaster.agentAction(actorId, `created ${data.artifactType || 'artifact'}: "${data.title}"`, '\u{270D}\uFE0F');
         }
-      }
-      return;
-    }
-
-    // --- SELL ITEM ---
-    // e.g. "sell item - wooden chair to Yuki for 20 gold"
-    const sellItemMatch = lower.match(/^sell\s+item\s*[-:]\s*(.+?)\s+to\s+(.+?)\s+for\s+(\d+)\s*(?:gold|coins?|g)/);
-    if (sellItemMatch) {
-      const itemName = sellItemMatch[1].trim();
-      const buyerName = sellItemMatch[2].trim();
-      const price = parseInt(sellItemMatch[3]);
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const item = actor.inventory.find(i => i.name.toLowerCase() === itemName);
-        const buyer = this.findAgentByName(buyerName);
-        if (item && buyer && buyer.currency >= price) {
-          this.world.transferItem(item.id, actorId, buyer.id);
-          const buyerBalance = this.world.updateAgentCurrency(buyer.id, -price);
-          const sellerBalance = this.world.updateAgentCurrency(actorId, price);
-          this.broadcaster.agentCurrency(buyer.id, buyerBalance, -price, `bought ${itemName} from ${actorName}`);
-          this.broadcaster.agentCurrency(actorId, sellerBalance, price, `sold ${itemName} to ${buyer.config.name}`);
-          this.broadcaster.agentInventory(actorId, actor.inventory);
-          this.broadcaster.agentInventory(buyer.id, buyer.inventory);
-          console.log(`[Social] ${actorName} sold ${itemName} to ${buyer.config.name} for ${price}G`);
-        }
-      }
-      return;
-    }
-
-    // --- TRADE ITEM (BARTER) ---
-    // e.g. "trade item - fish to Mei for wood"
-    const tradeItemMatch = lower.match(/^trade\s+item\s*[-:]\s*(.+?)\s+to\s+(.+?)\s+for\s+(.+)/);
-    if (tradeItemMatch) {
-      const myItemName = tradeItemMatch[1].trim();
-      const otherName = tradeItemMatch[2].trim();
-      const theirItemName = tradeItemMatch[3].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const myItem = actor.inventory.find(i => i.name.toLowerCase() === myItemName);
-        const other = this.findAgentByName(otherName);
-        if (myItem && other) {
-          const theirItem = other.inventory.find(i => i.name.toLowerCase() === theirItemName);
-          if (theirItem) {
-            this.world.transferItem(myItem.id, actorId, other.id);
-            this.world.transferItem(theirItem.id, other.id, actorId);
-            this.broadcaster.agentInventory(actorId, actor.inventory);
-            this.broadcaster.agentInventory(other.id, other.inventory);
-            console.log(`[Social] ${actorName} traded ${myItemName} for ${theirItemName} with ${other.config.name}`);
-          }
-        }
-      }
-      return;
-    }
-
-    // --- BUY ITEM ---
-    // e.g. "buy item - wooden chair from Yuki for 20 gold"
-    const buyItemMatch = lower.match(/^buy\s+item\s*[-:]\s*(.+?)\s+from\s+(.+?)\s+for\s+(\d+)\s*(?:gold|coins?|g)/);
-    if (buyItemMatch) {
-      const itemName = buyItemMatch[1].trim();
-      const sellerName = buyItemMatch[2].trim();
-      const price = parseInt(buyItemMatch[3]);
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const seller = this.findAgentByName(sellerName);
-        if (seller && actor.currency >= price) {
-          const item = seller.inventory.find(i => i.name.toLowerCase() === itemName);
-          if (item) {
-            this.world.transferItem(item.id, seller.id, actorId);
-            const actorBalance = this.world.updateAgentCurrency(actorId, -price);
-            const sellerBalance = this.world.updateAgentCurrency(seller.id, price);
-            this.broadcaster.agentCurrency(actorId, actorBalance, -price, `bought ${itemName} from ${seller.config.name}`);
-            this.broadcaster.agentCurrency(seller.id, sellerBalance, price, `sold ${itemName} to ${actorName}`);
-            this.broadcaster.agentInventory(actorId, actor.inventory);
-            this.broadcaster.agentInventory(seller.id, seller.inventory);
-            console.log(`[Social] ${actorName} bought ${itemName} from ${seller.config.name} for ${price}G`);
-          }
-        }
-      }
-      return;
-    }
-
-    // --- STEAL ITEM ---
-    // e.g. "steal item - wooden chair from Yuki"
-    const stealItemMatch = lower.match(/^steal\s+item\s*[-:]\s*(.+?)\s+from\s+(.+)/);
-    if (stealItemMatch) {
-      const itemName = stealItemMatch[1].trim();
-      const victimName = stealItemMatch[2].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        const victim = this.findAgentByName(victimName);
-        if (victim) {
-          const item = victim.inventory.find(i => i.name.toLowerCase() === itemName);
-          if (item) {
-            this.world.transferItem(item.id, victim.id, actorId);
-            this.broadcaster.agentInventory(actorId, actor.inventory);
-            this.broadcaster.agentInventory(victim.id, victim.inventory);
-            this.world.updateReputation(victim.id, actorId, -20, `stole ${itemName}`);
-            this.broadcaster.reputationChange(victim.id, actorId, this.world.getReputation(victim.id, actorId));
-            console.log(`[Social] ${actorName} stole ${itemName} from ${victim.config.name}!`);
-          } else {
-            this.world.updateReputation(victim.id, actorId, -10, `attempted theft of ${itemName}`);
-            this.broadcaster.reputationChange(victim.id, actorId, this.world.getReputation(victim.id, actorId));
-            console.log(`[Social] ${actorName} failed to steal ${itemName} from ${victim?.config.name ?? victimName}`);
-          }
-
-          // Witness detection: nearby agents see the theft attempt
-          const nearbyWitnesses = this.world.getNearbyAgents(actor!.position, 5)
-            .filter(a => a.id !== actorId && a.id !== victim!.id && a.alive !== false);
-          for (const witness of nearbyWitnesses) {
-            const witnessSecret: Secret = {
-              id: crypto.randomUUID(),
-              holderId: witness.id,
-              aboutAgentId: actorId,
-              content: `I saw ${actorName} try to steal ${itemName} from ${victim!.config.name}`,
-              importance: 8,
-              sharedWith: [],
-              createdAt: Date.now(),
+        else if (type === 'building') {
+          const materialItem = actor.inventory.find(i => i.type === 'material');
+          if (materialItem) {
+            this.world.removeItem(materialItem.id);
+            const effectsMap: Record<string, string[]> = {
+              house: ['shelter'], shop: ['trading'], workshop: ['crafting_bonus'],
+              shrine: ['healing'], tavern: ['shelter', 'trading'], barn: ['storage'], wall: ['defense'],
             };
-            this.world.addSecret(witnessSecret);
-            console.log(`[Social] ${witness.config.name} witnessed theft attempt by ${actorName}`);
+            const building: Building = {
+              id: crypto.randomUUID(), name: data.name || 'building',
+              type: data.buildingType || 'house',
+              description: `${data.name}, built by ${actorName}`,
+              ownerId: actorId, areaId: data.location || this.world.getAreaAt(actor.position)?.id || '',
+              durability: 100, maxDurability: 100,
+              effects: effectsMap[data.buildingType] || [],
+              builtBy: actorId, builtAt: Date.now(), materials: [materialItem.name],
+            };
+            this.world.addBuilding(building);
+            this.broadcaster.buildingUpdate(building);
+            this.broadcaster.agentAction(actorId, `built ${building.name}`, '\u{1F3D7}\uFE0F');
           }
         }
-      }
-      return;
-    }
-
-    // --- SHARE SECRET ---
-    // e.g. "share secret - the mayor is corrupt with Yuki"
-    const shareSecretMatch = lower.match(/^share\s+secret\s*[-:]\s*(.+?)\s+with\s+(.+)/);
-    if (shareSecretMatch) {
-      const secretText = shareSecretMatch[1].trim();
-      const recipientName = shareSecretMatch[2].trim();
-      const recipient = this.findAgentByName(recipientName);
-      if (recipient) {
-        // Find existing secret or create one
-        let secret = this.world.secrets.find(s => s.holderId === actorId && s.content.toLowerCase() === secretText);
-        if (!secret) {
-          secret = {
-            id: crypto.randomUUID(),
-            holderId: actorId,
-            content: secretText,
-            importance: 7,
-            sharedWith: [],
-            createdAt: Date.now(),
+        else if (type === 'institution') {
+          const inst: Institution = {
+            id: crypto.randomUUID(), name: data.name || 'organization',
+            type: data.instType || 'guild', description: data.description || '',
+            founderId: actorId,
+            members: [{ agentId: actorId, role: 'founder', joinedAt: Date.now() }],
+            treasury: 0, rules: data.rules || [], createdAt: Date.now(),
+          };
+          this.world.addInstitution(inst);
+          this.broadcaster.institutionUpdate(inst);
+          this.broadcaster.agentAction(actorId, `founded ${inst.name}`, '\u{1F3DB}\uFE0F');
+        }
+        else if (type === 'secret') {
+          const aboutAgent = data.about ? this.findAgentByName(data.about) : undefined;
+          const secret: Secret = {
+            id: crypto.randomUUID(), holderId: actorId,
+            aboutAgentId: aboutAgent?.id, content: data.content || '',
+            importance: data.importance || 7, sharedWith: [] as string[], createdAt: Date.now(),
           };
           this.world.addSecret(secret);
         }
-        if (!secret.sharedWith.includes(recipient.id)) {
-          secret.sharedWith.push(recipient.id);
+        else if (type === 'election') {
+          const election = {
+            id: crypto.randomUUID(), position: data.position || 'leader',
+            candidates: [actorId], votes: {} as Record<string, string>,
+            startDay: this.world.time.day, endDay: this.world.time.day + 2, active: true,
+          };
+          this.world.startElection(election);
+          this.broadcaster.electionUpdate(election);
+          this.broadcaster.agentAction(actorId, `called election for ${data.position}`, '\u{1F5F3}\uFE0F');
         }
-        this.broadcaster.secretShared(actorId, recipient.id);
-        this.world.updateReputation(recipient.id, actorId, 5, 'shared a secret');
 
-        // Gossip propagation: sharer's opinion of the secret's subject influences listener
-        if (secret.aboutAgentId) {
-          const sharerRep = this.world.getReputation(actorId, secret.aboutAgentId);
-          const attenuated = Math.max(-15, Math.min(15, Math.round(sharerRep * 0.5)));
-          const listenerRep = this.world.getReputation(recipient.id, secret.aboutAgentId);
-          if (Math.abs(listenerRep) < 30 && attenuated !== 0) {
-            this.world.updateReputation(recipient.id, secret.aboutAgentId, attenuated, `heard gossip from ${actorName}`);
-            this.broadcaster.reputationChange(recipient.id, secret.aboutAgentId, this.world.getReputation(recipient.id, secret.aboutAgentId));
+        void cognition.addMemory({
+          id: crypto.randomUUID(), agentId: actorId, type: 'plan',
+          content: `I created a ${type}: ${JSON.stringify(data).slice(0, 100)}`,
+          importance: 7, timestamp: Date.now(), relatedAgentIds: [],
+        });
+        break;
+      }
+
+      case 'remove': {
+        if (op.type === 'item') {
+          const item = actor.inventory.find(i =>
+            i.name.toLowerCase().includes((op.item || op.name || '').toLowerCase())
+          );
+          if (item) {
+            this.world.removeItem(item.id);
+            this.broadcaster.agentInventory(actorId, actor.inventory);
           }
         }
-
-        console.log(`[Social] ${actorName} shared a secret with ${recipient.config.name}: "${secretText}"`);
+        break;
       }
-      return;
-    }
 
-    // --- CREATE SECRET ---
-    // e.g. "create secret - saw them stealing about Yuki"
-    const createSecretMatch = lower.match(/^create\s+secret\s*[-:]\s*(.+?)\s+about\s+(.+)/);
-    if (createSecretMatch) {
-      const secretText = createSecretMatch[1].trim();
-      const aboutName = createSecretMatch[2].trim();
-      const aboutAgent = this.findAgentByName(aboutName);
-      const secret: Secret = {
-        id: crypto.randomUUID(),
-        holderId: actorId,
-        aboutAgentId: aboutAgent?.id,
-        content: secretText,
-        importance: 7,
-        sharedWith: [],
-        createdAt: Date.now(),
-      };
-      this.world.addSecret(secret);
-      console.log(`[Social] ${actorName} created a secret about ${aboutName}: "${secretText}"`);
-      return;
-    }
+      case 'modify': {
+        const targetName = op.target || 'self';
+        const target = targetName === 'self' ? actor : this.findAgentByName(targetName);
+        if (!target) break;
 
-    // --- BLACKMAIL ---
-    // e.g. "blackmail - Yuki with I saw you steal from the bakery"
-    const blackmailMatch = lower.match(/^blackmail\s*[-:]\s*(.+?)\s+with\s+(.+)/);
-    if (blackmailMatch) {
-      const targetName = blackmailMatch[1].trim();
-      const secretText = blackmailMatch[2].trim();
-      const target = this.findAgentByName(targetName);
-      if (target) {
-        // Validate actor holds a secret about target
-        const heldSecret = this.world.secrets.find(s =>
-          s.holderId === actorId && s.aboutAgentId === target.id
-        );
-        if (heldSecret) {
-          // Store blackmail demand as high-importance memory on victim — they decide during next think/talk
-          const victimCognition = cognitions?.get(target.id);
-          if (victimCognition) {
-            void victimCognition.addMemory({
-              id: crypto.randomUUID(),
-              agentId: target.id,
-              type: 'observation',
-              content: `${actorName} is blackmailing me with: "${secretText}". I need to decide whether to pay or resist.`,
-              importance: 9,
-              timestamp: Date.now(),
-              relatedAgentIds: [actorId],
+        const field = op.field;
+        if (field === 'gold' && op.delta) {
+          const newBal = this.world.updateAgentCurrency(target.id, op.delta);
+          const reason = op.reason || (op.delta > 0 ? 'received gold' : 'spent gold');
+          this.broadcaster.agentCurrency(target.id, newBal, op.delta, reason);
+        }
+        else if (field === 'reputation' && op.delta) {
+          const aboutAgent = op.about ? this.findAgentByName(op.about) : target;
+          if (aboutAgent) {
+            this.world.updateReputation(target.id, aboutAgent.id, op.delta, op.reason || '');
+            this.broadcaster.reputationChange(target.id, aboutAgent.id, this.world.getReputation(target.id, aboutAgent.id));
+          }
+        }
+        else if (field === 'skill') {
+          this.world.addSkill(target.id, { name: op.skill || op.value, level: op.level || 1, learnedFrom: actorId });
+          const updatedSkill = target.skills.find(s => s.name === (op.skill || op.value));
+          if (updatedSkill) this.broadcaster.agentSkill(target.id, updatedSkill);
+        }
+        else if (field === 'membership') {
+          const inst = this.findInstitutionByName(op.institution);
+          if (inst && !inst.dissolved) {
+            if (op.action === 'leave') {
+              this.world.removeInstitutionMember(inst.id, target.id);
+            } else {
+              this.world.addInstitutionMember(inst.id, { agentId: target.id, role: op.role || 'member', joinedAt: Date.now() });
+            }
+            this.broadcaster.institutionUpdate(inst);
+          }
+        }
+        else if (field === 'treasury') {
+          const inst = this.findInstitutionByName(op.institution);
+          if (inst && !inst.dissolved && op.delta) {
+            this.world.updateInstitutionTreasury(inst.id, op.delta);
+            this.broadcaster.institutionUpdate(inst);
+          }
+        }
+        else if (field === 'property') {
+          const prop = this.world.claimProperty(op.area, target.id, this.world.time.day);
+          if (prop) this.broadcaster.propertyChange(prop);
+        }
+        else if (field === 'vote') {
+          const candidate = this.findAgentByName(op.candidate);
+          if (candidate) {
+            for (const election of this.world.elections.values()) {
+              if (election.active && election.position.toLowerCase() === (op.position || '').toLowerCase()) {
+                this.world.castVote(election.id, actorId, candidate.id);
+                this.broadcaster.electionUpdate(election);
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case 'transfer': {
+        const what = op.what || 'item';
+        const fromName = op.from || 'self';
+        const toName = op.to;
+        const fromAgent = fromName === 'self' ? actor : this.findAgentByName(fromName);
+        const toAgent = toName === 'self' ? actor : this.findAgentByName(toName);
+        if (!fromAgent || !toAgent) {
+          void cognition.addMemory({
+            id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+            content: `Couldn't find ${!fromAgent ? fromName : toName} to complete the transfer.`,
+            importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+          });
+          break;
+        }
+
+        if (what === 'gold') {
+          const amount = op.amount || 0;
+          if (amount > 0) {
+            const fromBal = this.world.updateAgentCurrency(fromAgent.id, -amount);
+            const toBal = this.world.updateAgentCurrency(toAgent.id, amount);
+            this.broadcaster.agentCurrency(fromAgent.id, fromBal, -amount, op.reason || `transferred to ${toAgent.config.name}`);
+            this.broadcaster.agentCurrency(toAgent.id, toBal, amount, op.reason || `received from ${fromAgent.config.name}`);
+            this.broadcaster.agentAction(actorId, `${fromAgent.id === actorId ? 'gave' : 'took'} ${amount}G ${fromAgent.id === actorId ? 'to' : 'from'} ${toAgent.config.name}`, '\u{1F4B0}');
+          }
+        }
+        else if (what === 'item') {
+          const itemName = (op.item || '').toLowerCase();
+          const item = fromAgent.inventory.find(i => i.name.toLowerCase().includes(itemName));
+          if (item) {
+            this.world.transferItem(item.id, fromAgent.id, toAgent.id);
+            this.broadcaster.agentInventory(fromAgent.id, fromAgent.inventory);
+            this.broadcaster.agentInventory(toAgent.id, toAgent.inventory);
+            this.broadcaster.agentAction(actorId, `transferred ${item.name} to ${toAgent.config.name}`, '\u{1F4E6}');
+          } else {
+            void cognition.addMemory({
+              id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+              content: `I tried to transfer ${op.item} but couldn't find it.`,
+              importance: 5, timestamp: Date.now(), relatedAgentIds: [],
             });
           }
-          this.world.updateReputation(target.id, actorId, -15, 'blackmailed me');
-          this.broadcaster.reputationChange(target.id, actorId, this.world.getReputation(target.id, actorId));
-          this.broadcaster.agentAction(actorId, `blackmailing ${target.config.name}`, '🔒');
-          console.log(`[Social] ${actorName} blackmailing ${target.config.name} — victim will decide`);
-        } else {
-          console.log(`[Social] ${actorName} tried to blackmail ${target.config.name} but holds no secret about them`);
         }
-      }
-      return;
-    }
 
-    // --- PROPOSE INVENTION ---
-    // e.g. "propose invention - Water Wheel: uses river current for power using wood"
-    const inventionMatch = lower.match(/^propose\s+invention\s*[-:]\s*(.+?):\s*(.+?)\s+using\s+(.+)/);
-    if (inventionMatch) {
-      const invName = inventionMatch[1].trim();
-      const invDescription = inventionMatch[2].trim();
-      const invMaterials = inventionMatch[3].trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        // Check actor has at least one of the named materials
-        const materialItem = actor.inventory.find(i =>
-          i.type === 'material' && invMaterials.toLowerCase().includes(i.name.toLowerCase())
-        );
-        if (materialItem && !this.world.hasTechnology(invName)) {
-          this.world.removeItem(materialItem.id);
-          const tech: import('@ai-village/shared').Technology = {
-            id: crypto.randomUUID(),
-            name: invName,
-            description: invDescription,
-            inventorId: actorId,
-            inventorName: actorName,
-            effects: [invDescription],
-            requirements: [invMaterials],
-            discoveredAt: Date.now(),
-            day: this.world.time.day,
-          };
-          this.world.addTechnology(tech);
-          this.broadcaster.boardPost({
-            id: crypto.randomUUID(),
-            authorId: actorId,
-            authorName: actorName,
-            type: 'announcement',
-            content: `${actorName} invented "${invName}": ${invDescription}`,
-            timestamp: Date.now(),
-            day: this.world.time.day,
-          });
-          this.broadcaster.agentInventory(actorId, actor.inventory);
+        // Store memory for recipient
+        const recipientCog = cognitions?.get(toAgent.id);
+        if (recipientCog) {
+          void recipientCog.addMemory({
+            id: crypto.randomUUID(), agentId: toAgent.id, type: 'observation',
+            content: `${fromAgent.config.name} ${what === 'gold' ? `gave me ${op.amount} gold` : `gave me ${op.item}`}`,
+            importance: 7, timestamp: Date.now(), relatedAgentIds: [fromAgent.id],
+          }).catch(() => {});
+        }
+        break;
+      }
+
+      case 'interact': {
+        if (!requestConversation) break;
+        let target: Agent | undefined;
+        const who = op.target || op.who;
+        if (!who || who === 'anyone' || who === 'anyone nearby') {
+          const nearbyAgents = this.world.getNearbyAgents(actor.position, 10)
+            .filter(a => a.id !== actorId && a.alive !== false);
+          target = nearbyAgents[0];
+        } else {
+          target = this.findAgentByName(who);
+        }
+        if (target) {
+          const started = requestConversation(actorId, target.id);
+          if (!started) {
+            void cognition.addMemory({
+              id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+              content: `I tried to talk to ${target.config.name} but they were busy.`,
+              importance: 5, timestamp: Date.now(), relatedAgentIds: [target.id],
+            });
+          }
+        } else {
           void cognition.addMemory({
-            id: crypto.randomUUID(),
-            agentId: actorId,
-            type: 'plan',
-            content: `I invented "${invName}": ${invDescription}`,
-            importance: 9,
-            timestamp: Date.now(),
-            relatedAgentIds: [],
+            id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+            content: 'I wanted to talk to someone but nobody was around.',
+            importance: 4, timestamp: Date.now(), relatedAgentIds: [],
           });
-          console.log(`[Tech] ${actorName} invented: ${invName}`);
-        } else {
-          console.log(`[Social] ${actorName} tried to invent ${invName} but lacks materials or already exists`);
         }
+        break;
       }
-      return;
-    }
 
-    // --- CALL ELECTION ---
-    // e.g. "call election - mayor"
-    const electionMatch = lower.match(/^call\s+election\s*[-:]\s*(.+)/);
-    if (electionMatch) {
-      const position = electionMatch[1].trim();
-      const election = {
-        id: crypto.randomUUID(),
-        position,
-        candidates: [actorId],
-        votes: {} as Record<string, string>,
-        startDay: this.world.time.day,
-        endDay: this.world.time.day + 2,
-        active: true,
-      };
-      this.world.startElection(election);
-      this.broadcaster.electionUpdate(election);
-      console.log(`[Social] ${actorName} called an election for ${position}`);
-      return;
-    }
-
-    // --- VOTE ---
-    // e.g. "vote - Yuki for mayor"
-    const voteMatch = lower.match(/^vote\s*[-:]\s*(.+?)\s+for\s+(.+)/);
-    if (voteMatch) {
-      const candidateName = voteMatch[1].trim();
-      const position = voteMatch[2].trim();
-      const candidate = this.findAgentByName(candidateName);
-      if (candidate) {
-        // Find active election for this position
-        for (const election of this.world.elections.values()) {
-          if (election.active && election.position.toLowerCase() === position) {
-            this.world.castVote(election.id, actorId, candidate.id);
-            this.broadcaster.electionUpdate(election);
-            console.log(`[Social] ${actorName} voted for ${candidate.config.name} for ${position}`);
-            break;
-          }
-        }
+      case 'observe': {
+        const observation = op.observation || op.content || 'Observed surroundings.';
+        void cognition.addMemory({
+          id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+          content: observation, importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+        });
+        this.broadcaster.agentAction(actorId, observation.slice(0, 80), '\u{1F441}\uFE0F');
+        break;
       }
-      return;
-    }
 
-    // --- CLAIM PROPERTY ---
-    // e.g. "claim property - forest"
-    const claimMatch = lower.match(/^claim\s+property\s*[-:]\s*(.+)/);
-    if (claimMatch) {
-      const areaName = claimMatch[1].trim();
-      const property = this.world.claimProperty(areaName, actorId, this.world.time.day);
-      if (property) {
-        this.broadcaster.propertyChange(property);
-        console.log(`[Social] ${actorName} claimed ${areaName}`);
-      } else {
-        console.log(`[Social] ${actorName} tried to claim ${areaName} but it's already owned`);
+      default: {
+        void cognition.addMemory({
+          id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+          content: `I tried to ${op.op}: ${JSON.stringify(op)}`,
+          importance: 4, timestamp: Date.now(), relatedAgentIds: [],
+        });
+        break;
       }
-      return;
-    }
-
-    // --- CHARGE RENT ---
-    // e.g. "charge rent - 10 gold for forest"
-    const rentMatch = lower.match(/^charge\s+rent\s*[-:]\s*(\d+)\s*(?:gold|coins?|g)\s+for\s+(.+)/);
-    if (rentMatch) {
-      const amount = parseInt(rentMatch[1]);
-      const areaName = rentMatch[2].trim();
-      const ownerId = this.world.getPropertyOwner(areaName);
-      if (ownerId === actorId) {
-        // Charge all agents currently at that area
-        for (const agent of this.world.agents.values()) {
-          if (agent.id === actorId) continue;
-          const agentArea = this.world.getAreaAt(agent.position);
-          if (agentArea?.id === areaName) {
-            const paid = Math.min(amount, agent.currency);
-            if (paid > 0) {
-              const tenantBalance = this.world.updateAgentCurrency(agent.id, -paid);
-              const ownerBalance = this.world.updateAgentCurrency(actorId, paid);
-              this.broadcaster.agentCurrency(agent.id, tenantBalance, -paid, `rent to ${actorName} for ${areaName}`);
-              this.broadcaster.agentCurrency(actorId, ownerBalance, paid, `rent from ${agent.config.name} for ${areaName}`);
-              console.log(`[Social] ${actorName} charged ${agent.config.name} ${paid}G rent for ${areaName}`);
-            }
-          }
-        }
-      }
-      return;
-    }
-
-    // --- TEACH SKILL ---
-    // e.g. "teach - cooking to Yuki"
-    const teachMatch = lower.match(/^teach\s*[-:]\s*(.+?)\s+to\s+(.+)/);
-    if (teachMatch) {
-      const skillName = teachMatch[1].trim();
-      const studentName = teachMatch[2].trim();
-      const student = this.findAgentByName(studentName);
-      if (student) {
-        this.world.addSkill(student.id, { name: skillName, level: 1, learnedFrom: actorId });
-        const updatedSkill = student.skills.find(s => s.name === skillName);
-        if (updatedSkill) {
-          this.broadcaster.agentSkill(student.id, updatedSkill);
-        }
-        this.world.updateReputation(student.id, actorId, 10, `taught ${skillName}`);
-        this.broadcaster.reputationChange(student.id, actorId, this.world.getReputation(student.id, actorId));
-        console.log(`[Social] ${actorName} taught ${skillName} to ${student.config.name}`);
-      }
-      return;
-    }
-
-    // --- LEARN SKILL ---
-    // e.g. "learn - cooking from Yuki"
-    const learnMatch = lower.match(/^learn\s*[-:]\s*(.+?)\s+from\s+(.+)/);
-    if (learnMatch) {
-      const skillName = learnMatch[1].trim();
-      const teacherName = learnMatch[2].trim();
-      const teacher = this.findAgentByName(teacherName);
-      if (teacher) {
-        this.world.addSkill(actorId, { name: skillName, level: 1, learnedFrom: teacher.id });
-        const actor = this.world.getAgent(actorId);
-        if (actor) {
-          const updatedSkill = actor.skills.find(s => s.name === skillName);
-          if (updatedSkill) {
-            this.broadcaster.agentSkill(actorId, updatedSkill);
-          }
-        }
-        this.world.updateReputation(actorId, teacher.id, 5, `learned ${skillName}`);
-        this.broadcaster.reputationChange(actorId, teacher.id, this.world.getReputation(actorId, teacher.id));
-        console.log(`[Social] ${actorName} learned ${skillName} from ${teacher.config.name}`);
-      }
-      return;
-    }
-
-    // --- FOUND INSTITUTION (Phase 5) ---
-    // e.g. "found The Iron Guild as guild - For all blacksmiths and craftsmen"
-    const foundMatch = lower.match(/^found\s+(.+?)\s+as\s+(\w+)\s*(?:[-:]\s*(.+))?/);
-    if (foundMatch) {
-      const instName = foundMatch[1].trim();
-      const instType = foundMatch[2].trim();
-      const description = foundMatch[3]?.trim() ?? '';
-      const inst: Institution = {
-        id: crypto.randomUUID(),
-        name: instName,
-        type: instType,
-        description,
-        founderId: actorId,
-        members: [{ agentId: actorId, role: 'founder', joinedAt: Date.now() }],
-        treasury: 0,
-        rules: [],
-        createdAt: Date.now(),
-      };
-      this.world.addInstitution(inst);
-      this.broadcaster.institutionUpdate(inst);
-      void cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: actorId,
-        type: 'plan',
-        content: `I founded "${instName}", a ${instType}. ${description}`,
-        importance: 9,
-        timestamp: Date.now(),
-        relatedAgentIds: [],
-      });
-      console.log(`[Social] ${actorName} founded institution: ${instName} (${instType})`);
-      return;
-    }
-
-    // --- INVITE TO INSTITUTION (Phase 5) ---
-    // e.g. "invite Yuki to The Iron Guild"
-    const inviteInstMatch = lower.match(/^invite\s+(.+?)\s+to\s+(.+)/);
-    if (inviteInstMatch) {
-      const inviteeName = inviteInstMatch[1].trim();
-      const instName = inviteInstMatch[2].trim();
-      const invitee = this.findAgentByName(inviteeName);
-      const inst = this.findInstitutionByName(instName);
-      if (invitee && inst && !inst.dissolved) {
-        const alreadyMember = inst.members.some(m => m.agentId === invitee.id);
-        if (!alreadyMember) {
-          this.world.addInstitutionMember(inst.id, { agentId: invitee.id, role: 'member', joinedAt: Date.now() });
-          this.broadcaster.institutionUpdate(inst);
-          console.log(`[Social] ${actorName} invited ${invitee.config.name} to ${inst.name}`);
-        }
-      }
-      return;
-    }
-
-    // --- JOIN INSTITUTION (Phase 5) ---
-    // e.g. "join The Iron Guild"
-    const joinInstMatch = lower.match(/^join\s+(?:the\s+)?(.+)/);
-    if (joinInstMatch) {
-      const instName = joinInstMatch[1].trim();
-      const inst = this.findInstitutionByName(instName);
-      if (inst && !inst.dissolved) {
-        const alreadyMember = inst.members.some(m => m.agentId === actorId);
-        if (!alreadyMember) {
-          this.world.addInstitutionMember(inst.id, { agentId: actorId, role: 'member', joinedAt: Date.now() });
-          this.broadcaster.institutionUpdate(inst);
-          console.log(`[Social] ${actorName} joined ${inst.name}`);
-        }
-      }
-      return;
-    }
-
-    // --- LEAVE INSTITUTION (Phase 5) ---
-    // e.g. "leave The Iron Guild"
-    const leaveInstMatch = lower.match(/^leave\s+(?:the\s+)?(.+)/);
-    if (leaveInstMatch) {
-      const instName = leaveInstMatch[1].trim();
-      const inst = this.findInstitutionByName(instName);
-      if (inst) {
-        this.world.removeInstitutionMember(inst.id, actorId);
-        this.broadcaster.institutionUpdate(inst);
-        console.log(`[Social] ${actorName} left ${inst.name}`);
-      }
-      return;
-    }
-
-    // --- CONTRIBUTE TO INSTITUTION (Phase 5) ---
-    // e.g. "contribute 50 gold to The Iron Guild"
-    const contributeMatch = lower.match(/^contribute\s+(\d+)\s*(?:gold|coins?|g)\s+to\s+(.+)/);
-    if (contributeMatch) {
-      const amount = parseInt(contributeMatch[1]);
-      const instName = contributeMatch[2].trim();
-      const inst = this.findInstitutionByName(instName);
-      const actor = this.world.getAgent(actorId);
-      if (inst && !inst.dissolved && actor && actor.currency >= amount) {
-        const newBalance = this.world.updateAgentCurrency(actorId, -amount);
-        this.world.updateInstitutionTreasury(inst.id, amount);
-        this.broadcaster.agentCurrency(actorId, newBalance, -amount, `contributed to ${inst.name}`);
-        this.broadcaster.institutionUpdate(inst);
-        console.log(`[Social] ${actorName} contributed ${amount}G to ${inst.name}`);
-      }
-      return;
-    }
-
-    // --- DISSOLVE INSTITUTION (Phase 5) ---
-    // e.g. "dissolve The Iron Guild"
-    const dissolveMatch = lower.match(/^dissolve\s+(?:the\s+)?(.+)/);
-    if (dissolveMatch) {
-      const instName = dissolveMatch[1].trim();
-      const inst = this.findInstitutionByName(instName);
-      if (inst && !inst.dissolved && inst.founderId === actorId) {
-        // Distribute treasury equally among members
-        if (inst.treasury > 0 && inst.members.length > 0) {
-          const share = Math.floor(inst.treasury / inst.members.length);
-          for (const member of inst.members) {
-            if (share > 0) {
-              const balance = this.world.updateAgentCurrency(member.agentId, share);
-              this.broadcaster.agentCurrency(member.agentId, balance, share, `treasury share from dissolved ${inst.name}`);
-            }
-          }
-        }
-        this.world.dissolveInstitution(inst.id);
-        this.broadcaster.institutionUpdate(inst);
-        console.log(`[Social] ${actorName} dissolved ${inst.name}`);
-      }
-      return;
-    }
-
-    // --- WRITE LETTER (Phase 6) ---
-    // e.g. "write letter to Yuki - I miss you dearly"
-    // Must come before generic create artifact to avoid "write letter" being caught as artifact type
-    const letterMatch = lower.match(/^write\s+letter\s+to\s+(.+?)\s*[-:]\s*(.+)/);
-    if (letterMatch) {
-      const recipientName = letterMatch[1].trim();
-      const content = letterMatch[2].trim();
-      const recipient = this.findAgentByName(recipientName);
-      const actor = this.world.getAgent(actorId);
-      const area = actor ? this.world.getAreaAt(actor.position) : undefined;
-      const artifact: Artifact = {
-        id: crypto.randomUUID(),
-        title: `Letter to ${recipient?.config.name ?? recipientName}`,
-        content,
-        type: 'letter',
-        creatorId: actorId,
-        creatorName: actorName,
-        location: area?.id,
-        visibility: 'addressed',
-        addressedTo: recipient ? [recipient.id] : [],
-        reactions: [],
-        createdAt: Date.now(),
-        day: this.world.time.day,
-      };
-      this.world.addArtifact(artifact);
-      this.broadcaster.artifactCreated(artifact);
-      console.log(`[Social] ${actorName} wrote a letter to ${recipient?.config.name ?? recipientName}`);
-      return;
-    }
-
-    // --- PUBLISH NEWSPAPER (Phase 6) ---
-    // e.g. "publish newspaper - Village Times: Mayor caught stealing!"
-    const publishMatch = lower.match(/^publish\s+newspaper\s*[-:]\s*(.+?):\s*(.+)/);
-    if (publishMatch) {
-      const title = publishMatch[1].trim();
-      const content = publishMatch[2].trim();
-      const actor = this.world.getAgent(actorId);
-      const area = actor ? this.world.getAreaAt(actor.position) : undefined;
-      const artifact: Artifact = {
-        id: crypto.randomUUID(),
-        title,
-        content,
-        type: 'newspaper',
-        creatorId: actorId,
-        creatorName: actorName,
-        location: area?.id,
-        visibility: 'public',
-        reactions: [],
-        createdAt: Date.now(),
-        day: this.world.time.day,
-      };
-      this.world.addArtifact(artifact);
-      this.broadcaster.artifactCreated(artifact);
-      void cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: actorId,
-        type: 'plan',
-        content: `I published a newspaper: "${title}"`,
-        importance: 8,
-        timestamp: Date.now(),
-        relatedAgentIds: [],
-      });
-      console.log(`[Social] ${actorName} published newspaper: "${title}"`);
-      return;
-    }
-
-    // --- CREATE ARTIFACT (Phase 6) ---
-    // e.g. "create poem - Ode to the Village: The hills are alive..."
-    const createArtifactMatch = lower.match(/^(?:create|write|compose|paint)\s+(poem|newspaper|letter|propaganda|diary|painting|law|manifesto|map|recipe)\s*[-:]\s*(.+?):\s*(.+)/);
-    if (createArtifactMatch) {
-      const artType = createArtifactMatch[1].trim() as Artifact['type'];
-      const title = createArtifactMatch[2].trim();
-      const content = createArtifactMatch[3].trim();
-      const actor = this.world.getAgent(actorId);
-      const area = actor ? this.world.getAreaAt(actor.position) : undefined;
-      const artifact: Artifact = {
-        id: crypto.randomUUID(),
-        title,
-        content,
-        type: artType,
-        creatorId: actorId,
-        creatorName: actorName,
-        location: area?.id,
-        visibility: artType === 'diary' ? 'private' : 'public',
-        reactions: [],
-        createdAt: Date.now(),
-        day: this.world.time.day,
-      };
-      this.world.addArtifact(artifact);
-      this.broadcaster.artifactCreated(artifact);
-      void cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: actorId,
-        type: 'plan',
-        content: `I created a ${artType}: "${title}"`,
-        importance: 7,
-        timestamp: Date.now(),
-        relatedAgentIds: [],
-      });
-      console.log(`[Social] ${actorName} created ${artType}: "${title}"`);
-      return;
-    }
-
-    // --- BUILD (Phase 7) ---
-    // e.g. "build house - Cozy Cottage at forest"
-    const buildMatch = lower.match(/^build\s+(\w+)\s*[-:]\s*(.+?)(?:\s+at\s+(.+))?$/);
-    if (buildMatch) {
-      const buildType = buildMatch[1].trim();
-      const buildName = buildMatch[2].trim();
-      const locationName = buildMatch[3]?.trim();
-      const actor = this.world.getAgent(actorId);
-      if (actor) {
-        // Check if actor has at least one material item
-        const materialItem = actor.inventory.find(i => i.type === 'material');
-        if (materialItem) {
-          // Consume the material
-          this.world.removeItem(materialItem.id);
-
-          // Determine area — use actor's current position, or the specified location name as areaId
-          const area = this.world.getAreaAt(actor.position);
-          const areaId = locationName ?? area?.id ?? '';
-
-          // Determine effects based on type
-          const effectsMap: Record<string, string[]> = {
-            house: ['shelter'],
-            shop: ['trading'],
-            workshop: ['crafting_bonus'],
-            shrine: ['healing'],
-            tavern: ['shelter', 'trading'],
-            barn: ['storage'],
-            wall: ['defense'],
-          };
-          const effects = effectsMap[buildType] ?? [];
-
-          const building: Building = {
-            id: crypto.randomUUID(),
-            name: buildName,
-            type: buildType,
-            description: `${buildName}, a ${buildType} built by ${actorName}`,
-            ownerId: actorId,
-            areaId,
-            durability: 100,
-            maxDurability: 100,
-            effects,
-            builtBy: actorId,
-            builtAt: Date.now(),
-            materials: [materialItem.name],
-          };
-          this.world.addBuilding(building);
-          this.broadcaster.buildingUpdate(building);
-          this.broadcaster.agentInventory(actorId, actor.inventory);
-          this.broadcaster.agentAction(actorId, `built ${buildName}`, '🏗️');
-          void cognition.addMemory({
-            id: crypto.randomUUID(),
-            agentId: actorId,
-            type: 'plan',
-            content: `I built a ${buildType} called "${buildName}" at ${areaId}`,
-            importance: 8,
-            timestamp: Date.now(),
-            relatedAgentIds: [],
-          });
-          console.log(`[Social] ${actorName} built ${buildType}: "${buildName}" at ${areaId}`);
-        } else {
-          console.log(`[Social] ${actorName} tried to build ${buildName} but has no materials`);
-        }
-      }
-      return;
-    }
-
-    // --- DEFAULT: store as intention memory ---
-    // Anything that doesn't match a specific pattern still becomes a high-priority memory
-    void cognition.addMemory({
-      id: crypto.randomUUID(),
-      agentId: actorId,
-      type: 'plan',
-      content: `After talking to ${this.world.getAgent(targetId)?.config.name}, I want to: ${rawAction}`,
-      importance: 9,
-      timestamp: Date.now(),
-      relatedAgentIds: [targetId],
-    });
-
-    // If it sounds like a public statement, post to board
-    const speechPatterns = /^(post|announce|shout|proclaim|declare|call out|yell)/i;
-    if (speechPatterns.test(rawAction)) {
-      const actorName = this.world.getAgent(actorId)?.config.name ?? 'Unknown';
-      this.world.addBoardPost({
-        id: crypto.randomUUID(),
-        authorId: actorId,
-        authorName: actorName,
-        type: 'announcement' as BoardPostType,
-        content: rawAction.replace(speechPatterns, '').replace(/^[\s\-:]+/, '').trim(),
-        timestamp: Date.now(),
-        day: this.world.time.day,
-      });
-      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
     }
   }
 

@@ -264,9 +264,9 @@ This is your inner voice. Think honestly. You can also act.
 
 Think about your situation. 1-3 sentences, first person, private and honest.
 
-If you want to do something physical, add: [ACTION: what you do]
-If your mood changed, add: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>
-If your plans changed, add: REPLAN: <new intention to prioritize>`;
+If you want to DO something, add: [ACTION: describe what you do]
+The system will interpret and execute your action automatically.
+If your mood changed, add: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
 
     const memories = await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
     const memoryContext = memories.length > 0
@@ -284,14 +284,11 @@ Context: ${context}`;
     const actions = AgentCognition.parseActions(response);
     const moodMatch = response.match(/^MOOD:\s*(neutral|happy|angry|sad|anxious|excited|scheming|afraid)\s*$/mi);
     const mood = moodMatch ? moodMatch[1] as Mood : undefined;
-    const replanMatch = response.match(/REPLAN:\s*(.+)/i);
-    const replan = replanMatch ? replanMatch[1].trim() : undefined;
 
-    // Clean thought text: strip action tags, mood, replan lines
+    // Clean thought text: strip action tags, mood lines
     const thought = response
       .replace(/\s*\[ACTION:\s*.+?\]/gi, '')
       .replace(/^\s*MOOD:\s*(neutral|happy|angry|sad|anxious|excited|scheming|afraid)\s*$/mi, '')
-      .replace(/REPLAN:\s*.+/i, '')
       .trim();
 
     // Store as private memory (fixed importance 3 — saves one LLM call per thought)
@@ -310,8 +307,53 @@ Context: ${context}`;
       thought,
       actions: actions.length > 0 ? actions : undefined,
       mood,
-      replan,
     };
+  }
+
+  /**
+   * resolveAction() — Break a freeform action into world primitives.
+   * Called by the action dispatcher to interpret any natural language action
+   * into concrete operations the world can execute.
+   */
+  async resolveAction(
+    action: string,
+    context: { location: string; nearbyAgents: string[]; inventory: string[]; gold: number }
+  ): Promise<{ op: string; [key: string]: any }[]> {
+    const systemPrompt = `You are the physics engine for a medieval village simulation.
+An agent wants to do something. Break it down into primitive operations.
+
+PRIMITIVES:
+- create: add something to the world. Specify "type" and "data".
+  types: board_post, item, artifact, building, institution, secret, election
+- remove: delete something. Specify "type" and which one.
+- modify: change a value. Specify "target" (agent name or "self"), "field", and "value" or "delta".
+  fields: gold, reputation, skill, membership, property, vote
+- transfer: move something between agents. Specify "what", "from", "to", and details.
+- interact: talk to someone. Specify "target" (name or "anyone nearby").
+- observe: notice/learn something. Specify "observation".
+
+Compose these freely. Return JSON array ONLY.
+Example — agent gives fish to Mei on credit:
+[
+  {"op":"transfer","what":"item","item":"fish","from":"self","to":"Mei"},
+  {"op":"create","type":"secret","data":{"content":"Mei owes me for the fish","about":"Mei"}},
+  {"op":"observe","observation":"Gave fish to Mei, she'll pay me back later"}
+]`;
+
+    const userPrompt = `Location: ${context.location}
+Nearby: ${context.nearbyAgents.join(', ') || 'nobody'}
+Inventory: ${context.inventory.join(', ') || 'nothing'}
+Gold: ${context.gold}
+
+Action: "${action}"`;
+
+    const response = await this.llm.complete(systemPrompt, userPrompt);
+    try {
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      return JSON.parse(cleaned);
+    } catch {
+      return [{ op: 'observe', observation: action }];
+    }
   }
 
   /**

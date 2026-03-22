@@ -1042,11 +1042,7 @@ export class SimulationEngine {
   }
 
   private createActionExecutor() {
-    return {
-      executeSocialAction: (actorId: string, actorName: string, targetId: string, action: string, cognition: AgentCognition) => {
-        this.conversationManager.executeSocialAction(actorId, actorName, targetId, action, cognition);
-      },
-      requestConversation: (initiatorId: string, targetId: string): boolean => {
+    const requestConv = (initiatorId: string, targetId: string): boolean => {
         const c1 = this.controllers.get(initiatorId);
         const c2 = this.controllers.get(targetId);
         if (!c1 || !c2) return false;
@@ -1069,7 +1065,16 @@ export class SimulationEngine {
         c2.enterConversation();
         console.log(`[Engine] Intentional conversation: ${a1.config.name} sought out ${this.world.getAgent(targetId)?.config.name}`);
         return true;
+    };
+    return {
+      executeSocialAction: (actorId: string, actorName: string, targetId: string, action: string, cognition: AgentCognition) => {
+        void this.conversationManager.executeSocialAction(
+          actorId, actorName, targetId, action, cognition,
+          this.cognitions,
+          requestConv,
+        );
       },
+      requestConversation: requestConv,
     };
   }
 
