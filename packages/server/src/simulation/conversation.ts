@@ -518,6 +518,26 @@ export class ConversationManager {
       return;
     }
 
+    // --- EAT FOOD ---
+    // e.g. "eat fish", "eat - mushrooms"
+    const eatMatch = lower.match(/^eat\s*[-:]?\s*(.+)/);
+    if (eatMatch) {
+      const foodName = eatMatch[1].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const foodItem = actor.inventory.find(i => i.type === 'food' && i.name.toLowerCase().includes(foodName));
+        if (foodItem && actor.vitals) {
+          this.world.removeItem(foodItem.id);
+          actor.vitals.hunger = Math.max(0, actor.vitals.hunger - 30);
+          actor.vitals.energy = Math.min(100, actor.vitals.energy + 10);
+          this.broadcaster.agentAction(actorId, `ate ${foodItem.name}`, '🍽️');
+          this.broadcaster.agentInventory(actorId, actor.inventory);
+          console.log(`[Social] ${actorName} ate ${foodItem.name}`);
+        }
+      }
+      return;
+    }
+
     // --- GATHER MATERIAL ---
     // e.g. "gather - wood"
     const gatherMatch = lower.match(/^gather\s*[-:]\s*(.+)/);
@@ -670,6 +690,31 @@ export class ConversationManager {
           this.broadcaster.agentInventory(actorId, actor.inventory);
           this.broadcaster.agentInventory(buyer.id, buyer.inventory);
           console.log(`[Social] ${actorName} sold ${itemName} to ${buyer.config.name} for ${price}G`);
+        }
+      }
+      return;
+    }
+
+    // --- TRADE ITEM (BARTER) ---
+    // e.g. "trade item - fish to Mei for wood"
+    const tradeItemMatch = lower.match(/^trade\s+item\s*[-:]\s*(.+?)\s+to\s+(.+?)\s+for\s+(.+)/);
+    if (tradeItemMatch) {
+      const myItemName = tradeItemMatch[1].trim();
+      const otherName = tradeItemMatch[2].trim();
+      const theirItemName = tradeItemMatch[3].trim();
+      const actor = this.world.getAgent(actorId);
+      if (actor) {
+        const myItem = actor.inventory.find(i => i.name.toLowerCase() === myItemName);
+        const other = this.findAgentByName(otherName);
+        if (myItem && other) {
+          const theirItem = other.inventory.find(i => i.name.toLowerCase() === theirItemName);
+          if (theirItem) {
+            this.world.transferItem(myItem.id, actorId, other.id);
+            this.world.transferItem(theirItem.id, other.id, actorId);
+            this.broadcaster.agentInventory(actorId, actor.inventory);
+            this.broadcaster.agentInventory(other.id, other.inventory);
+            console.log(`[Social] ${actorName} traded ${myItemName} for ${theirItemName} with ${other.config.name}`);
+          }
         }
       }
       return;

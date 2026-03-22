@@ -586,7 +586,8 @@ What's your agenda for this conversation?`;
     const mentalModelsSection = mentalModelLines.length > 0 ? `\n\nYOUR PRIVATE ASSESSMENT of who you're talking to:\n${mentalModelLines.join('\n')}` : '';
 
     const otherDescriptions = otherAgents.map(a => {
-      return a.config.soul ? ` What you know about ${a.config.name}: age ${a.config.age}.` : '';
+      const inv = a.inventory?.length ? ` Carrying: ${a.inventory.map(i => i.name).join(', ')}.` : '';
+      return ` What you know about ${a.config.name}: age ${a.config.age}.${inv}`;
     }).join('');
     const boardSection = boardContext ? `\n\nVILLAGE BOARD (public posts everyone can see):\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
@@ -600,12 +601,12 @@ ${soulText}${deepIdentitySection}
 You are talking with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
 
 YOUR STATE:
-- Mood: ${mood}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}${this.getSituationalObservations()}
+- Mood: ${mood}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory (${this.agent.inventory.length}/10): ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : '\n- Inventory (0/10): empty'}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}${this.getSituationalObservations()}
 
 You can try anything. Describe what you do in [ACTION: ...] tags.
-Examples: [ACTION: give 5 wood to Mei], [ACTION: say "hello everyone"],
-[ACTION: walk to the river], [ACTION: gather stone],
-[ACTION: craft axe from 3 wood and 1 stone], [ACTION: attack wolf]
+Examples: [ACTION: trade item - fish to Mei for wood], [ACTION: give item - bread to Mei],
+[ACTION: gather stone], [ACTION: eat fish],
+[ACTION: craft axe from 3 wood and 1 stone], [ACTION: cook soup from fish]
 
 RULES:
 - 1-3 sentences MAX. Real people don't give speeches.
@@ -713,7 +714,7 @@ ${soulText}
 Today is day ${currentTime.day}.
 
 YOUR BODY:
-- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}${this.getSituationalObservations()}
+- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory (${this.agent.inventory.length}/10): ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : '\n- Inventory (0/10): empty'}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}${this.getSituationalObservations()}
 
 WHAT YOU KNOW ABOUT THIS PLACE:
 ${this.getKnownLocations()}${boardContext ? `\n\nVILLAGE BOARD:\n${boardContext}` : ''}${worldSection}`;
@@ -755,11 +756,11 @@ ${soulText}
 You are at ${areaId ?? 'somewhere'}, doing: "${activity}".
 
 YOUR STATE:
-- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : ''}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}
+- Mood: ${this.agent.mood ?? 'neutral'}${this.agent.currency ? `\n- Gold: ${this.agent.currency}` : ''}${this.agent.inventory?.length ? `\n- Inventory (${this.agent.inventory.length}/10): ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}` : '\n- Inventory (0/10): empty'}${this.agent.skills?.length ? `\n- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}` : ''}${this.getVitalsNote()}
 
 You can try anything. Describe what you do in [ACTION: ...] tags.
 Examples: [ACTION: gather wood], [ACTION: craft axe from 3 wood and 1 stone],
-[ACTION: cook soup from fish], [ACTION: announce "meeting at plaza tonight"]
+[ACTION: cook soup from fish], [ACTION: eat mushrooms]
 
 Reply with a single short sentence. One ACTION tag max, or none if nothing warrants it.`;
 
