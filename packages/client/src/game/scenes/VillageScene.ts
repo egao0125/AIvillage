@@ -172,8 +172,8 @@ export class VillageScene extends Phaser.Scene {
 
     const FRONT_H = 12; // south-facing front face height (px)
     const SIDE_W = 8;   // east-facing side face width (px)
-    const FRONT_COLOR = 0x4a4846;  // dark warm gray (south face)
-    const SIDE_COLOR = 0x5a5854;   // slightly lighter (east face)
+    const FRONT_COLOR = 0x8a7e70;  // warm tan (south face)
+    const SIDE_COLOR = 0x9a8e80;   // lighter tan (east face)
 
     for (let y = 0; y < MAP_HEIGHT; y++) {
       for (let x = 0; x < MAP_WIDTH; x++) {
@@ -193,7 +193,7 @@ export class VillageScene extends Phaser.Scene {
             TILE_SIZE
           );
           // Thin shadow to the right
-          g.fillStyle(0x000000, 0.15);
+          g.fillStyle(0x000000, 0.08);
           g.fillRect(
             (x + 1) * TILE_SIZE,
             y * TILE_SIZE,
@@ -217,7 +217,7 @@ export class VillageScene extends Phaser.Scene {
             g.fillRect(x * TILE_SIZE, py, TILE_SIZE, 1);
           }
           // Ground shadow below wall
-          g.fillStyle(0x000000, 0.25);
+          g.fillStyle(0x000000, 0.12);
           g.fillRect(
             x * TILE_SIZE,
             (y + 1) * TILE_SIZE,

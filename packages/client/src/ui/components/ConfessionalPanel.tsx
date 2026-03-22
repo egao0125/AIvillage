@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useThoughts, useAgents } from '../../core/hooks';
 import { watchThoughts, unwatchThoughts } from '../../network/socket';
+import { gameStore } from '../../core/GameStore';
 import { nameToColor, hexToString } from '../../utils/color';
 import { COLORS, FONTS } from '../styles';
 
@@ -8,40 +9,33 @@ export const ConfessionalPanel: React.FC = () => {
   const thoughts = useThoughts();
   const agents = useAgents();
   const [filterAgentId, setFilterAgentId] = useState<string | null>(null);
-  const [currentIdx, setCurrentIdx] = useState(0);
 
   const filteredThoughts = filterAgentId
     ? thoughts.filter(t => t.agentId === filterAgentId)
     : thoughts;
 
-  // Auto-cycle through thoughts every 8 seconds
-  useEffect(() => {
-    if (filteredThoughts.length <= 1) return;
-    const interval = setInterval(() => {
-      setCurrentIdx(prev => (prev + 1) % filteredThoughts.length);
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [filteredThoughts.length]);
-
-  // Reset index when filter changes
-  useEffect(() => {
-    setCurrentIdx(Math.max(0, filteredThoughts.length - 1));
-  }, [filterAgentId]);
-
   // On-demand thought generation: watch when a specific agent is selected
   useEffect(() => {
     if (filterAgentId) {
+      gameStore.clearThoughts();
       watchThoughts(filterAgentId);
-      return () => unwatchThoughts();
+      return () => {
+        unwatchThoughts();
+        gameStore.clearThoughts();
+      };
     } else {
       unwatchThoughts();
+      gameStore.clearThoughts();
     }
   }, [filterAgentId]);
 
-  // Safety net: unwatch on unmount (e.g. switching sidebar tabs)
-  useEffect(() => () => unwatchThoughts(), []);
+  // Safety net: unwatch + clear on unmount (e.g. switching sidebar tabs)
+  useEffect(() => () => {
+    unwatchThoughts();
+    gameStore.clearThoughts();
+  }, []);
 
-  const currentThought = filteredThoughts[Math.min(currentIdx, filteredThoughts.length - 1)];
+  const currentThought = filteredThoughts[filteredThoughts.length - 1];
 
   return (
     <div
@@ -197,11 +191,9 @@ export const ConfessionalPanel: React.FC = () => {
         {filteredThoughts.slice(-20).reverse().map((t, i) => (
           <div
             key={t.id}
-            onClick={() => setCurrentIdx(filteredThoughts.length - 1 - i)}
             style={{
               padding: '10px 18px',
               borderBottom: `1px solid rgba(255,255,255,0.03)`,
-              cursor: 'pointer',
               background: currentThought?.id === t.id ? 'rgba(168, 85, 247, 0.1)' : 'transparent',
             }}
           >
