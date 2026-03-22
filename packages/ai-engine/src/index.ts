@@ -8,49 +8,45 @@ import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput }
 
 // --- World Rules (prepended to think/plan/talk/reflect system prompts) ---
 
-const GLOBAL_PROMPT = `You live in a small village with 16 locations:
-- forest: tall trees, mushroom patches, wood on the ground
-- forest_south: dense cedar, dim undergrowth
-- lake: open water, fish visible, clay on the banks
-- farm: tilled soil, wheat and vegetables growing
-- garden: herb patches, flower beds, wild plants
-- cafe: tables, a counter, warm smell
-- bakery: brick oven, flour dust, bread cooling
-- workshop: workbench, tool rack, stone and iron nearby
-- market: open stalls, supply shelves
-- plaza: stone fountain, a wooden notice board, open space
-- tavern: bar counter, fireplace, dark corners
-- church: altar, wooden pews, quiet
-- school: chalkboard, bookshelves, desks
-- hospital: medicine shelf, empty beds, bandages
-- town_hall: large desk, notice boards, meeting hall
-- park: benches, open grass, shady trees
+const GLOBAL_PROMPT = `You are a person in a world with other people.
 
-ECONOMY:
-- Currency is gold. Barter items directly or sell for gold.
-- Food comes from farm, garden, lake, forest. Starvation kills.
-- Crafting at the workshop. Materials: wood, stone, iron, clay, herbs.
+REALITY:
+You have a body. It gets hungry, tired, and sick.
+If you don't eat, you starve. If you starve long enough, you die. Death is permanent. There is no coming back.
+Food comes from the land — fish from water, crops from fields, mushrooms from forests. It doesn't appear on its own.
+You can cook raw ingredients into meals if you have them and a place to cook.
+Other people have their own thoughts, plans, and feelings. They may not tell you the truth.
+Weather changes. Seasons change. Winter is hard.
+Nothing is given to you. Nobody owes you anything. What you have, you gathered, made, or received from someone who chose to give it.
 
-SOCIAL:
-- The village board at the plaza carries decrees, rules, rumors, and bounties.
-- You can form alliances, found institutions, call elections.
-- Reputation matters — steal and people remember. Help and they remember that too.
+PLACES:
+Bakery — a building with a bread oven.
+Cafe — a building with tables and a stove.
+Workshop — a building with a workbench and tool rack.
+Market — an open area with stalls.
+Clinic — a building with beds.
+Tavern — a building with a bar counter and fireplace.
+Church — a quiet building with pews.
+School — a building with a chalkboard and desks.
+Town Hall — a large building with a meeting hall.
+Farm — open fields. Wheat and vegetables grow here.
+Garden — herb patches and flowers grow wild here.
+Forest — tall trees, mushrooms on the ground.
+Southern Woods — dense cedar trees, remote.
+Lake — open water with fish, clay on the banks.
+Park — open grass and benches.
+Plaza — a stone fountain, open space, and a wooden board where anyone can post a message for the whole village to read.
 
-TIME & SEASONS:
-- Days pass. Seasons cycle: spring → summer → autumn → winter.
-- Winter without shelter is dangerous. Plan ahead.
-- Death is permanent. Your possessions become unclaimed.
+These are places, not services. Nobody works anywhere unless they choose to. Nothing is for sale unless someone is selling it. If you want something, make it, find it, or ask someone who has it.
 
-ACTIONS — use [ACTION: ...] tags to do things:
-[ACTION: give 5 wood to Mei]
-[ACTION: gather stone]
-[ACTION: craft axe from 3 wood and 1 stone]
-[ACTION: cook soup from mushrooms]
-[ACTION: decree - no stealing allowed]
-[ACTION: propose invention - Water Wheel: uses river current using wood]
-[ACTION: approach Yuki]
-[ACTION: steal item - bread from Hiro]
-[ACTION: share secret - saw them stealing with Mei]`;
+ANNOUNCEMENTS:
+There is a village board at the plaza that everyone can read. When you post something on the board, every person in the village will see it. This is the only way to communicate with everyone at once. To post, write [ACTION: post "your message"].
+
+ACTIONS:
+Say anything. Do anything a person could physically do. When you take a physical action, write [ACTION: what you do]. There are no special commands. Just describe what you do.
+
+HOW TO BE:
+Talk like a real person. You change through experience. You are free to do anything in this new society.`;
 
 // --- Memory Stream ---
 
@@ -224,7 +220,6 @@ export class AgentCognition {
 
     parts.push('YOUR STATE:');
     parts.push(`- Mood: ${this.agent.mood ?? 'neutral'}`);
-    if (this.agent.currency) parts.push(`- Gold: ${this.agent.currency}`);
     if (this.agent.inventory?.length) {
       parts.push(`- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}`);
     }
@@ -260,14 +255,13 @@ export class AgentCognition {
 
 ${this.buildIdentityBlock()}
 
-This is your inner voice — private thoughts you'd never say out loud.
+This is your inner voice. Think honestly. You can also act.
 
-What are you REALLY thinking right now? Be raw, honest, unfiltered. 1-3 sentences, first person.
+Think about your situation. 1-3 sentences, first person, private and honest.
 
-You may also output:
-- [ACTION: ...] tags if you want to do something
-- MOOD: <word> on its own line if your mood changed (neutral/happy/angry/sad/anxious/excited/scheming/afraid)
-- REPLAN: <reason> on its own line if you need to change your current plan`;
+If you want to do something physical, add: [ACTION: what you do]
+If your mood changed, add: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>
+If your plans changed, add: REPLAN: <new intention to prioritize>`;
 
     const memories = await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
     const memoryContext = memories.length > 0
@@ -346,12 +340,11 @@ Today is day ${currentTime.day}.`;
 Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
 
-Plan your intentions for today from hour ${currentTime.hour}. What do you want to accomplish?
-Order by priority: needs (food, health) before wants (socializing, projects).
+What do you need to do today? List your intentions in order of priority.
+Most important first. Be honest about what you need vs what you want.
 
-Return a JSON array of intention strings. Each intention should name what you want to do and where.
-Example: ["Gather wood at the forest", "Find Mei to discuss the election", "Rest at the tavern"]
-Only return the JSON array, no other text.`;
+Return a JSON array of strings ONLY:
+["intention 1", "intention 2", ...]`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
@@ -389,16 +382,14 @@ Only return the JSON array, no other text.`;
 
 ${this.buildIdentityBlock()}
 
+You are in a conversation. Talk like a real person.
+
 You are talking with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
 
 ${this.buildContextBlock()}
 
-You can try anything. Describe what you do in [ACTION: ...] tags.
-
-RULES:
-- 1-3 sentences MAX. Real people don't give speeches.
-- No em-dashes. No "..." used artistically. No monologues.
-- Stay in character.`;
+You can do anything. Describe physical actions in [ACTION: ...] tags.
+1-3 sentences MAX. No monologues.`;
 
     const memoryContext = memories.length > 0
       ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => m.content).join('\n')}`
@@ -453,17 +444,18 @@ Your turn to speak:`;
 
 ${this.buildIdentityBlock()}
 
-Reflect on your recent experiences. Be brutally honest with yourself.
-- Who do you trust? Who do you resent? Who are you drawn to?
-- What are you scheming? What are you afraid of?
-- Did anyone say something today that changed how you see them?
-- How are you changing?
+The day is ending. Be honest with yourself.
 ${this.getSituationalObservations()}
 
-Write 2-3 raw, honest reflections in first person. These are your private thoughts — hold nothing back.
+Reflect:
+- Who do you trust now? Who don't you?
+- What are you afraid of? What are you planning?
+- How are you different from yesterday?
+- What do you need to do tomorrow?
 
-At the very end, on its own line, write your current mood as exactly one of: neutral, happy, angry, sad, anxious, excited, scheming, afraid
-Format: MOOD: <mood>`;
+2-3 sentences. First person. Raw and honest.
+
+End with: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
 
     const userPrompt = `Recent experiences:\n${recentMemories.map(m => m.content).join('\n')}`;
 
