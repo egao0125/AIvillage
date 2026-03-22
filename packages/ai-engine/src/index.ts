@@ -15,9 +15,9 @@ You have a body. It gets hungry, tired, and sick.
 If you don't eat, you starve. If you starve long enough, you die. Death is permanent. There is no coming back.
 Food comes from the land — fish from water, crops from fields, mushrooms from forests. It doesn't appear on its own.
 You can cook raw ingredients into meals if you have them and a place to cook.
-If other people are around, they have their own thoughts, plans, and feelings. They may not tell you the truth.
+You may encounter other people. If you do, they have their own thoughts and feelings.
 Weather changes. Seasons change. Winter is hard.
-Nothing is given to you. Nobody owes you anything. What you have, you gathered, made, or received from someone who chose to give it.
+You work for what you need.
 
 PLACES:
 Bakery — a building with a bread oven.
@@ -83,8 +83,8 @@ export class AgentCognition {
     const v = this.agent.vitals;
     if (!v) return '';
     const notes: string[] = [];
-    if (v.hunger >= 80) notes.push('starving');
-    else if (v.hunger >= 60) notes.push('getting hungry');
+    if (v.hunger >= 80) notes.push('very hungry');
+    else if (v.hunger >= 60) notes.push('hungry');
     if (v.energy <= 15) notes.push('exhausted');
     else if (v.energy <= 30) notes.push('tired');
     if (v.health <= 30) notes.push('in bad shape physically');

@@ -405,6 +405,7 @@ export class ConversationManager {
       });
 
       this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+      this.broadcaster.agentAction(actorId, `posted ${postType}: "${content.slice(0, 60)}"`, '\u{1F4CB}');
 
       // Store as memory for the actor
       void cognition.addMemory({
@@ -442,6 +443,7 @@ export class ConversationManager {
           relatedAgentIds: [actorId],
         }).catch(() => {});
       }
+      this.broadcaster.agentAction(actorId, `gave ${amount}G to ${this.world.getAgent(targetId)?.config.name}`, '\u{1F4B0}');
       console.log(`[Social] ${actorName} gave ${amount}G to ${this.world.getAgent(targetId)?.config.name}`);
       return;
     }
@@ -458,6 +460,7 @@ export class ConversationManager {
           const actorBalance = this.world.updateAgentCurrency(actorId, taken);
           this.broadcaster.agentCurrency(targetId, targetBalance, -taken, `${actorName} took gold`);
           this.broadcaster.agentCurrency(actorId, actorBalance, taken, `took gold from ${target.config.name}`);
+          this.broadcaster.agentAction(actorId, `stole ${taken}G from ${target.config.name}`, '\u{1F4B0}');
           console.log(`[Social] ${actorName} took ${taken}G from ${target.config.name}`);
 
           // Store theft event as memory — mood updates organically during next think() cycle

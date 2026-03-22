@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { Agent, Item, Skill } from '@ai-village/shared';
 import { nameToColor, hexToString } from '../../utils/color';
-import { useReputation, useAgents, useBoard, useArtifacts, useWorldTime } from '../../core/hooks';
+import { useReputation, useAgents, useBoard, useArtifacts, useWorldTime, useActionLog } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 import { authHeaders, getUserId } from '../../utils/auth';
 import { PixelAvatar } from './PixelAvatar';
@@ -232,6 +232,25 @@ const sectionLabel: React.CSSProperties = {
   letterSpacing: 1,
 };
 
+const ActionLog: React.FC<{ agentId: string }> = ({ agentId }) => {
+  const log = useActionLog(agentId);
+  if (log.length <= 1) return null; // current action is already shown above
+  return (
+    <div style={{ marginTop: 6 }}>
+      {log.slice(1).map((entry, i) => (
+        <div key={i} style={{
+          color: COLORS.textDim,
+          fontSize: '11px',
+          opacity: 0.6 - i * 0.1,
+          padding: '1px 0',
+        }}>
+          {entry.emoji ? `${entry.emoji} ` : ''}{entry.action}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 interface AgentProfileProps {
   agent: Agent;
   onClose: () => void;
@@ -362,6 +381,23 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </button>
       </div>
 
+      {/* Soul */}
+      {agent.config.soul && (
+        <div style={{
+          marginBottom: 14,
+          padding: '8px 12px',
+          background: COLORS.bgCard,
+          borderRadius: 4,
+          border: `1px solid ${COLORS.border}`,
+          color: COLORS.textDim,
+          fontSize: '12px',
+          fontStyle: 'italic',
+          lineHeight: 1.4,
+        }}>
+          {agent.config.soul}
+        </div>
+      )}
+
       {/* Location */}
       <div style={{
         display: 'flex',
@@ -433,12 +469,13 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </div>
       )}
 
-      {/* Current state */}
+      {/* Current state + action log */}
       <div style={{ marginBottom: 14 }}>
         <div style={sectionLabel}>STATUS</div>
         <div style={{ color: COLORS.textDim, fontSize: '13px' }}>
           {agent.currentAction || agent.state}
         </div>
+        <ActionLog agentId={agent.id} />
       </div>
 
       {/* Inventory — right after vitals/status for visibility */}
