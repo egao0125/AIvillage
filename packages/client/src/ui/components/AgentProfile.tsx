@@ -441,6 +441,60 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </div>
       </div>
 
+      {/* Inventory — right after vitals/status for visibility */}
+      {agent.alive !== false && (() => {
+        const grouped = new Map<string, { item: Item; count: number }>();
+        for (const item of (agent.inventory || [])) {
+          const existing = grouped.get(item.name);
+          if (existing) existing.count++;
+          else grouped.set(item.name, { item, count: 1 });
+        }
+        return (
+          <div style={{ marginBottom: 14 }}>
+            <div style={sectionLabel}>INVENTORY {agent.inventory?.length ? `(${agent.inventory.length})` : ''}</div>
+            {grouped.size > 0 ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {[...grouped.values()].map(({ item, count }) => (
+                  <span
+                    key={item.name}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '3px 8px',
+                      background: COLORS.bgCard,
+                      borderRadius: 4,
+                      border: `1px solid ${COLORS.border}`,
+                      fontSize: '11px',
+                      color: COLORS.text,
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: '50%',
+                        background: ITEM_TYPE_COLORS[item.type] || ITEM_TYPE_COLORS.other,
+                        flexShrink: 0,
+                      }}
+                    />
+                    {item.name}{count > 1 && (
+                      <span style={{ color: COLORS.textDim, fontFamily: FONTS.pixel, fontSize: '8px' }}>
+                        x{count}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: COLORS.textDim, fontSize: '12px', fontStyle: 'italic' }}>
+                No items
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Owner controls: Leave/Return + Update API Key */}
       {agent.ownerId === getUserId() && agent.alive !== false && (
         <>
@@ -526,53 +580,6 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </div>
       )}
 
-      {/* Inventory — grouped by name with count */}
-      {agent.inventory && agent.inventory.length > 0 && (() => {
-        const grouped = new Map<string, { item: Item; count: number }>();
-        for (const item of agent.inventory) {
-          const existing = grouped.get(item.name);
-          if (existing) existing.count++;
-          else grouped.set(item.name, { item, count: 1 });
-        }
-        return (
-          <div style={{ marginBottom: 14 }}>
-            <div style={sectionLabel}>INVENTORY ({agent.inventory.length})</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {[...grouped.values()].map(({ item, count }) => (
-                <span
-                  key={item.name}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: '3px 8px',
-                    background: COLORS.bgCard,
-                    borderRadius: 4,
-                    border: `1px solid ${COLORS.border}`,
-                    fontSize: '11px',
-                    color: COLORS.text,
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: '50%',
-                      background: ITEM_TYPE_COLORS[item.type] || ITEM_TYPE_COLORS.other,
-                      flexShrink: 0,
-                    }}
-                  />
-                  {item.name}{count > 1 && (
-                    <span style={{ color: COLORS.textDim, fontFamily: FONTS.pixel, fontSize: '8px' }}>
-                      x{count}
-                    </span>
-                  )}
-                </span>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Skills */}
       {agent.skills && agent.skills.length > 0 && (
