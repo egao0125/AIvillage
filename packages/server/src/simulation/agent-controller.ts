@@ -388,12 +388,8 @@ export class AgentController {
           this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
         }
-      } else if (atFoodLocation && this.agent.vitals && this.agent.vitals.hunger > 30) {
-        // Food establishments serve food — agents don't need inventory items to eat here
-        this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 25);
-        this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
-        this.broadcaster.agentAction(this.agent.id, `had a meal at ${this.currentAreaId}`, '🍽️');
       }
+      // No free food at establishments — agents must bring their own food items
     }
 
     // Healing at hospital — requires consuming a medicine/herb item
@@ -416,14 +412,7 @@ export class AgentController {
       const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
       if (gathered) {
         this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
-        // Auto-eat gathered food — agents shouldn't starve while standing at a farm
-        if (gathered.type === 'food' && this.agent.vitals && this.agent.vitals.hunger > 20) {
-          this.world.removeItem(gathered.id);
-          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
-          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
-          this.broadcaster.agentAction(this.agent.id, `ate ${gathered.name}`, '🍽️');
-          console.log(`[Agent] ${this.agent.config.name} auto-ate ${gathered.name} (hunger: ${this.agent.vitals.hunger})`);
-        }
+        // Gathered food goes to inventory — agents must explicitly eat or trade it
       }
     }
 
@@ -588,9 +577,9 @@ export class AgentController {
     const v = this.agent.vitals;
     if (!v) return;
 
-    // Hunger increases every game hour — halved so agents aren't obsessed with food
+    // Hunger increases every game hour
     if (this.world.time.minute === 0) {
-      v.hunger = Math.min(100, v.hunger + 0.5);
+      v.hunger = Math.min(100, v.hunger + 1.0);
     }
 
     // Energy depletes during activity, restores during sleep
@@ -601,15 +590,14 @@ export class AgentController {
       v.energy = Math.min(100, v.energy + 0.02);
     } else if (this.state === 'sleeping') {
       v.energy = Math.min(100, v.energy + 0.5);
-      v.hunger = Math.max(0, v.hunger - 0.1);
     }
 
-    // Vitals affect mood but never kill — health floors at 10
+    // Vitals affect health — starvation and exhaustion can kill
     if (v.hunger >= 80) {
-      v.health = Math.max(10, v.health - 0.05);
+      v.health = Math.max(0, v.health - 0.05);
     }
     if (v.energy <= 5) {
-      v.health = Math.max(10, v.health - 0.03);
+      v.health = Math.max(0, v.health - 0.03);
     }
     // Passive health regen when not starving/exhausted
     if (v.hunger < 60 && v.energy > 20) {

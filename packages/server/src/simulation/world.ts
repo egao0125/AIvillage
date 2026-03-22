@@ -186,8 +186,10 @@ export class World {
   // --- Items ---
 
   addItem(item: Item): void {
-    this.items.set(item.id, item);
+    const MAX_INVENTORY = 10;
     const owner = this.agents.get(item.ownerId);
+    if (owner && owner.inventory.length >= MAX_INVENTORY) return; // inventory full
+    this.items.set(item.id, item);
     if (owner) {
       owner.inventory.push(item);
     }
@@ -204,11 +206,13 @@ export class World {
   }
 
   transferItem(itemId: string, fromId: string, toId: string): void {
+    const MAX_INVENTORY = 10;
     const item = this.items.get(itemId);
     if (!item) return;
     const from = this.agents.get(fromId);
     const to = this.agents.get(toId);
     if (!from || !to) return;
+    if (to.inventory.length >= MAX_INVENTORY) return; // receiver full
 
     from.inventory = from.inventory.filter(i => i.id !== itemId);
     item.ownerId = toId;
@@ -216,25 +220,32 @@ export class World {
   }
 
   gatherMaterial(agentId: string, areaId: string): Item | null {
-    const spawn = this.materialSpawns.find(s => s.areaId === areaId);
-    if (!spawn) return null;
+    const MAX_INVENTORY = 10;
+    const agent = this.agents.get(agentId);
+    if (agent && agent.inventory.length >= MAX_INVENTORY) return null;
 
-    // Check respawn timer (technologies can reduce respawn time)
     const now = this.time.totalMinutes;
-    let effectiveRespawn = spawn.respawnMinutes;
-    for (const tech of this.technologies) {
-      for (const effect of tech.effects) {
-        const lowerEffect = effect.toLowerCase();
-        if (lowerEffect.includes(spawn.areaId) || lowerEffect.includes(spawn.material.toLowerCase())) {
-          effectiveRespawn = Math.floor(effectiveRespawn * 0.7); // 30% faster
-          break;
+
+    // Find all spawns for this area with elapsed respawn timers
+    const availableSpawns = this.materialSpawns.filter(s => {
+      if (s.areaId !== areaId) return false;
+      let effectiveRespawn = s.respawnMinutes;
+      for (const tech of this.technologies) {
+        for (const effect of tech.effects) {
+          const lowerEffect = effect.toLowerCase();
+          if (lowerEffect.includes(s.areaId) || lowerEffect.includes(s.material.toLowerCase())) {
+            effectiveRespawn = Math.floor(effectiveRespawn * 0.7);
+            break;
+          }
         }
       }
-    }
-    if (spawn.lastGathered !== undefined && (now - spawn.lastGathered) < effectiveRespawn) {
-      return null;
-    }
+      return s.lastGathered === undefined || (now - s.lastGathered) >= effectiveRespawn;
+    });
 
+    if (availableSpawns.length === 0) return null;
+
+    // Pick a random available spawn
+    const spawn = availableSpawns[Math.floor(Math.random() * availableSpawns.length)];
     spawn.lastGathered = now;
 
     // Edible materials become food items
