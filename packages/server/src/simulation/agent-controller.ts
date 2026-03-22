@@ -843,10 +843,17 @@ export class AgentController {
             urgencyContext,
           );
           this.handleApiSuccess();
-          this.intentions = plan;
-          this.currentIntentionIndex = 0;
-          this.followNextIntention();
-          return;
+          // Validate LLM plan actually targets a food location — reject vague plans
+          const firstIntention = plan[0] || '';
+          const resolvedArea = this.resolveLocation(firstIntention);
+          if (AgentController.FOOD_LOCATIONS.includes(resolvedArea)) {
+            this.intentions = plan;
+            this.currentIntentionIndex = 0;
+            this.followNextIntention();
+            return;
+          }
+          // LLM plan doesn't go to a food location — fall through to mechanical
+          console.log(`[Agent] ${this.agent.config.name} LLM food plan resolved to "${resolvedArea}" — using mechanical fallback`);
         } catch (err) {
           this.handleApiFailure(err);
         }
