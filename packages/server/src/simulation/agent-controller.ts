@@ -38,7 +38,7 @@ export class AgentController {
   pendingConversationTarget: string | null = null;
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
-  private pendingReplan: boolean = false;
+  private lastReplanTick: number = 0;
   private currentPerformingActivity: string = '';
   onDeath?: (agentId: string, cause: string) => void;
   private thinkCooldown: number = 0;
@@ -151,11 +151,6 @@ export class AgentController {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
           this.currentPerformingActivity = '';
-          if (this.pendingReplan) {
-            this.pendingReplan = false;
-            void this.replanAfterConversation();
-          }
-          // Always go through idle gap — replan just changes the intention list
           this.state = 'idle';
           this.idleTimer = 0;
           this.world.updateAgentState(this.agent.id, 'idle', 'between activities');
@@ -470,10 +465,6 @@ export class AgentController {
           this.agent.mood = output.mood;
           this.broadcaster.agentMood(this.agent.id, output.mood);
         }
-        // Defer replan until current activity finishes — prevents constant distraction
-        if (output.replan) {
-          this.pendingReplan = true;
-        }
       }).catch((err) => { this.handleApiFailure(err); });
     }
 
@@ -524,6 +515,10 @@ export class AgentController {
       return;
     }
 
+    // Cooldown: don't replan more than once per 600 ticks (~50s real time)
+    const ticksSinceReplan = this.world.time.totalMinutes - this.lastReplanTick;
+    if (ticksSinceReplan < 600) return;
+
     this.planningInProgress = true;
     this.state = 'planning';
     try {
@@ -538,6 +533,7 @@ export class AgentController {
       // Replace remaining intentions with new ones
       this.intentions = plan;
       this.currentIntentionIndex = 0;
+      this.lastReplanTick = this.world.time.totalMinutes;
 
       console.log(
         `[Agent] ${this.agent.config.name} replanned after conversation: ${plan.length} new intentions`,
