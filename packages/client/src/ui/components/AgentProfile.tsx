@@ -341,7 +341,10 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
             age {agent.config.age}
           </div>
           <div style={{ color: COLORS.textDim, fontSize: '11px' }}>
-            {time.day} {time.day === 1 ? 'day' : 'days'} in village
+            {(() => {
+              const days = time.day - (agent.joinedDay ?? 0);
+              return `${days} ${days === 1 ? 'day' : 'days'} in village`;
+            })()}
           </div>
         </div>
         <button

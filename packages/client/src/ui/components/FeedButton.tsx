@@ -2,7 +2,11 @@ import React, { useState } from 'react';
 import { ChatLog } from './ChatLog';
 import { COLORS, FONTS } from '../styles';
 
-export const FeedButton: React.FC = () => {
+interface FeedButtonProps {
+  chatOpen?: boolean;
+}
+
+export const FeedButton: React.FC<FeedButtonProps> = ({ chatOpen }) => {
   const [open, setOpen] = useState(false);
 
   return (
@@ -37,7 +41,7 @@ export const FeedButton: React.FC = () => {
           style={{
             position: 'fixed',
             bottom: 80,
-            left: 330,
+            left: chatOpen ? 330 : 20,
             width: 340,
             height: 450,
             background: COLORS.bg,

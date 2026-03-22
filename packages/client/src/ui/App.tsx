@@ -20,6 +20,8 @@ const DEV_TOOLS_ENABLED = true;
 export const App: React.FC = () => {
   const [entered, setEntered] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [spectatorChatOpen, setSpectatorChatOpen] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
 
@@ -105,9 +107,36 @@ export const App: React.FC = () => {
       {/* Recap overlay — full screen cinematic */}
       {activeRecap && <RecapOverlay />}
       {/* Spectator chat — floating bottom-left */}
-      <SpectatorChat />
+      <SpectatorChat onOpenChange={setSpectatorChatOpen} />
       {/* Feed — floating button next to chat */}
-      <FeedButton />
+      <FeedButton chatOpen={spectatorChatOpen} />
+      {/* Back to setup button */}
+      <button
+        onClick={() => setShowSetup(true)}
+        style={{
+          position: 'absolute',
+          top: 14,
+          left: 200,
+          padding: '6px 14px',
+          background: COLORS.bg,
+          border: `1px solid ${COLORS.border}`,
+          borderRadius: 4,
+          cursor: 'pointer',
+          color: COLORS.textDim,
+          fontFamily: FONTS.pixel,
+          fontSize: '8px',
+          letterSpacing: 1,
+          zIndex: 10,
+        }}
+      >
+        + ADD AGENT
+      </button>
+      {/* Setup page overlay */}
+      {showSetup && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 100, overflowY: 'auto' }}>
+          <SetupPage onEnter={() => setShowSetup(false)} />
+        </div>
+      )}
       {/* Dev tools — toggle via DEV_TOOLS_ENABLED */}
       {DEV_TOOLS_ENABLED && <DevPanel />}
     </div>

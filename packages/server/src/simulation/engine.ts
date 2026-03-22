@@ -59,7 +59,7 @@ export class SimulationEngine {
 
     // Create narrator + timeline + storyline systems
     const globalKey = process.env.ANTHROPIC_API_KEY;
-    const globalModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    const globalModel = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
     if (globalKey) {
       const narratorLlm = this.getThrottledProvider(globalKey, globalModel);
       this.narrator = new VillageNarrator(narratorLlm, this.world);
@@ -124,7 +124,7 @@ export class SimulationEngine {
       }
 
       const globalKey = process.env.ANTHROPIC_API_KEY;
-      const globalModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+      const globalModel = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
       const sharedMemoryStore = new SupabaseMemoryStore(this.persistence.client);
 
       for (const agent of agents) {
@@ -205,6 +205,7 @@ export class SimulationEngine {
       currentAction: 'arriving',
       currency: startingCurrency,
       createdAt: Date.now(),
+      joinedDay: this.world.time.day,
       ownerId: ownerId || 'anonymous',
       mood: 'neutral',
       inventory: [],
@@ -495,37 +496,28 @@ export class SimulationEngine {
       this.weatherDamageBuildings();
     }
 
-    // 13. Narrator check every 60 ticks
-    if (this.tickCount % 60 === 0) {
-      void this.narrator.maybeNarrate(time).then(narrative => {
-        if (narrative) {
-          this.broadcaster.narrativeUpdate(narrative);
-          console.log(`[Narrator] Day ${time.day} ${time.hour}:${String(time.minute).padStart(2, '0')}: ${narrative.content.substring(0, 80)}...`);
-        }
-      }).catch(() => {});
-    }
+    // 13. Narrator — DISABLED (only weekly recap uses the global API key)
 
-    // 14. Storyline detection every 1440 ticks (~1 game day)
-    if (this.tickCount % 1440 === 0) {
-      void this.storylineDetector.detectAndUpdate().then(storylines => {
-        for (const s of storylines) {
-          this.broadcaster.storylineUpdate(s);
-        }
-      }).catch(() => {});
-    }
+    // 14. Storyline detection — DISABLED (replaced by weekly recap)
 
-    // 16. Auto weekly summary every 7 game days
-    if (this.tickCount % 1440 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
+    // 16. Auto weekly summary — check every 120 ticks (~2 game hours)
+    if (this.tickCount % 120 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
+      console.log(`[WeeklySummary] Triggering for Day ${time.day} (last: ${this.lastWeeklySummaryDay})`);
       this.weeklySummaryGenerating = true;
       void this.generateWeeklySummary().then(summary => {
         if (summary) {
           this.cachedWeeklySummary = summary;
           this.lastWeeklySummaryDay = time.day;
           this.io.emit('weekly-summary:ready', { summary });
-          console.log(`[WeeklySummary] Generated for Day ${time.day}`);
+          console.log(`[WeeklySummary] Generated for Day ${time.day} (${summary.length} chars)`);
+        } else {
+          console.log(`[WeeklySummary] Returned null — no API key or empty response`);
         }
         this.weeklySummaryGenerating = false;
-      }).catch(() => { this.weeklySummaryGenerating = false; });
+      }).catch(err => {
+        console.error(`[WeeklySummary] Failed:`, err);
+        this.weeklySummaryGenerating = false;
+      });
     }
 
     // 15. Periodic save every 300 ticks (~5 game hours)

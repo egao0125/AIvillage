@@ -10,7 +10,11 @@ interface SpectatorMessage {
   timestamp: number;
 }
 
-export const SpectatorChat: React.FC = () => {
+interface SpectatorChatProps {
+  onOpenChange?: (open: boolean) => void;
+}
+
+export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange }) => {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<SpectatorMessage[]>([]);
   const [input, setInput] = useState('');
@@ -54,8 +58,10 @@ export const SpectatorChat: React.FC = () => {
   };
 
   const toggleOpen = () => {
-    setOpen(prev => !prev);
-    if (!open) setUnread(0);
+    const next = !open;
+    setOpen(next);
+    onOpenChange?.(next);
+    if (next) setUnread(0);
   };
 
   return (
