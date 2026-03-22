@@ -1,19 +1,9 @@
-import React, { useState } from 'react';
-import { requestWeeklySummary } from '../../network/socket';
+import React from 'react';
+import { useWeeklySummary } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 
 export const StorylinePanel: React.FC = () => {
-  const [summary, setSummary] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const handleRequest = () => {
-    setLoading(true);
-    setSummary(null);
-    requestWeeklySummary((result) => {
-      setSummary(result || 'No events to summarize yet.');
-      setLoading(false);
-    });
-  };
+  const summary = useWeeklySummary();
 
   return (
     <div
@@ -27,9 +17,6 @@ export const StorylinePanel: React.FC = () => {
       {/* Header */}
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
           marginBottom: 16,
         }}
       >
@@ -43,23 +30,6 @@ export const StorylinePanel: React.FC = () => {
         >
           WEEKLY RECAP
         </span>
-        <button
-          onClick={handleRequest}
-          disabled={loading}
-          style={{
-            padding: '6px 14px',
-            background: loading ? COLORS.bgCard : '#a855f7',
-            color: loading ? COLORS.textDim : '#fff',
-            border: 'none',
-            borderRadius: 4,
-            cursor: loading ? 'default' : 'pointer',
-            fontFamily: FONTS.pixel,
-            fontSize: '8px',
-            letterSpacing: 1,
-          }}
-        >
-          {loading ? 'GENERATING...' : 'GENERATE'}
-        </button>
       </div>
 
       {/* Content */}
@@ -87,9 +57,7 @@ export const StorylinePanel: React.FC = () => {
               paddingTop: 40,
             }}
           >
-            {loading
-              ? 'Asking the narrator to summarize the week...'
-              : 'Click GENERATE to get an LLM summary of what happened in the past 7 days.'}
+            The weekly recap will appear here automatically every 7 game days.
           </div>
         )}
       </div>

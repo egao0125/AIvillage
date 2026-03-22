@@ -155,3 +155,10 @@ export function useActiveRecap(): Recap | null {
     () => gameStore.getState().activeRecap
   );
 }
+
+export function useWeeklySummary(): string | null {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().weeklySummary
+  );
+}

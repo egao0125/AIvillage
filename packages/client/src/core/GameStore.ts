@@ -40,6 +40,7 @@ interface GameState {
   storylines: Storyline[];
   characterPageAgentId: string | null;
   activeRecap: Recap | null;
+  weeklySummary: string | null;
 }
 
 export interface ChatEntry {
@@ -81,6 +82,7 @@ class GameStore {
     storylines: [],
     characterPageAgentId: null,
     activeRecap: null,
+    weeklySummary: null,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -494,6 +496,11 @@ class GameStore {
 
   setActiveRecap(recap: Recap | null): void {
     this.state = { ...this.state, activeRecap: recap };
+    this.notify();
+  }
+
+  setWeeklySummary(summary: string | null): void {
+    this.state = { ...this.state, weeklySummary: summary };
     this.notify();
   }
 }

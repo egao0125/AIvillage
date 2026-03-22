@@ -523,43 +523,53 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
         </div>
       )}
 
-      {/* Inventory */}
-      {agent.inventory && agent.inventory.length > 0 && (
-        <div style={{ marginBottom: 14 }}>
-          <div style={sectionLabel}>INVENTORY ({agent.inventory.length})</div>
-          {agent.inventory.map((item: Item) => (
-            <div
-              key={item.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '6px 10px',
-                marginBottom: 3,
-                background: COLORS.bgCard,
-                borderRadius: 4,
-                border: `1px solid ${COLORS.border}`,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: COLORS.text, fontSize: '12px' }}>{item.name}</span>
+      {/* Inventory — grouped by name with count */}
+      {agent.inventory && agent.inventory.length > 0 && (() => {
+        const grouped = new Map<string, { item: Item; count: number }>();
+        for (const item of agent.inventory) {
+          const existing = grouped.get(item.name);
+          if (existing) existing.count++;
+          else grouped.set(item.name, { item, count: 1 });
+        }
+        return (
+          <div style={{ marginBottom: 14 }}>
+            <div style={sectionLabel}>INVENTORY ({agent.inventory.length})</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {[...grouped.values()].map(({ item, count }) => (
                 <span
+                  key={item.name}
                   style={{
-                    fontSize: '9px',
-                    padding: '2px 6px',
-                    borderRadius: 3,
-                    background: ITEM_TYPE_COLORS[item.type] || ITEM_TYPE_COLORS.other,
-                    color: '#000',
-                    fontWeight: 'bold',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '3px 8px',
+                    background: COLORS.bgCard,
+                    borderRadius: 4,
+                    border: `1px solid ${COLORS.border}`,
+                    fontSize: '11px',
+                    color: COLORS.text,
                   }}
                 >
-                  {item.type.toUpperCase()}
+                  <span
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      background: ITEM_TYPE_COLORS[item.type] || ITEM_TYPE_COLORS.other,
+                      flexShrink: 0,
+                    }}
+                  />
+                  {item.name}{count > 1 && (
+                    <span style={{ color: COLORS.textDim, fontFamily: FONTS.pixel, fontSize: '8px' }}>
+                      x{count}
+                    </span>
+                  )}
                 </span>
-              </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        );
+      })()}
 
       {/* Skills */}
       {agent.skills && agent.skills.length > 0 && (

@@ -36,6 +36,9 @@ export class SimulationEngine {
   private characterTimeline!: CharacterTimeline;
   private storylineDetector!: StorylineDetector;
   recapGenerator!: RecapGenerator;
+  private lastWeeklySummaryDay: number = 0;
+  private cachedWeeklySummary: string | null = null;
+  private weeklySummaryGenerating: boolean = false;
 
   constructor(private io: Server) {
     this.world = new World();
@@ -511,6 +514,20 @@ export class SimulationEngine {
       }).catch(() => {});
     }
 
+    // 16. Auto weekly summary every 7 game days
+    if (this.tickCount % 1440 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
+      this.weeklySummaryGenerating = true;
+      void this.generateWeeklySummary().then(summary => {
+        if (summary) {
+          this.cachedWeeklySummary = summary;
+          this.lastWeeklySummaryDay = time.day;
+          this.io.emit('weekly-summary:ready', { summary });
+          console.log(`[WeeklySummary] Generated for Day ${time.day}`);
+        }
+        this.weeklySummaryGenerating = false;
+      }).catch(() => { this.weeklySummaryGenerating = false; });
+    }
+
     // 15. Periodic save every 300 ticks (~5 game hours)
     if (this.tickCount % 300 === 0 && this.persistence) {
       void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
@@ -781,6 +798,7 @@ export class SimulationEngine {
     const snapshot = this.world.getSnapshot();
     snapshot.narratives = this.narrator.getRecentNarratives();
     snapshot.storylines = this.storylineDetector.getStorylines();
+    snapshot.weeklySummary = this.cachedWeeklySummary;
     return snapshot;
   }
 
@@ -839,7 +857,8 @@ export class SimulationEngine {
     const globalKey = process.env.ANTHROPIC_API_KEY;
     if (!globalKey) return null;
 
-    const llm = this.getThrottledProvider(globalKey, process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6');
+    // Always use Haiku for cost efficiency
+    const llm = this.getThrottledProvider(globalKey, 'claude-haiku-4-5-20251001');
 
     try {
       const summary = await llm.complete(
