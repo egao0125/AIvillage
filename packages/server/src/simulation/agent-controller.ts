@@ -371,10 +371,10 @@ export class AgentController {
     this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
 
     const lowerActivity = activity.toLowerCase();
-    const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick');
+    const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick') || lowerActivity.includes('find food') || lowerActivity.includes('get food') || lowerActivity.includes('look for food') || lowerActivity.includes('mushroom') || lowerActivity.includes('wheat') || lowerActivity.includes('wood') || lowerActivity.includes('herb') || lowerActivity.includes('crop') || lowerActivity.includes('vegetable');
 
     // Auto-gather food at gathering locations (MUST run before eating so gathered food can be consumed)
-    const gatherLocations = ['farm', 'garden', 'lake', 'forest'];
+    const gatherLocations = ['farm', 'garden', 'lake', 'forest', 'forest_south'];
     if (gatherLocations.includes(this.currentAreaId ?? '') && isGatherActivity) {
       const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
       if (gathered) {
@@ -770,7 +770,10 @@ export class AgentController {
     return lower.includes('eat') || lower.includes('food') || lower.includes('meal')
       || lower.includes('lunch') || lower.includes('dinner') || lower.includes('breakfast')
       || lower.includes('cook') || lower.includes('gather') || lower.includes('coffee')
-      || lower.includes('buy bread') || lower.includes('stew');
+      || lower.includes('buy bread') || lower.includes('stew') || lower.includes('forage')
+      || lower.includes('harvest') || lower.includes('fish') || lower.includes('mushroom')
+      || lower.includes('wheat') || lower.includes('herb') || lower.includes('crop')
+      || lower.includes('vegetable');
   }
 
   private async forceFoodPlan(): Promise<void> {
@@ -976,6 +979,9 @@ export class AgentController {
       woods: 'forest',
       garden: 'garden',
       'herb garden': 'garden',
+      'southern woods': 'forest_south',
+      'south forest': 'forest_south',
+      cedar: 'forest_south',
       river: 'lake',
       water: 'lake',
       stream: 'lake',
