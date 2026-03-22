@@ -370,13 +370,24 @@ export class AgentController {
     this.world.updateAgentState(this.agent.id, 'active', activity);
     this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
 
-    // Eating reduces hunger
     const lowerActivity = activity.toLowerCase();
+    const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick');
+
+    // Auto-gather food at gathering locations (MUST run before eating so gathered food can be consumed)
+    const gatherLocations = ['farm', 'garden', 'lake', 'forest'];
+    if (gatherLocations.includes(this.currentAreaId ?? '') && isGatherActivity) {
+      const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
+      if (gathered) {
+        this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
+      }
+    }
+
+    // Eating reduces hunger (runs after gathering so freshly gathered food is available)
     const isFoodActivity = lowerActivity.includes('eat') || lowerActivity.includes('food') || lowerActivity.includes('meal') || lowerActivity.includes('lunch') || lowerActivity.includes('dinner') || lowerActivity.includes('breakfast') || lowerActivity.includes('coffee') || lowerActivity.includes('drink');
     const foodLocations = ['cafe', 'bakery', 'tavern'];
     const atFoodLocation = foodLocations.includes(this.currentAreaId ?? '');
 
-    if (isFoodActivity || atFoodLocation) {
+    if (isFoodActivity || atFoodLocation || isGatherActivity) {
       const foodItem = this.agent.inventory.find(i => i.type === 'food');
       if (foodItem) {
         // Consume food from inventory
@@ -385,8 +396,9 @@ export class AgentController {
           this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
         }
+        this.broadcaster.agentAction(this.agent.id, `ate ${foodItem.name}`, '🍽️');
+        console.log(`[Agent] ${this.agent.config.name} ate ${foodItem.name} (hunger: ${this.agent.vitals?.hunger})`);
       }
-      // No free food at establishments — agents must bring their own food items
     }
 
     // Healing at hospital — requires consuming a medicine/herb item
@@ -399,17 +411,6 @@ export class AgentController {
         this.world.removeItem(medicineItem.id);
         this.agent.vitals.health = Math.min(100, this.agent.vitals.health + 20);
         console.log(`[Agent] ${this.agent.config.name} used ${medicineItem.name} to heal (health: ${this.agent.vitals.health})`);
-      }
-    }
-
-    // Auto-gather food at gathering locations
-    const gatherLocations = ['farm', 'garden', 'lake', 'forest'];
-    const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick');
-    if (gatherLocations.includes(this.currentAreaId ?? '') && isGatherActivity) {
-      const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
-      if (gathered) {
-        this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
-        // Gathered food goes to inventory — agents must explicitly eat or trade it
       }
     }
 
@@ -857,6 +858,12 @@ export class AgentController {
     const d = this.agent.drives;
     const v = this.agent.vitals;
     if (!d || !v) return false;
+
+    // Already executing a food plan — let it finish instead of replanning every tick
+    if (this.state === 'moving' || this.state === 'performing') {
+      const currentActivity = this.pendingActivity?.activity ?? this.intentions[this.currentIntentionIndex - 1] ?? '';
+      if (this.isFoodActivity(currentActivity)) return false;
+    }
 
     // HUNGER ALWAYS CHECKS FIRST — starvation is the #1 killer.
     // Hospital can't fix hunger. Don't send a starving agent to a cardiologist.
