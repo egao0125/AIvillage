@@ -535,8 +535,8 @@ export class ConversationManager {
     }
 
     // --- GATHER MATERIAL ---
-    // e.g. "gather - wood"
-    const gatherMatch = lower.match(/^gather\s*[-:]\s*(.+)/);
+    // e.g. "gather - wood", "gather wheat", "gather some mushrooms"
+    const gatherMatch = lower.match(/^gather\s*[-:]?\s*(?:some\s+)?(.+)/);
     if (gatherMatch) {
       const material = gatherMatch[1].trim();
       const actor = this.world.getAgent(actorId);
