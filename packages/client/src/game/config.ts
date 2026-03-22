@@ -19,7 +19,7 @@ export function createGameConfig(parent: string): Phaser.Types.Core.GameConfig {
       width: '100%',
       height: '100%',
     },
-    backgroundColor: '#0f0f23',
+    backgroundColor: '#2d5a1e',
     scene: [BootScene, VillageScene],
   };
 }
