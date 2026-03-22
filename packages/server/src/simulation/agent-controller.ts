@@ -505,6 +505,7 @@ export class AgentController {
     }
 
     this.planningInProgress = true;
+    this.state = 'planning';
     try {
       const time = this.world.time;
       this.world.updateAgentState(this.agent.id, 'active', 'thinking about what to do next');
@@ -784,6 +785,9 @@ export class AgentController {
 
   private async forceFoodPlan(): Promise<void> {
     this.survivalOverrideActive = true;
+    this.planningInProgress = true;
+    this.state = 'planning';
+    this.world.updateAgentState(this.agent.id, 'active', 'looking for food');
 
     // Step 1: Eat from inventory immediately if we have food — no walking needed
     const foodItem = this.agent.inventory.find(i => i.type === 'food');
@@ -797,7 +801,9 @@ export class AgentController {
       this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
       console.log(`[Agent] ${this.agent.config.name} SURVIVAL: ate ${foodItem.name} from inventory (hunger: ${this.agent.vitals?.hunger})`);
       this.survivalOverrideActive = false;
-      return false as unknown as void; // don't override plan — just ate
+      this.planningInProgress = false;
+      this.state = 'idle';
+      return;
     }
 
     // Step 2: No food in inventory — go gather
@@ -830,12 +836,16 @@ export class AgentController {
       this.followNextIntention();
     } finally {
       this.survivalOverrideActive = false;
+      this.planningInProgress = false;
     }
   }
 
   private async forceHospitalPlan(): Promise<void> {
     console.log(`[Agent] ${this.agent.config.name} HEALTH CRISIS: heading to hospital`);
     this.survivalOverrideActive = true;
+    this.planningInProgress = true;
+    this.state = 'planning';
+    this.world.updateAgentState(this.agent.id, 'active', 'seeking medical help');
 
     try {
       // LLM replan (skip if API exhausted)
@@ -863,6 +873,7 @@ export class AgentController {
       this.followNextIntention();
     } finally {
       this.survivalOverrideActive = false;
+      this.planningInProgress = false;
     }
   }
 
