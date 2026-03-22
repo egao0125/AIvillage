@@ -1,4 +1,4 @@
-import type { Agent, DayPlan, DriveState, GameTime, Mood, Position, VitalState } from '@ai-village/shared';
+import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import { AgentCognition } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
@@ -24,8 +24,8 @@ export class AgentController {
   state: ControllerState = 'idle';
   agent: Agent;
   cognition: AgentCognition;
-  dayPlan: DayPlan | null = null;
-  currentPlanIndex: number = 0;
+  intentions: string[] = [];
+  currentIntentionIndex: number = 0;
   path: Position[] = [];
   pathIndex: number = 0;
   activityTimer: number = 0;
@@ -39,6 +39,7 @@ export class AgentController {
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
   onDeath?: (agentId: string, cause: string) => void;
+  private thinkCooldown: number = 0;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -147,7 +148,7 @@ export class AgentController {
       case 'performing': {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
-          this.followNextPlanItem();
+          this.followNextIntention();
         }
         break;
       }
@@ -171,11 +172,11 @@ export class AgentController {
         this.idleTimer++;
         if (this.idleTimer >= 30) {
           this.idleTimer = 0;
-          if (!this.dayPlan && !this.planningInProgress) {
+          if (this.intentions.length === 0 && !this.planningInProgress) {
             // No plan yet — create one (first tick after spawn or new day)
             void this.doPlan(time);
           } else {
-            this.followNextPlanItem();
+            this.followNextIntention();
           }
         }
         // Check if it's time to sleep
@@ -249,14 +250,14 @@ export class AgentController {
       }
 
       const worldCtx = (institutionContext + buildingContext) || undefined;
-      const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext, worldCtx);
-      this.dayPlan = plan;
-      this.currentPlanIndex = 0;
+      const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx);
+      this.intentions = plan;
+      this.currentIntentionIndex = 0;
       console.log(
-        `[Agent] ${this.agent.config.name} planned ${plan.items.length} activities for the day`,
+        `[Agent] ${this.agent.config.name} planned ${plan.length} intentions`,
       );
       this.handleApiSuccess();
-      this.followNextPlanItem();
+      this.followNextIntention();
     } catch (err) {
       console.error(`[Agent] ${this.agent.config.name} failed to plan day:`, (err as Error).message || err);
       this.handleApiFailure(err);
@@ -266,21 +267,20 @@ export class AgentController {
     }
   }
 
-  followNextPlanItem(): void {
-    // Drive-based override: survival needs trump all plans
+  followNextIntention(): void {
     if (this.shouldOverridePlanForSurvival()) return;
 
-    if (!this.dayPlan || this.currentPlanIndex >= this.dayPlan.items.length) {
+    if (this.currentIntentionIndex >= this.intentions.length) {
       this.state = 'idle';
       this.world.updateAgentState(this.agent.id, 'idle', 'relaxing');
       return;
     }
 
-    const item = this.dayPlan.items[this.currentPlanIndex];
-    this.currentPlanIndex++;
+    const intention = this.intentions[this.currentIntentionIndex];
+    this.currentIntentionIndex++;
 
-    // Check if activity mentions talking to a specific agent
-    const talkMatch = item.activity.match(/(?:talk|speak|meet|find|converse|visit|see)\s+(?:to|with)?\s*(\w+)/i);
+    // Check if intention mentions talking to a specific agent
+    const talkMatch = intention.match(/(?:talk|speak|meet|find|converse|visit|see)\s+(?:to|with)?\s*(\w+)/i);
     if (talkMatch) {
       const targetName = talkMatch[1];
       for (const agent of this.world.agents.values()) {
@@ -292,25 +292,21 @@ export class AgentController {
       }
     }
 
-    // Resolve location to a random walkable tile within the area (avoids stacking)
-    const areaId = this.resolveLocation(item.location);
+    // Infer location from intention text using existing resolveLocation()
+    const areaId = this.resolveLocation(intention);
     const targetPos = getRandomPositionInArea(areaId);
 
-    console.log(
-      `[Agent] ${this.agent.config.name} → ${item.activity} at ${item.location}${item.emoji ? ' ' + item.emoji : ''}`,
-    );
+    console.log(`[Agent] ${this.agent.config.name} → ${intention}`);
 
-    // If already at the target, start performing
     const dist = Math.abs(this.agent.position.x - targetPos.x) + Math.abs(this.agent.position.y - targetPos.y);
     if (dist <= 1) {
-      this.startPerforming(item.activity, item.duration, areaId);
+      this.startPerforming(intention, 60, areaId);
     } else {
-      // Move to the target, then perform
-      this.pendingActivity = { activity: item.activity, duration: item.duration, areaId };
+      this.pendingActivity = { activity: intention, duration: 60, areaId };
       this.startMoveTo(targetPos);
     }
 
-    this.broadcaster.agentAction(this.agent.id, item.activity, item.emoji);
+    this.broadcaster.agentAction(this.agent.id, intention);
   }
 
   private pendingActivity: { activity: string; duration: number; areaId: string } | null = null;
@@ -417,17 +413,31 @@ export class AgentController {
       }
     }
 
-    // Solo action — let agent DO something at this location (skip if API exhausted)
+    // Think — let agent react to what they're doing at this location (skip if API exhausted)
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
     if (ticksSinceLast >= 30 && !isFoodActivity && !isHealingActivity && !isGatherActivity && this.soloActionExecutor && !this.apiExhausted) {
       this.lastSoloActionTick = this.world.time.totalMinutes;
-      void this.cognition.soloAction(activity, this.currentAreaId).then(response => {
+      void this.cognition.think(
+        `doing: ${activity}`,
+        `Location: ${this.currentAreaId ?? 'unknown'}. Time: hour ${this.world.time.hour}.`
+      ).then(output => {
         this.handleApiSuccess();
-        const actions = AgentCognition.parseActions(response);
-        for (const action of actions) {
-          this.soloActionExecutor!.executeSocialAction(
-            this.agent.id, this.agent.config.name, '', action, this.cognition
-          );
+        // Execute any actions from think output
+        if (output.actions) {
+          for (const action of output.actions) {
+            this.soloActionExecutor!.executeSocialAction(
+              this.agent.id, this.agent.config.name, '', action, this.cognition
+            );
+          }
+        }
+        // Update mood if changed
+        if (output.mood) {
+          this.agent.mood = output.mood;
+          this.broadcaster.agentMood(this.agent.id, output.mood);
+        }
+        // Handle replan
+        if (output.replan) {
+          void this.replanAfterConversation();
         }
       }).catch((err) => { this.handleApiFailure(err); });
     }
@@ -447,8 +457,7 @@ export class AgentController {
     this.state = 'conversing';
     this.world.updateAgentState(this.agent.id, 'active', 'conversing');
 
-    // Pre-conversation thinking is now handled by preConversationAgenda() in conversation.ts
-    // which generates a targeted agenda instead of a generic inner monologue
+    // Agenda comes from think() output — no separate LLM call needed
   }
 
   /**
@@ -476,7 +485,7 @@ export class AgentController {
    */
   private async replanAfterConversation(): Promise<void> {
     if (this.planningInProgress || this.apiExhausted) {
-      this.followNextPlanItem();
+      this.followNextIntention();
       return;
     }
 
@@ -487,23 +496,23 @@ export class AgentController {
 
       const boardContext = this.world.getBoardSummary();
       const institutionContext = this.buildInstitutionContext();
-      const plan = await this.cognition.planDay({ day: time.day, hour: time.hour }, boardContext, institutionContext || undefined);
+      const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, institutionContext || undefined);
       this.handleApiSuccess();
 
-      // Replace remaining plan items with new ones
-      this.dayPlan = plan;
-      this.currentPlanIndex = 0;
+      // Replace remaining intentions with new ones
+      this.intentions = plan;
+      this.currentIntentionIndex = 0;
 
       console.log(
-        `[Agent] ${this.agent.config.name} replanned after conversation: ${plan.items.length} new activities`,
+        `[Agent] ${this.agent.config.name} replanned after conversation: ${plan.length} new intentions`,
       );
 
-      this.followNextPlanItem();
+      this.followNextIntention();
     } catch (err) {
       // Replanning failed — track failure, follow existing plan
       console.log(`[Agent] ${this.agent.config.name} couldn't replan, continuing existing plan`);
       this.handleApiFailure(err);
-      this.followNextPlanItem();
+      this.followNextIntention();
     } finally {
       this.planningInProgress = false;
     }
@@ -529,34 +538,6 @@ export class AgentController {
       if (result.mentalModels) {
         this.agent.mentalModels = result.mentalModels;
       }
-
-      // Invention attempt — high-openness agents may invent during reflection
-      try {
-        const invention = await this.cognition.proposeInvention();
-        if (invention && !this.world.hasTechnology(invention.name)) {
-          // Consume one material
-          const materialItem = this.agent.inventory.find(i =>
-            i.type === 'material' && invention.materials.some(m => i.name.toLowerCase().includes(m.toLowerCase()))
-          );
-          if (materialItem) {
-            this.world.removeItem(materialItem.id);
-            this.world.addTechnology({
-              id: crypto.randomUUID(),
-              name: invention.name,
-              description: invention.description,
-              inventorId: this.agent.id,
-              inventorName: this.agent.config.name,
-              effects: invention.effects,
-              requirements: invention.materials,
-              discoveredAt: Date.now(),
-              day: this.world.time.day,
-            });
-            this.broadcaster.agentAction(this.agent.id, `invented ${invention.name}`, '\u{1F4A1}');
-            console.log(`[Tech] ${this.agent.config.name} invented: ${invention.name}`);
-          }
-        }
-      } catch {}
-
 
       // Use mood from LLM response, fall back to keyword parsing
       const mood = result.mood || this.parseMoodFromReflection(result.reflection);
@@ -720,19 +701,41 @@ export class AgentController {
 
   goToSleep(): void {
     this.state = 'sleeping';
-    this.dayPlan = null;
-    this.currentPlanIndex = 0;
+    this.intentions = [];
+    this.currentIntentionIndex = 0;
     this.world.updateAgentState(this.agent.id, 'sleeping', 'sleeping');
     this.broadcaster.agentAction(this.agent.id, 'sleeping', '\u{1F634}');
     console.log(`[Agent] ${this.agent.config.name} goes to sleep`);
 
-    // Pick a random quiet spot to sleep — agents spread out at night
-    const sleepArea = AgentController.SLEEP_AREAS[
-      Math.floor(Math.random() * AgentController.SLEEP_AREAS.length)
-    ];
+    // Deterministic sleep spot based on agent name (no randomness)
+    const sleepArea = this.nameHash(AgentController.SLEEP_AREAS);
     const sleepPos = getAreaEntrance(sleepArea);
     this.world.updateAgentPosition(this.agent.id, sleepPos);
     this.agent.position = sleepPos;
+  }
+
+  private nameHash(areas: readonly string[]): string {
+    let hash = 0;
+    for (const ch of this.agent.config.name) {
+      hash = ((hash << 5) - hash) + ch.charCodeAt(0);
+      hash |= 0;
+    }
+    return areas[Math.abs(hash) % areas.length];
+  }
+
+  private nearestFoodLocation(): string {
+    const pos = this.agent.position;
+    let nearest = AgentController.FOOD_LOCATIONS[0];
+    let minDist = Infinity;
+    for (const loc of AgentController.FOOD_LOCATIONS) {
+      const entrance = getAreaEntrance(loc);
+      const dist = Math.abs(pos.x - entrance.x) + Math.abs(pos.y - entrance.y);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = loc;
+      }
+    }
+    return nearest;
   }
 
   private shouldWake(time: GameTime): boolean {
@@ -787,34 +790,26 @@ export class AgentController {
       if (!this.apiExhausted) {
         try {
           const urgencyContext = `URGENT: You are starving (hunger: ${this.agent.vitals?.hunger}). You MUST find food immediately or your health will drop. Focus on: gathering food from farm/garden/lake/forest, trading for food, or asking someone who has food.`;
-          const plan = await this.cognition.planDay(
+          const plan = await this.cognition.plan(
             { day: this.world.time.day, hour: this.world.time.hour },
             this.world.getBoardSummary(),
             urgencyContext,
           );
           this.handleApiSuccess();
-          this.dayPlan = plan;
-          this.currentPlanIndex = 0;
-          this.followNextPlanItem();
+          this.intentions = plan;
+          this.currentIntentionIndex = 0;
+          this.followNextIntention();
           return;
         } catch (err) {
           this.handleApiFailure(err);
         }
       }
 
-      // Mechanical fallback — go to gathering location (no LLM needed)
-      const target = AgentController.FOOD_LOCATIONS[
-        Math.floor(Math.random() * AgentController.FOOD_LOCATIONS.length)
-      ];
-      this.dayPlan = {
-        agentId: this.agent.id,
-        day: this.world.time.day,
-        items: [
-          { time: this.world.time.hour, duration: 30, activity: 'gathering food', location: target, emoji: '🍞' },
-        ],
-      };
-      this.currentPlanIndex = 0;
-      this.followNextPlanItem();
+      // Mechanical fallback — go to nearest gathering location (no LLM needed)
+      const target = this.nearestFoodLocation();
+      this.intentions = [`gathering food at ${target}`];
+      this.currentIntentionIndex = 0;
+      this.followNextIntention();
     } finally {
       this.survivalOverrideActive = false;
     }
@@ -829,15 +824,15 @@ export class AgentController {
       if (!this.apiExhausted) {
         try {
           const urgencyContext = `URGENT: Your health is critically low (health: ${this.agent.vitals?.health}). You MUST seek medical treatment immediately. Go to the hospital, use medicine/herbs if you have them, or ask someone for help.`;
-          const plan = await this.cognition.planDay(
+          const plan = await this.cognition.plan(
             { day: this.world.time.day, hour: this.world.time.hour },
             this.world.getBoardSummary(),
             urgencyContext,
           );
           this.handleApiSuccess();
-          this.dayPlan = plan;
-          this.currentPlanIndex = 0;
-          this.followNextPlanItem();
+          this.intentions = plan;
+          this.currentIntentionIndex = 0;
+          this.followNextIntention();
           return;
         } catch (err) {
           this.handleApiFailure(err);
@@ -845,15 +840,9 @@ export class AgentController {
       }
 
       // Mechanical fallback — go to hospital (no LLM needed)
-      this.dayPlan = {
-        agentId: this.agent.id,
-        day: this.world.time.day,
-        items: [
-          { time: this.world.time.hour, duration: 40, activity: 'seeking medical treatment', location: 'hospital', emoji: '🏥' },
-        ],
-      };
-      this.currentPlanIndex = 0;
-      this.followNextPlanItem();
+      this.intentions = ['seeking medical treatment at hospital'];
+      this.currentIntentionIndex = 0;
+      this.followNextIntention();
     } finally {
       this.survivalOverrideActive = false;
     }
@@ -880,9 +869,9 @@ export class AgentController {
 
     // Urgent hunger: insert food if next plan item isn't food-related
     if (d.survival > 40 || v.hunger >= 40) {
-      if (this.dayPlan && this.currentPlanIndex < this.dayPlan.items.length) {
-        const nextItem = this.dayPlan.items[this.currentPlanIndex];
-        if (!this.isFoodActivity(nextItem.activity)) {
+      if (this.currentIntentionIndex < this.intentions.length) {
+        const nextItem = this.intentions[this.currentIntentionIndex];
+        if (!this.isFoodActivity(nextItem)) {
           void this.forceFoodPlan();
           return true;
         }
@@ -935,10 +924,7 @@ export class AgentController {
     const lower = location.toLowerCase().trim();
 
     if (lower === 'home' || lower === 'house') {
-      // No fixed home — pick a random public area
-      return AgentController.PUBLIC_AREAS[
-        Math.floor(Math.random() * AgentController.PUBLIC_AREAS.length)
-      ];
+      return this.nameHash(AgentController.PUBLIC_AREAS);
     }
 
     // Map common names to area IDs

@@ -116,7 +116,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed }) => {
                 onClose={() => selectAgent('')}
               />
             )}
-            {agents.map((agent) => (
+            {agents.filter(a => a.alive !== false).map((agent) => (
               <AgentCard
                 key={agent.id}
                 agent={agent}
