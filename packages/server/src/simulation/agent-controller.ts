@@ -217,6 +217,7 @@ export class AgentController {
       return;
     }
     this.planningInProgress = true;
+    this.state = 'planning';
 
     try {
       this.world.updateAgentState(this.agent.id, 'active', 'planning the day');
