@@ -474,6 +474,16 @@ export interface DayPlan {
   items: DayPlanItem[];
 }
 
+// --- Agent Lessons (persistent strategic memory) ---
+
+export interface AgentLesson {
+  id: string;
+  content: string;
+  category: 'survival' | 'social' | 'spatial' | 'economic' | 'general';
+  createdDay: number;
+  updatedDay: number;
+}
+
 // --- Think Output (v2 cognition) ---
 
 export interface ThinkOutput {

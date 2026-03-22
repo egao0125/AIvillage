@@ -4,7 +4,7 @@
 // Based on: https://arxiv.org/abs/2304.03442
 // ============================================================================
 
-import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput } from "@ai-village/shared";
+import type { Agent, AgentLesson, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput } from "@ai-village/shared";
 
 // --- World Rules (prepended to think/plan/talk/reflect system prompts) ---
 
@@ -314,7 +314,7 @@ Context: ${context}`;
    * Each intention names what the agent wants to do and where.
    * Replaces planDay() — no timed schedule, just prioritized intentions.
    */
-  async plan(currentTime: { day: number; hour: number }, boardContext?: string, worldContext?: string): Promise<string[]> {
+  async plan(currentTime: { day: number; hour: number }, boardContext?: string, worldContext?: string, lessons?: AgentLesson[]): Promise<string[]> {
     const recentMemories = await this.memory.getRecent(this.agent.id, 15);
     // Also pull high-importance memories (commitments, reflections) that might not be recent
     const importantMemories = await this.memory.getByImportance(this.agent.id, 7);
@@ -328,6 +328,9 @@ Context: ${context}`;
 
     const boardSection = boardContext ? `\n\nVILLAGE BOARD:\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
+    const lessonsSection = lessons && lessons.length > 0
+      ? `\n\nYOUR LESSONS (rules you've learned from experience):\n${lessons.map((l, i) => `${i + 1}. [${l.category}] ${l.content}`).join('\n')}`
+      : '';
 
     const systemPrompt = `${GLOBAL_PROMPT}
 
@@ -335,7 +338,7 @@ ${this.buildIdentityBlock()}
 
 Today is day ${currentTime.day}.`;
 
-    const userPrompt = `${this.buildContextBlock()}${boardSection}${worldSection}
+    const userPrompt = `${this.buildContextBlock()}${lessonsSection}${boardSection}${worldSection}
 
 Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
@@ -435,7 +438,7 @@ Your turn to speak:`;
   /**
    * reflect() — End-of-day synthesis. Uses GLOBAL_PROMPT, calls assess() + compress().
    */
-  async reflect(): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[] }> {
+  async reflect(existingLessons?: AgentLesson[], currentDay?: number): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; lessons?: AgentLesson[] }> {
     const recentMemories = await this.memory.getRecent(this.agent.id, 20);
 
     if (recentMemories.length < 5) return { reflection: "", mood: "neutral" };
@@ -490,10 +493,67 @@ End with: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
       mentalModels = await this.assess(interactionMemories);
     }
 
+    // extractLessons() — distill actionable rules from today's experiences
+    let lessons: AgentLesson[] | undefined;
+    try {
+      const memoryText = recentMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
+      lessons = await this.extractLessons(memoryText, existingLessons ?? [], currentDay ?? 0);
+    } catch (err) {
+      console.error(`[Lessons] ${this.agent.config.name} failed to extract lessons:`, err);
+    }
+
     // compress() — summarize old memories to prevent unbounded growth
     await this.compress();
 
-    return { reflection, mood, mentalModels };
+    return { reflection, mood, mentalModels, lessons };
+  }
+
+  /**
+   * extractLessons() — Distill actionable rules from today's experiences.
+   * Called at end of reflect(). One LLM call per agent per day.
+   * Returns updated lessons array (max 15).
+   */
+  async extractLessons(recentMemoriesText: string, existingLessons: AgentLesson[], currentDay: number): Promise<AgentLesson[]> {
+    const existingSection = existingLessons.length > 0
+      ? existingLessons.map((l, i) => `${i + 1}. [${l.category}] ${l.content} (id: ${l.id})`).join('\n')
+      : 'None yet.';
+
+    const systemPrompt = `You are ${this.agent.config.name}. Based on today's experiences, update your survival rules.
+
+EXISTING RULES:
+${existingSection}
+
+Review today and extract/update actionable rules. Update existing rules if info changed. Add new rules for discoveries. Drop irrelevant rules. Max 15 total. Be concise — each rule is one sentence.
+
+Categories: survival, social, spatial, economic, general
+
+Return JSON array ONLY: [{"id":"existing-id-or-new-uuid","content":"...","category":"..."}]`;
+
+    const response = await this.llm.complete(systemPrompt, recentMemoriesText);
+
+    try {
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const raw = JSON.parse(cleaned) as Array<{ id: string; content: string; category: string }>;
+      if (!Array.isArray(raw)) return existingLessons;
+
+      const validCategories = new Set(['survival', 'social', 'spatial', 'economic', 'general']);
+      const existingMap = new Map(existingLessons.map(l => [l.id, l]));
+
+      const lessons: AgentLesson[] = raw.slice(0, 15).map(r => {
+        const existing = existingMap.get(r.id);
+        return {
+          id: r.id || crypto.randomUUID(),
+          content: r.content,
+          category: (validCategories.has(r.category) ? r.category : 'general') as AgentLesson['category'],
+          createdDay: existing?.createdDay ?? currentDay,
+          updatedDay: currentDay,
+        };
+      });
+
+      return lessons;
+    } catch {
+      return existingLessons; // parse failure — keep existing
+    }
   }
 
   /**

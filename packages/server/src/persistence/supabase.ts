@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Agent } from '@ai-village/shared';
+import type { Agent, AgentLesson } from '@ai-village/shared';
 import type { World } from '../simulation/world.js';
 import type { AgentController } from '../simulation/agent-controller.js';
 
@@ -12,6 +12,7 @@ export interface ControllerData {
   wakeHour: number;
   sleepHour: number;
   homeArea: string;
+  lessons?: AgentLesson[];
   apiKey?: string;
   model?: string;
 }
@@ -99,6 +100,7 @@ export class SupabasePersistence {
           wakeHour: ctrl.wakeHour,
           sleepHour: ctrl.sleepHour,
           homeArea: ctrl.homeArea,
+          lessons: ctrl.lessons,
           apiKey: keyData?.apiKey,
           model: keyData?.model,
         } satisfies ControllerData,
