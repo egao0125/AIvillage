@@ -445,12 +445,12 @@ export class AgentController {
     // Set timer based on what happened:
     // - Action completed instantly (gather/eat/heal): brief pause then move on
     // - Resting/relaxing: long enough to actually restore energy
-    // - Everything else: moderate time for think() to fire
-    this.activityTimer = actionCompleted ? 8 : isRestActivity ? 60 : 45;
+    // - Everything else: hold activity long enough to feel real (~15s at 83ms/tick)
+    this.activityTimer = actionCompleted ? 15 : isRestActivity ? 240 : 180;
 
     // Think — let agent react to what they're doing at this location (skip if API exhausted)
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
-    if (ticksSinceLast >= 120 && !isFoodActivity && !isHealingActivity && !isGatherActivity && this.soloActionExecutor && !this.apiExhausted) {
+    if (ticksSinceLast >= 360 && !isFoodActivity && !isHealingActivity && !isGatherActivity && this.soloActionExecutor && !this.apiExhausted) {
       this.lastSoloActionTick = this.world.time.totalMinutes;
       void this.cognition.think(
         `doing: ${activity}`,
