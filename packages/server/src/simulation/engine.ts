@@ -808,6 +808,51 @@ export class SimulationEngine {
     }
   }
 
+  async generateWeeklySummary(): Promise<string | null> {
+    const time = this.world.time;
+    const weekStart = Math.max(0, time.day - 7);
+
+    // Gather data sources
+    const agents = Array.from(this.world.agents.values()).filter(a => a.alive !== false);
+    const narratives = this.narrator.getRecentNarratives();
+    const storylines = this.storylineDetector.getStorylines();
+
+    // Agent status
+    const agentSummaries = agents.map(a => {
+      const timeline = this.characterTimeline.getTimeline(a.id, 10);
+      const recentActions = timeline.map(e => e.description).join('; ');
+      const models = a.mentalModels?.map(m => `${m.targetId}: trust ${m.trust}, feels ${m.emotionalStance}`).join('; ') || 'none';
+      return `${a.config.name} (mood: ${a.mood ?? 'neutral'}): ${recentActions || 'quiet week'}. Relationships: ${models}`;
+    }).join('\n');
+
+    // Narratives
+    const narrativeDump = narratives
+      .filter(n => n.gameDay >= weekStart)
+      .map(n => `Day ${n.gameDay}: ${n.content}`)
+      .join('\n') || 'No narrator entries this week.';
+
+    // Storylines
+    const storylineDump = storylines
+      .map(s => `"${s.title}" (${s.status}): ${s.summary}`)
+      .join('\n') || 'No storylines detected.';
+
+    const globalKey = process.env.ANTHROPIC_API_KEY;
+    if (!globalKey) return null;
+
+    const llm = this.getThrottledProvider(globalKey, process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6');
+
+    try {
+      const summary = await llm.complete(
+        `You are a weekly newspaper editor for a small AI village reality show. Write a compelling weekly recap of Days ${weekStart}-${time.day}. Use agent names. Be dramatic but factual. 3-5 paragraphs. Highlight key events, relationship changes, conflicts, and character development.`,
+        `AGENT STATUS:\n${agentSummaries}\n\nNARRATOR LOG:\n${narrativeDump}\n\nSTORYLINES:\n${storylineDump}\n\nCurrent: Day ${time.day}, ${time.hour}:00, ${this.world.weather.season}, ${this.world.weather.current}\n\nWrite the weekly summary:`
+      );
+      return summary;
+    } catch (err) {
+      console.error('[Engine] Failed to generate weekly summary:', err);
+      return null;
+    }
+  }
+
   /**
    * Get or create a throttled LLM provider for a given API key.
    * All agents sharing the same key share the same concurrency limit.

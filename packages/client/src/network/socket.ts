@@ -317,3 +317,10 @@ export function watchThoughts(agentId: string): void {
 export function unwatchThoughts(): void {
   socket?.emit('agent:unwatch-thoughts');
 }
+
+export function requestWeeklySummary(callback: (summary: string | null) => void): void {
+  socket?.emit('weekly-summary:request');
+  socket?.once('weekly-summary:ready', (data: { summary: string | null }) => {
+    callback(data.summary);
+  });
+}
