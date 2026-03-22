@@ -319,6 +319,11 @@ class GameStore {
     this.notify();
   }
 
+  clearThoughts(): void {
+    this.state = { ...this.state, thoughts: [] };
+    this.notify();
+  }
+
   // --- Agent drives ---
 
   updateAgentDrives(agentId: string, drives: DriveState): void {

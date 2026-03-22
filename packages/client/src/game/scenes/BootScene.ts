@@ -67,15 +67,15 @@ const SAND_BASE = 0xd4b896;
 const SAND_DARK = 0xc4a882;
 const SAND_LIGHT = 0xe0c8a8;
 const SAND_SPEC = 0xb09870;
-const FLOOR_PLANK = 0x8b6b4a;
-const FLOOR_DARK = 0x6b5030;
-const FLOOR_LIGHT = 0xa08060;
-const FLOOR_KNOT = 0x5a4020;
-const WALL_STONE1 = 0x6b6b6b;
-const WALL_STONE2 = 0x7a7a7a;
-const WALL_STONE3 = 0x858585;
-const WALL_MORTAR = 0x706e68;
-const WALL_SHADOW = 0x4a4a4a;
+const FLOOR_PLANK = 0xb89070;
+const FLOOR_DARK = 0x9a7050;
+const FLOOR_LIGHT = 0xd0a880;
+const FLOOR_KNOT = 0x7a5830;
+const WALL_STONE1 = 0xa09080;
+const WALL_STONE2 = 0xb0a090;
+const WALL_STONE3 = 0xbcb0a0;
+const WALL_MORTAR = 0x8a8070;
+const WALL_SHADOW = 0x7a7060;
 const FOREST_BASE = 0x1a3a12;
 const FOREST_DARK = 0x142e0e;
 const FOREST_MOSS = 0x2a4a18;
@@ -540,10 +540,10 @@ export class BootScene extends Phaser.Scene {
     const g = this.add.graphics();
     const rng = seeded(556);
 
-    const DARK_BASE = 0x5a5060;
-    const DARK_LIGHT = 0x6a6070;
-    const DARK_SHADOW = 0x4a4050;
-    const DARK_GROUT = 0x3a3040;
+    const DARK_BASE = 0x9a9080;
+    const DARK_LIGHT = 0xaaa090;
+    const DARK_SHADOW = 0x8a8070;
+    const DARK_GROUT = 0x787060;
 
     // Draw stone tile grid (8x8 tiles within the 32x32 texture)
     const tileSize = 8;
@@ -586,8 +586,8 @@ export class BootScene extends Phaser.Scene {
   // ── Floor Dark Variants (per-building stone tones) ─────────
   private generateFloorDarkVariants(): void {
     const tones = [
-      { base: 0x505a68, light: 0x606a78, shadow: 0x404a58, grout: 0x303a48, seed: 5561 }, // blue-gray
-      { base: 0x605850, light: 0x706860, shadow: 0x504840, grout: 0x403830, seed: 5562 }, // warm-gray
+      { base: 0x8a9488, light: 0x9aa498, shadow: 0x7a8478, grout: 0x687468, seed: 5561 }, // sage
+      { base: 0xa09480, light: 0xb0a490, shadow: 0x908470, grout: 0x787060, seed: 5562 }, // warm cream
     ];
     for (let v = 0; v < tones.length; v++) {
       const t = tones[v];
@@ -631,9 +631,9 @@ export class BootScene extends Phaser.Scene {
     const rng = seeded(777);
 
     // Top face of wall: lighter warm stone, subtle block grid
-    const TOP_BASE = 0x8a8884;
-    const TOP_LIGHT = 0x969290;
-    const TOP_DARK = 0x7e7c78;
+    const TOP_BASE = 0xc0b8a8;
+    const TOP_LIGHT = 0xd0c8b8;
+    const TOP_DARK = 0xb0a898;
 
     // Smooth fill with subtle grain
     for (let y = 0; y < T; y++) {
