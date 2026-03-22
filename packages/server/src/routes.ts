@@ -422,5 +422,42 @@ Relationships: ${mentalModels}`;
     },
   );
 
+  // POST /api/agents/:id/resurrect — bring dead agent back to life (requires ownership)
+  router.post(
+    '/api/agents/:id/resurrect',
+    rateLimit(10, 60_000),
+    requireAuth,
+    (req, res) => {
+      const id = req.params.id as string;
+      const snapshot = engine.getSnapshot();
+      const agent = snapshot.agents.find(a => a.id === id);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      if (agent.ownerId !== req.userId) {
+        res.status(403).json({ error: 'You can only resurrect your own agents' });
+        return;
+      }
+      const success = engine.resurrectAgent(id);
+      if (!success) {
+        res.status(400).json({ error: 'Agent is not dead' });
+        return;
+      }
+      res.json({ success: true });
+    },
+  );
+
+  // POST /api/admin/resurrect-all — bring ALL dead agents back to life
+  router.post(
+    '/api/admin/resurrect-all',
+    rateLimit(3, 60_000),
+    requireAuth,
+    (_req, res) => {
+      const resurrected = engine.resurrectAllAgents();
+      res.json({ success: true, resurrected });
+    },
+  );
+
   return router;
 }

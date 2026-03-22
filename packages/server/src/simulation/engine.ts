@@ -428,6 +428,75 @@ export class SimulationEngine {
     return true;
   }
 
+  resurrectAgent(id: string): boolean {
+    const agent = this.world.getAgent(id);
+    if (!agent || agent.alive !== false) return false;
+
+    // Revive agent state
+    agent.alive = true;
+    agent.causeOfDeath = undefined;
+    agent.state = 'idle';
+    agent.vitals = { health: 100, hunger: 0, energy: 100 };
+    agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
+
+    // Recreate cognition
+    const keyData = this.agentApiKeys.get(id);
+    const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+    const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+
+    const memoryStore = this.persistence
+      ? new SupabaseMemoryStore(this.persistence.client)
+      : new InMemoryStore();
+    const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider);
+    this.cognitions.set(id, cognition);
+
+    // Recreate controller
+    const controller = new AgentController(
+      agent,
+      cognition,
+      this.world,
+      this.broadcaster,
+      7,
+      23,
+      'plaza',
+      this.createActionExecutor(),
+    );
+    controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
+    this.controllers.set(id, controller);
+
+    // Place at plaza
+    const spawnPos = getAreaEntrance('plaza');
+    this.world.updateAgentPosition(id, spawnPos);
+    agent.position = { ...spawnPos };
+    agent.currentAction = 'resurrected';
+    this.world.updateAgentState(id, 'idle', 'resurrected');
+
+    this.broadcaster.agentAction(id, 'has been resurrected', '\u2728');
+
+    console.log(`[Engine] Agent resurrected: ${agent.config.name}`);
+
+    if (this.persistence) {
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
+        console.error('[Persistence] Save after resurrect failed:', err)
+      );
+    }
+
+    return true;
+  }
+
+  resurrectAllAgents(): string[] {
+    const resurrected: string[] = [];
+    for (const agent of this.world.agents.values()) {
+      if (agent.alive === false) {
+        if (this.resurrectAgent(agent.id)) {
+          resurrected.push(agent.config.name);
+        }
+      }
+    }
+    return resurrected;
+  }
+
   start(): void {
     if (this.tickInterval) return;
 
