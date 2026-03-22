@@ -183,6 +183,7 @@ export class SimulationEngine {
           controller.currentIntentionIndex = (ctrlData as any).currentIntentionIndex ?? (ctrlData as any).currentPlanIndex ?? 0;
           controller.activityTimer = ctrlData.activityTimer ?? 0;
           controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
+          controller.lessons = (ctrlData as any).lessons ?? [];
         }
 
         this.controllers.set(agent.id, controller);
