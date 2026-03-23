@@ -157,10 +157,10 @@ const TEACH_PATTERNS = [
 ];
 
 const EAT_PATTERNS = [
-  /eat\s+(?:some\s+)?(\w[\w\s]*)/i,
-  /consume\s+(\w+)/i,
-  /have\s+(?:a\s+)?(?:meal|breakfast|lunch|dinner)/i,
-  /eat\b/i,
+  /\beat\s+(?:some\s+)?(\w[\w\s]*)/i,
+  /\bconsume\s+(\w+)/i,
+  /\bhave\s+(?:a\s+)?(?:meal|breakfast|lunch|dinner)/i,
+  /\beat\b/i,
 ];
 
 const MEDICINE_PATTERNS = [
