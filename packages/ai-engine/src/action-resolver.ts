@@ -35,6 +35,7 @@ export interface ParsedIntent {
   requestItems?: { resource: string; qty: number }[];
   message?: string;           // for board posts
   raw: string;                // original text
+  remainder?: string;         // unparsed text after conjunction split (compound actions)
 }
 
 export interface ActionOutcome {
@@ -54,6 +55,8 @@ export interface ActionOutcome {
   teachResult?: { skill: string; studentNewLevel: number };
   witnesses?: string[];  // names of agents who perceived a social act
   socialMeaning?: string; // what the social act means in context
+  remediation?: string;   // actionable hint when action fails
+  deferredAction?: string; // remainder text from compound action split
 }
 
 // --- Agent State Interface (what the resolver needs to know) ---
@@ -196,13 +199,41 @@ const TALK_PATTERNS = [
 ];
 
 
+const ACTION_VERBS = /^(?:go|walk|head|move|travel|gather|harvest|collect|pick|forage|fish|chop|dig|craft|cook|bake|make|brew|prepare|create|build|construct|eat|consume|rest|relax|sleep|trade|offer|give|steal|rob|destroy|break|smash|burn|fight|attack|hit|repair|fix|teach|show|post|write|talk|speak|chat|approach|find|meet|visit)\b/i;
+
 export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
   const text = raw.trim();
-  const base: ParsedIntent = { type: 'unknown', raw: text };
+
+  // --- Conjunction split: extract remainder for compound actions ---
+  let mainText = text;
+  let remainder: string | undefined;
+
+  // Try unambiguous conjunctions first: "and then", "then", "after that"
+  const conjMatch = text.match(/^(.+?)\s+(?:and then|then|after that)\s+(.+)$/i);
+  if (conjMatch) {
+    const part2 = conjMatch[2].trim();
+    if (ACTION_VERBS.test(part2)) {
+      mainText = conjMatch[1].trim();
+      remainder = part2;
+    }
+  }
+  // Try "and" only if part2 starts with an action verb (avoids splitting "gather wood and stone")
+  if (!remainder) {
+    const andMatch = text.match(/^(.+?)\s+and\s+(.+)$/i);
+    if (andMatch) {
+      const part2 = andMatch[2].trim();
+      if (ACTION_VERBS.test(part2)) {
+        mainText = andMatch[1].trim();
+        remainder = part2;
+      }
+    }
+  }
+
+  const base: ParsedIntent = { type: 'unknown', raw: text, remainder };
 
   // --- Eat ---
   for (const p of EAT_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       const foodName = m[1]?.toLowerCase().trim().replace(/\s+/g, '_');
       return { ...base, type: 'eat', resource: foodName || undefined };
@@ -211,28 +242,28 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Use medicine ---
   for (const p of MEDICINE_PATTERNS) {
-    if (p.test(text)) {
+    if (p.test(mainText)) {
       return { ...base, type: 'use_medicine' };
     }
   }
 
   // --- Sleep ---
   for (const p of SLEEP_PATTERNS) {
-    if (p.test(text)) {
+    if (p.test(mainText)) {
       return { ...base, type: 'sleep' };
     }
   }
 
   // --- Rest ---
   for (const p of REST_PATTERNS) {
-    if (p.test(text)) {
+    if (p.test(mainText)) {
       return { ...base, type: 'rest' };
     }
   }
 
   // --- Steal ---
   for (const p of STEAL_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       // "steal 3 wheat from Mei" or "rob Mei"
       if (m.length >= 4) {
@@ -245,7 +276,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Destroy ---
   for (const p of DESTROY_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       return { ...base, type: 'destroy', resource: m[1]?.toLowerCase().trim() };
     }
@@ -253,7 +284,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Fight ---
   for (const p of FIGHT_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       return { ...base, type: 'fight', targetAgent: m[1] };
     }
@@ -261,7 +292,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Repair ---
   for (const p of REPAIR_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       const target = m[1]?.toLowerCase().trim().replace(/\s+/g, '_') || '';
       return { ...base, type: 'repair', building: target };
@@ -270,7 +301,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Trade ---
   for (const p of TRADE_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       // Pattern 1: "offer 3 wheat for 2 fish with Mei"
       if (m.length >= 5) {
@@ -294,16 +325,16 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
   }
 
   // --- Trade accept/reject (during conversation) ---
-  if (/accept\s+(?:the\s+)?(?:trade|offer|deal)/i.test(text)) {
+  if (/accept\s+(?:the\s+)?(?:trade|offer|deal)/i.test(mainText)) {
     return { ...base, type: 'trade_accept' };
   }
-  if (/reject\s+(?:the\s+)?(?:trade|offer|deal)/i.test(text) || /decline\s+(?:the\s+)?(?:trade|offer|deal)/i.test(text)) {
+  if (/reject\s+(?:the\s+)?(?:trade|offer|deal)/i.test(mainText) || /decline\s+(?:the\s+)?(?:trade|offer|deal)/i.test(mainText)) {
     return { ...base, type: 'trade_reject' };
   }
 
   // --- Teach ---
   for (const p of TEACH_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       // Could be "teach fishing to Koji" or "teach Koji fishing"
       const word1 = m[1]?.toLowerCase();
@@ -323,7 +354,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Give ---
   for (const p of GIVE_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       const qty = parseInt(m[1]) || 1;
       const resource = m[2]?.toLowerCase().trim().replace(/\s+/g, '_');
@@ -334,7 +365,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Post on board ---
   for (const p of POST_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       return { ...base, type: 'post', message: m[1]?.trim() };
     }
@@ -342,7 +373,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Build ---
   for (const p of BUILD_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       const buildingName = m[1]?.toLowerCase().trim().replace(/\s+/g, '_') || '';
       // Match against building definitions
@@ -353,7 +384,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Craft ---
   for (const p of CRAFT_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       const recipeName = m[1]?.toLowerCase().trim().replace(/\s+/g, '_') || '';
       const recipe = findRecipe(recipeName);
@@ -367,12 +398,12 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Gather (check after craft since "pick herbs" could be either) ---
   // Special case: "fish" / "go fishing"
-  if (/\bfish(?:ing)?\b/i.test(text) && !/\bdried?\s+fish\b/i.test(text)) {
+  if (/\bfish(?:ing)?\b/i.test(mainText) && !/\bdried?\s+fish\b/i.test(mainText)) {
     return { ...base, type: 'gather', resource: 'fish', location: 'lake' };
   }
 
   for (const p of GATHER_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       const resource = m[1]?.toLowerCase().trim() || '';
       // Try to match to a known resource
@@ -383,7 +414,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Talk ---
   for (const p of TALK_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       return { ...base, type: 'talk', targetAgent: m[1] };
     }
@@ -391,7 +422,7 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Move ---
   for (const p of MOVE_PATTERNS) {
-    const m = text.match(p);
+    const m = mainText.match(p);
     if (m) {
       return { ...base, type: 'move', location: m[1]?.toLowerCase().trim() };
     }
@@ -400,12 +431,12 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
   // --- Intent vs Social (everything that didn't match a physical action) ---
   // Intent language: internal plans that feed the next think/plan cycle
   const INTENT_PATTERNS = /^(?:I (?:need|should|want|plan|hope|wish|intend|ought) to|we (?:need|should|must) |I(?:'m| am) going to|I(?:'ll| will) )/i;
-  if (INTENT_PATTERNS.test(text)) {
-    return { ...base, type: 'intent', message: text };
+  if (INTENT_PATTERNS.test(mainText)) {
+    return { ...base, type: 'intent', message: mainText };
   }
 
   // Everything else is a social act — declarations, announcements, promises, threats, etc.
-  return { ...base, type: 'social', message: text };
+  return { ...base, type: 'social', message: mainText };
 }
 
 
@@ -416,39 +447,45 @@ export function executeAction(
   agent: AgentState,
   world: WorldState,
 ): ActionOutcome {
+  let outcome: ActionOutcome;
   switch (intent.type) {
-
-    case 'gather': return executeGather(intent, agent, world);
-    case 'craft': return executeCraft(intent, agent, world);
-    case 'build': return executeBuild(intent, agent, world);
-    case 'repair': return executeRepair(intent, agent, world);
-    case 'eat': return executeEat(intent, agent);
-    case 'use_medicine': return executeUseMedicine(agent);
-    case 'rest': return executeRest(agent);
-    case 'sleep': return executeSleep(agent);
-    case 'give': return executeGive(intent, agent, world);
-    case 'steal': return executeSteal(intent, agent, world);
-    case 'destroy': return executeDestroy(intent, agent, world);
-    case 'fight': return executeFight(intent, agent, world);
-    case 'trade_offer': return executeTradeOffer(intent, agent, world);
-    case 'trade_accept': return executeTradeAccept(agent, world);
-    case 'trade_reject': return executeTradeReject(agent, world);
-    case 'teach': return executeTeach(intent, agent, world);
-    case 'post': return executePost(intent, agent);
-    case 'move': return { success: true, type: 'move', description: `heading to ${intent.location}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 };
-    case 'talk': return { success: true, type: 'talk', description: `wants to talk to ${intent.targetAgent}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 };
-
-    case 'intent': return executeSocialIntent(intent);
-    case 'social': return executeSocialAct(intent, agent);
-
+    case 'gather': outcome = executeGather(intent, agent, world); break;
+    case 'craft': outcome = executeCraft(intent, agent, world); break;
+    case 'build': outcome = executeBuild(intent, agent, world); break;
+    case 'repair': outcome = executeRepair(intent, agent, world); break;
+    case 'eat': outcome = executeEat(intent, agent); break;
+    case 'use_medicine': outcome = executeUseMedicine(agent); break;
+    case 'rest': outcome = executeRest(agent); break;
+    case 'sleep': outcome = executeSleep(agent); break;
+    case 'give': outcome = executeGive(intent, agent, world); break;
+    case 'steal': outcome = executeSteal(intent, agent, world); break;
+    case 'destroy': outcome = executeDestroy(intent, agent, world); break;
+    case 'fight': outcome = executeFight(intent, agent, world); break;
+    case 'trade_offer': outcome = executeTradeOffer(intent, agent, world); break;
+    case 'trade_accept': outcome = executeTradeAccept(agent, world); break;
+    case 'trade_reject': outcome = executeTradeReject(agent, world); break;
+    case 'teach': outcome = executeTeach(intent, agent, world); break;
+    case 'post': outcome = executePost(intent, agent); break;
+    case 'move': outcome = { success: true, type: 'move', description: `heading to ${intent.location}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 }; break;
+    case 'talk': outcome = { success: true, type: 'talk', description: `wants to talk to ${intent.targetAgent}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 }; break;
+    case 'intent': outcome = executeSocialIntent(intent); break;
+    case 'social': outcome = executeSocialAct(intent, agent); break;
     default:
-      return {
+      outcome = {
         success: false, type: 'unknown',
         description: `I'm not sure how to "${intent.raw}".`,
         reason: 'unrecognized action',
+        remediation: 'Try a specific action: gather, craft, build, eat, rest, give, trade.',
         energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0,
       };
   }
+
+  // Carry forward remainder for compound action handling
+  if (intent.remainder) {
+    outcome.deferredAction = intent.remainder;
+  }
+
+  return outcome;
 }
 
 
@@ -475,6 +512,7 @@ function executeGather(intent: ParsedIntent, agent: AgentState, world: WorldStat
       ...base, success: false,
       description: `There's nothing to gather ${intent.resource ? `(${intent.resource}) ` : ''}here at ${agent.location}.`,
       reason: 'wrong location',
+      remediation: 'Try the farm for crops, the lake for fish/clay/stone, the forest for wood/mushrooms, or the garden for herbs.',
       energySpent: 0, durationMinutes: 0,
     } as ActionOutcome;
   }
@@ -492,10 +530,17 @@ function executeGather(intent: ParsedIntent, agent: AgentState, world: WorldStat
   const result = resolveGather(gatherDef, skillLevel, agent.energy, hasTool, world.season, remaining);
 
   if (!result.success) {
+    let remediation: string | undefined;
+    if (result.reason?.includes('not enough energy')) remediation = 'Rest or sleep to recover energy first.';
+    else if (result.reason?.includes('need')) remediation = `Practice ${gatherDef.skill} by gathering simpler resources, or find someone to teach you.`;
+    else if (result.reason?.includes('nothing left')) remediation = 'Try a different resource here, or come back tomorrow.';
+    else if (result.reason?.includes('nothing grows')) remediation = 'Not available this season. Try a different resource or location.';
+    else if (result.reason === 'found nothing this time') remediation = `Try again — higher ${gatherDef.skill} skill improves chances.`;
     return {
       ...base, success: false,
       description: `Tried to ${gatherDef.description.toLowerCase()} but ${result.reason}.`,
       reason: result.reason,
+      remediation,
       energySpent: result.energySpent,
       durationMinutes: result.durationMinutes,
       skillXpGained: result.skillXpGained > 0 ? { skill: gatherDef.skill, xp: result.skillXpGained } : undefined,
@@ -530,18 +575,18 @@ function executeCraft(intent: ParsedIntent, agent: AgentState, world: WorldState
     for (const [k, v] of Object.entries(agent.skills)) agentSkills[k] = v.level;
     const available = getAvailableRecipes(agent.location, agentSkills);
     if (available.length === 0) {
-      return { ...base, success: false, description: `I don't know how to make that here.`, reason: 'no matching recipe', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+      return { ...base, success: false, description: `I don't know how to make that here.`, reason: 'no matching recipe', remediation: 'Visit the workshop, bakery, cafe, or garden to see available recipes.', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
     }
     // Try to match the intent text against available recipe names
     recipe = available.find(r => intent.raw.toLowerCase().includes(r.name.toLowerCase().split(' ').pop()!));
     if (!recipe) {
-      return { ...base, success: false, description: `I don't know a recipe for that. I could try: ${available.map(r => r.name).join(', ')}.`, reason: 'unknown recipe', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+      return { ...base, success: false, description: `I don't know a recipe for that. I could try: ${available.map(r => r.name).join(', ')}.`, reason: 'unknown recipe', remediation: `Try one of these instead: ${available.map(r => r.name).join(', ')}.`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
     }
   }
 
   // Check location
   if (recipe.location !== agent.location) {
-    return { ...base, success: false, description: `I need to be at the ${recipe.location} to ${recipe.name}.`, reason: `wrong location (need ${recipe.location})`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `I need to be at the ${recipe.location} to ${recipe.name}.`, reason: `wrong location (need ${recipe.location})`, remediation: `Go to the ${recipe.location} to make ${recipe.name}.`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   const skillLevel = agent.skills[recipe.skill]?.level ?? 0;
@@ -550,7 +595,15 @@ function executeCraft(intent: ParsedIntent, agent: AgentState, world: WorldState
   const result = resolveCraft(recipe, skillLevel, agent.energy, agent.inventory, hasTool);
 
   if (!result.success) {
-    return { ...base, success: false, description: `Tried to ${recipe.name} but ${result.reason}.`, reason: result.reason, energySpent: result.energySpent, durationMinutes: result.durationMinutes } as ActionOutcome;
+    let remediation: string | undefined;
+    if (result.reason?.includes('not enough energy')) remediation = 'Rest or sleep to recover energy first.';
+    else if (result.reason?.includes('need') && result.reason?.includes('level')) remediation = `Practice ${recipe.skill} or find someone with the required level to teach you.`;
+    else if (result.reason?.includes('need a ')) remediation = `Craft a ${recipe.toolRequired} at the workshop first.`;
+    else if (result.reason?.includes('need')) {
+      const match = result.reason.match(/need \d+ (\w+)/);
+      if (match) remediation = `Gather ${match[1]} at ${getResourceLocation(match[1])}.`;
+    }
+    return { ...base, success: false, description: `Tried to ${recipe.name} but ${result.reason}.`, reason: result.reason, remediation, energySpent: result.energySpent, durationMinutes: result.durationMinutes } as ActionOutcome;
   }
 
   const outputNames = result.itemsProduced.map(i => `${i.qty} ${RESOURCES[i.resource]?.name || i.resource}`).join(', ');
@@ -576,7 +629,7 @@ function executeBuild(intent: ParsedIntent, agent: AgentState, world: WorldState
   if (existingProject || /continue|work on/i.test(intent.raw)) {
     const [projectId, project] = existingProject || [null, null];
     if (!project) {
-      return { ...base, success: false, description: 'No building project to continue here.', reason: 'no active project', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+      return { ...base, success: false, description: 'No building project to continue here.', reason: 'no active project', remediation: 'Start a new build project. Check building skill level and available materials.', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
     }
 
     const buildDef = BUILDINGS[project.buildingDefId];
@@ -586,7 +639,7 @@ function executeBuild(intent: ParsedIntent, agent: AgentState, world: WorldState
 
     const skillLevel = agent.skills['building']?.level ?? 0;
     if (agent.energy < buildDef.energyPerSession) {
-      return { ...base, success: false, description: `Too tired to work on the ${buildDef.name}. Need to rest.`, reason: 'not enough energy', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+      return { ...base, success: false, description: `Too tired to work on the ${buildDef.name}. Need to rest.`, reason: 'not enough energy', remediation: 'Rest or sleep to recover energy first.', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
     }
 
     const newSession = project.sessionsComplete + 1;
@@ -608,29 +661,29 @@ function executeBuild(intent: ParsedIntent, agent: AgentState, world: WorldState
   const buildDef = intent.building ? BUILDINGS[intent.building] || findBuilding(intent.building) : undefined;
   if (!buildDef) {
     const available = getBuildableStructures(agent.skills['building']?.level ?? 0);
-    return { ...base, success: false, description: `Don't know how to build that. I could try: ${available.map(b => b.name).join(', ') || 'nothing (need building skill)'}.`, reason: 'unknown building', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `Don't know how to build that. I could try: ${available.map(b => b.name).join(', ') || 'nothing (need building skill)'}.`, reason: 'unknown building', remediation: `Check your building skill level. Available: ${available.map(b => b.name).join(', ') || 'none yet — practice building first'}.`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   const skillLevel = agent.skills['building']?.level ?? 0;
   if (skillLevel < buildDef.minBuildingSkill) {
-    return { ...base, success: false, description: `Need building level ${buildDef.minBuildingSkill} to build a ${buildDef.name}. I'm at level ${skillLevel}.`, reason: 'skill too low', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `Need building level ${buildDef.minBuildingSkill} to build a ${buildDef.name}. I'm at level ${skillLevel}.`, reason: 'skill too low', remediation: `Practice building simpler structures, or find someone with building level ${buildDef.minBuildingSkill}+ to teach you.`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   // Check tool
   if (buildDef.toolRequired !== 'none' && !agent.inventory.some(i => i.resource === buildDef.toolRequired)) {
-    return { ...base, success: false, description: `Need a ${buildDef.toolRequired} to build a ${buildDef.name}.`, reason: `missing ${buildDef.toolRequired}`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `Need a ${buildDef.toolRequired} to build a ${buildDef.name}.`, reason: `missing ${buildDef.toolRequired}`, remediation: `Craft a ${buildDef.toolRequired} at the workshop (wood + stone + crafting skill).`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   // Check materials
   for (const mat of buildDef.materials) {
     const have = agent.inventory.find(i => i.resource === mat.resource);
     if (!have || have.qty < mat.qty) {
-      return { ...base, success: false, description: `Need ${mat.qty} ${mat.resource} to start building a ${buildDef.name}. Have ${have?.qty ?? 0}.`, reason: `need ${mat.qty} ${mat.resource}`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+      return { ...base, success: false, description: `Need ${mat.qty} ${mat.resource} to start building a ${buildDef.name}. Have ${have?.qty ?? 0}.`, reason: `need ${mat.qty} ${mat.resource}`, remediation: `Gather ${mat.resource} at ${getResourceLocation(mat.resource)}.`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
     }
   }
 
   if (agent.energy < buildDef.energyPerSession) {
-    return { ...base, success: false, description: `Too tired to start building. Need to rest first.`, reason: 'not enough energy', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `Too tired to start building. Need to rest first.`, reason: 'not enough energy', remediation: 'Rest or sleep to recover energy first.', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   const complete = buildDef.sessionsRequired <= 1;
@@ -667,12 +720,12 @@ function executeEat(intent: ParsedIntent, agent: AgentState): ActionOutcome {
   }
 
   if (!food) {
-    return { ...base, success: false, description: 'I have nothing to eat.', reason: 'no food in inventory', hungerChange: 0 } as ActionOutcome;
+    return { ...base, success: false, description: 'I have nothing to eat.', reason: 'no food in inventory', remediation: 'Gather food at the farm, garden, lake, or forest. Or trade with someone who has food.', hungerChange: 0 } as ActionOutcome;
   }
 
   const resDef = RESOURCES[food.resource];
   if (!resDef) {
-    return { ...base, success: false, description: `I don't know how to eat ${food.resource}.`, reason: 'unknown food', hungerChange: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `I don't know how to eat ${food.resource}.`, reason: 'unknown food', remediation: 'Try eating something else from your inventory.', hungerChange: 0 } as ActionOutcome;
   }
 
   return {
@@ -690,7 +743,7 @@ function executeUseMedicine(agent: AgentState): ActionOutcome {
 
   const med = agent.inventory.find(i => RESOURCES[i.resource]?.type === 'medicine');
   if (!med) {
-    return { ...base, success: false, description: 'I have no medicine.', reason: 'no medicine', healthChange: 0 } as ActionOutcome;
+    return { ...base, success: false, description: 'I have no medicine.', reason: 'no medicine', remediation: 'Craft a poultice at the garden (1 herb) or medicine at the hospital (3 herbs + mortar). Gather herbs at the garden.', healthChange: 0 } as ActionOutcome;
   }
 
   const resDef = RESOURCES[med.resource]!;
@@ -724,7 +777,7 @@ function executeGive(intent: ParsedIntent, agent: AgentState, world: WorldState)
 
   const nearby = agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase()));
   if (!nearby) {
-    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby' } as ActionOutcome;
+    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', remediation: `Find ${intent.targetAgent} first — check around the village.` } as ActionOutcome;
   }
 
   const resource = intent.resource;
@@ -735,7 +788,7 @@ function executeGive(intent: ParsedIntent, agent: AgentState, world: WorldState)
 
   const have = agent.inventory.find(i => i.resource === resource);
   if (!have || have.qty < qty) {
-    return { ...base, success: false, description: `I don't have ${qty} ${resource}.`, reason: `insufficient ${resource}` } as ActionOutcome;
+    return { ...base, success: false, description: `I don't have ${qty} ${resource}.`, reason: `insufficient ${resource}`, remediation: `Gather more ${resource} at ${getResourceLocation(resource)}.` } as ActionOutcome;
   }
 
   return {
@@ -755,14 +808,14 @@ function executeTradeOffer(intent: ParsedIntent, agent: AgentState, world: World
 
   const nearby = agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase()));
   if (!nearby) {
-    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby to trade with.`, reason: 'target not nearby' } as ActionOutcome;
+    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby to trade with.`, reason: 'target not nearby', remediation: `Find ${intent.targetAgent} first.` } as ActionOutcome;
   }
 
   // Check I have what I'm offering
   for (const item of intent.offerItems) {
     const have = agent.inventory.find(i => i.resource === item.resource);
     if (!have || have.qty < item.qty) {
-      return { ...base, success: false, description: `I don't have ${item.qty} ${item.resource} to offer.`, reason: `insufficient ${item.resource}` } as ActionOutcome;
+      return { ...base, success: false, description: `I don't have ${item.qty} ${item.resource} to offer.`, reason: `insufficient ${item.resource}`, remediation: `Gather more ${item.resource} at ${getResourceLocation(item.resource)}.` } as ActionOutcome;
     }
   }
 
@@ -842,7 +895,7 @@ function executeTeach(intent: ParsedIntent, agent: AgentState, world: WorldState
 
   const nearby = agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase()));
   if (!nearby) {
-    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', remediation: `Find ${intent.targetAgent} first.`, durationMinutes: 0 } as ActionOutcome;
   }
 
   const teacherLevel = agent.skills[intent.skill]?.level ?? 0;
@@ -850,7 +903,7 @@ function executeTeach(intent: ParsedIntent, agent: AgentState, world: WorldState
   const result = resolveTeach(intent.skill, teacherLevel, 0);
 
   if (!result.success) {
-    return { ...base, success: false, description: `Can't teach ${intent.skill}: ${result.reason}`, reason: result.reason, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `Can't teach ${intent.skill}: ${result.reason}`, reason: result.reason, remediation: result.reason?.includes('teacher') ? `Practice ${intent.skill} more before trying to teach it.` : 'They may already know this skill.', durationMinutes: 0 } as ActionOutcome;
   }
 
   return {
@@ -891,17 +944,17 @@ function executeRepair(intent: ParsedIntent, agent: AgentState, world: WorldStat
   const base: Partial<ActionOutcome> = { type: 'repair', hungerChange: 0, healthChange: 0 };
 
   if (!intent.building) {
-    return { ...base, success: false, description: 'Repair what?', reason: 'no target', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: 'Repair what?', reason: 'no target', remediation: 'Specify what building or structure to repair.', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   // Check for hammer
   const hasHammer = agent.inventory.some(i => i.resource === 'hammer');
   if (!hasHammer) {
-    return { ...base, success: false, description: 'Need a hammer to repair.', reason: 'missing hammer', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: 'Need a hammer to repair.', reason: 'missing hammer', remediation: 'Craft a hammer at the workshop (wood + stone, crafting level 2).', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   if (agent.energy < 15) {
-    return { ...base, success: false, description: 'Too tired to repair anything.', reason: 'not enough energy', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    return { ...base, success: false, description: 'Too tired to repair anything.', reason: 'not enough energy', remediation: 'Rest or sleep to recover energy first.', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   return {
@@ -923,7 +976,7 @@ function executeSteal(intent: ParsedIntent, agent: AgentState, world: WorldState
 
   const nearby = agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase()));
   if (!nearby) {
-    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', energySpent: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', remediation: `Find ${intent.targetAgent} first — check around the village.`, energySpent: 0 } as ActionOutcome;
   }
 
   // Steal has a chance of failure based on no skill system yet — flat 40% success
@@ -934,6 +987,7 @@ function executeSteal(intent: ParsedIntent, agent: AgentState, world: WorldState
       ...base, success: false,
       description: `Tried to steal from ${nearby.name} but got caught!`,
       reason: 'caught',
+      remediation: 'You were spotted. Witnesses may remember this. Lay low for a while.',
       energySpent: 5,
     } as ActionOutcome;
   }
@@ -941,7 +995,7 @@ function executeSteal(intent: ParsedIntent, agent: AgentState, world: WorldState
   // Pick a random item from target's inventory
   const targetInventory = world.getAgentInventory(nearby.id);
   if (targetInventory.length === 0) {
-    return { ...base, success: false, description: `${nearby.name} has nothing to steal.`, reason: 'target has nothing', energySpent: 3 } as ActionOutcome;
+    return { ...base, success: false, description: `${nearby.name} has nothing to steal.`, reason: 'target has nothing', remediation: 'Try someone else, or wait until they have items.', energySpent: 3 } as ActionOutcome;
   }
 
   const stolen = intent.resource
@@ -949,7 +1003,7 @@ function executeSteal(intent: ParsedIntent, agent: AgentState, world: WorldState
     : targetInventory[Math.floor(Math.random() * targetInventory.length)];
 
   if (!stolen) {
-    return { ...base, success: false, description: `${nearby.name} doesn't have that.`, reason: 'item not found', energySpent: 3 } as ActionOutcome;
+    return { ...base, success: false, description: `${nearby.name} doesn't have that.`, reason: 'item not found', remediation: `${nearby.name} doesn't have that. Try stealing something else.`, energySpent: 3 } as ActionOutcome;
   }
 
   const qty = Math.min(intent.quantity || 1, stolen.qty);
@@ -970,7 +1024,7 @@ function executeDestroy(intent: ParsedIntent, agent: AgentState, world: WorldSta
   }
 
   if (agent.energy < 10) {
-    return { ...base, success: false, description: 'Too tired.', reason: 'not enough energy', energySpent: 0 } as ActionOutcome;
+    return { ...base, success: false, description: 'Too tired.', reason: 'not enough energy', remediation: 'Rest or sleep to recover energy first.', energySpent: 0 } as ActionOutcome;
   }
 
   // Check if it's an item in own inventory
@@ -1002,11 +1056,11 @@ function executeFight(intent: ParsedIntent, agent: AgentState, world: WorldState
 
   const nearby = agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase()));
   if (!nearby) {
-    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', energySpent: 0, healthChange: 0 } as ActionOutcome;
+    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', remediation: `Find ${intent.targetAgent} first.`, energySpent: 0, healthChange: 0 } as ActionOutcome;
   }
 
   if (agent.energy < 10) {
-    return { ...base, success: false, description: 'Too exhausted to fight.', reason: 'not enough energy', energySpent: 0, healthChange: 0 } as ActionOutcome;
+    return { ...base, success: false, description: 'Too exhausted to fight.', reason: 'not enough energy', remediation: 'Rest or sleep to recover energy first.', energySpent: 0, healthChange: 0 } as ActionOutcome;
   }
 
   // Both sides take damage, attacker has slight advantage
@@ -1054,6 +1108,16 @@ function executeSocialAct(intent: ParsedIntent, agent: AgentState): ActionOutcom
   };
 }
 
+
+// --- Resource location helper ---
+
+function getResourceLocation(resource: string): string {
+  const sources = GATHERING.filter(g => g.yields.some(y => y.resource === resource));
+  if (sources.length > 0) {
+    return [...new Set(sources.map(s => s.location))].map(l => `the ${l}`).join(' or ');
+  }
+  return 'a gathering location, or trade with someone';
+}
 
 // --- Fuzzy matchers ---
 
