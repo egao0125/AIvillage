@@ -266,9 +266,11 @@ If nothing notable was exchanged, return []`;
     const { config } = this.agent;
     const parts: string[] = [];
 
-    // Soul + backstory
-    const soulText = config.soul || `${config.backstory}\nGoal: ${config.goal}`;
-    parts.push(`You are ${config.name}, age ${config.age}.\n\n${soulText}`);
+    // Soul + backstory (truncated to prevent fictional character leakage)
+    const soulRaw = config.soul || config.backstory || '';
+    const soulText = soulRaw.length > 200 ? soulRaw.slice(0, 200) + '...' : soulRaw;
+    parts.push(`You are ${config.name}, age ${config.age}. ${soulText}`);
+    if (config.goal) parts.push(`Your goal: ${config.goal}`);
 
     // Deep identity
     const identityParts: string[] = [];
@@ -328,6 +330,15 @@ If nothing notable was exchanged, return []`;
       }
     }
 
+    // Known people constraint — prevents LLM from inventing fictional characters
+    const knownPeople = (this.agent.mentalModels || []).map(m => m.targetId);
+    if (knownPeople.length > 0) {
+      parts.push(`\nPeople you know in this village: ${knownPeople.join(', ')}`);
+    } else {
+      parts.push(`\nYou haven't met anyone in this village yet.`);
+    }
+    parts.push('Only reference people from this list or people you can physically see nearby. Do not invent or imagine people who are not here.');
+
     return parts.join('\n');
   }
 
@@ -344,6 +355,7 @@ If nothing notable was exchanged, return []`;
 ${this.buildIdentityBlock()}
 
 This is your inner voice. Think honestly. You can also act.
+IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events. If you're alone, you're alone.
 
 Think about your situation. 1-3 sentences, first person, private and honest.
 
@@ -748,7 +760,7 @@ Be specific. "Bread needs 2 wheat at the bakery" not "I can make food." "Mei tra
 
 Remove anything that's no longer true or no longer matters. Add what you learned today. This is what you'll read tomorrow morning before making decisions.
 
-Max 450 words. First person. No section headers. No lists of places — that's tracked separately.
+Max 500 words. First person. No section headers. No lists of places — that's tracked separately.
 
 Return ONLY the new MY EXPERIENCE text.`;
 
@@ -756,7 +768,7 @@ Return ONLY the new MY EXPERIENCE text.`;
 
     // Sanity check: reject empty or suspiciously long responses
     const trimmed = response.trim();
-    if (trimmed.length < 20 || trimmed.length > 2700) {
+    if (trimmed.length < 20 || trimmed.length > 3500) {
       console.warn(`[WorldView] ${this.agent.config.name} rejected MY EXPERIENCE update (${trimmed.length} chars)`);
       return undefined;
     }
