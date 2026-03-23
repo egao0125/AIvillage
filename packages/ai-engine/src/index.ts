@@ -62,7 +62,7 @@ Talk like a real person. You change through experience.`;
 export interface WorldViewParts {
   knownPlaces: Record<string, string>;  // areaKey → description
   myExperience: string;
-  knowsPlaza: boolean;
+  knowsPlaza?: boolean; // deprecated — kept for backwards compat with persisted data
 }
 
 export class AgentCognition {
@@ -70,7 +70,7 @@ export class AgentCognition {
   public knownPlaces: Map<string, string> = new Map();
   /** Fully rewritten each night by the LLM */
   public myExperience: string = 'I just arrived. I don\'t know where anything is yet.';
-  /** Whether the agent knows about the plaza/village board */
+  /** @deprecated No longer used — board discovery is organic */
   public knowsPlaza: boolean = false;
   /** Agent ID → name mapping for resolving mental model targets */
   public nameMap: Map<string, string> = new Map();
@@ -108,7 +108,7 @@ ${this.myExperience}`;
     if (parts) {
       this.knownPlaces = new Map(Object.entries(parts.knownPlaces));
       this.myExperience = parts.myExperience;
-      this.knowsPlaza = parts.knowsPlaza;
+      this.knowsPlaza = parts.knowsPlaza ?? false;
     }
   }
 
@@ -436,10 +436,10 @@ An agent wants to do something. Break it down into primitive operations.
 
 PRIMITIVES:
 - create: add something to the world. Specify "type" and "data".
-  types: board_post, item, artifact, building, institution, secret, election
+  types: board_post, item, artifact, building
 - remove: delete/discard something. Specify "type" and which one. Use to drop unwanted items from inventory.
 - modify: change a value. Specify "target" (agent name or "self"), "field", and "value" or "delta".
-  fields: gold, reputation, skill, membership, property, vote
+  fields: gold, skill
 - transfer: move something between agents. Specify "what", "from", "to", and details.
 - interact: talk to someone. Specify "target" (name or "anyone nearby").
 - observe: notice/learn something. Specify "observation".
@@ -450,10 +450,9 @@ CONSTRAINTS:
 - Check nearby details — the recipient must actually be nearby.
 
 Compose these freely. Return JSON array ONLY.
-Example — agent gives fish to Mei on credit:
+Example — agent gives fish to Mei:
 [
   {"op":"transfer","what":"item","item":"fish","from":"self","to":"Mei"},
-  {"op":"create","type":"secret","data":{"content":"Mei owes me for the fish","about":"Mei"}},
   {"op":"observe","observation":"Gave fish to Mei, she'll pay me back later"}
 ]`;
 
@@ -540,12 +539,7 @@ ${memoryContext || 'No recent memories yet.'}
 
 IMPORTANT: Only plan interactions with real people listed above. There are no shopkeepers, bartenders, or unnamed villagers.
 
-What do you want to do today? Write 3-5 intentions. Each intention is a physical action — something your body does in a specific place. Not something you think about, feel, or discuss.
-
-Good: "gather wood at the forest", "talk to Mei at the plaza", "craft bread at the bakery", "build shelter at the park"
-Bad: "reflect on my relationship with trust", "figure out what I need", "consider my place in the village"
-
-Be practical. Be boring if necessary. Survival first, meaning later.
+What do you want to do today? Write 1-5 intentions. Each intention is a physical action — something your body does in a specific place.
 
 Return a JSON array of strings ONLY.`;
 
@@ -609,27 +603,7 @@ Return a JSON array of strings ONLY.`;
       return `Find where ${resource} grows — explore new areas or ask someone`;
     });
 
-    // Filter vague/reflective intentions — replace with practical defaults
-    const vaguePatterns = [
-      /\breflect\b/i,
-      /\bconsider\b/i,
-      /\bfigure out\b/i,
-      /\bthink about\b/i,
-      /\bunderstand why\b/i,
-    ];
-    const practicalDefaults = [
-      'gather wood at the forest',
-      'gather food at the farm',
-      'fish at the lake',
-      'forage mushrooms in the forest',
-      'explore the village',
-    ];
-    return validated.map(intention => {
-      if (vaguePatterns.some(p => p.test(intention))) {
-        return practicalDefaults[Math.floor(Math.random() * practicalDefaults.length)];
-      }
-      return intention;
-    });
+    return validated;
   }
 
   /**
@@ -643,10 +617,10 @@ Return a JSON array of strings ONLY.`;
     const otherDescriptions = otherAgents.map(a => {
       return a.config.soul ? ` What you know about ${a.config.name}: age ${a.config.age}.` : '';
     }).join('');
-    const boardSection = boardContext ? `\n\nVILLAGE BOARD (public posts everyone can see):\n${boardContext}` : '';
+    const boardSection = boardContext ? `\n\nNOTICES ON THE BOARD:\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
     const artifactSection = artifactContext ? `\n\nVILLAGE MEDIA (recent publications):\n${artifactContext}` : '';
-    const secretsSection = secretsContext ? `\n\nSECRETS YOU KNOW (share strategically, or use as leverage):\n${secretsContext}` : '';
+    const secretsSection = secretsContext ? `\n\nPRIVATE MEMORIES:\n${secretsContext}` : '';
     const tradeSection = tradeContext
       ? `\n\nPENDING TRADES:\n${tradeContext}`
       : '';

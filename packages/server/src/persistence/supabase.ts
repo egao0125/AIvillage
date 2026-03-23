@@ -13,7 +13,7 @@ export interface ControllerData {
   sleepHour: number;
   homeArea: string;
   worldView?: string;
-  worldViewParts?: { knownPlaces: Record<string, string>; myExperience: string; knowsPlaza: boolean };
+  worldViewParts?: { knownPlaces: Record<string, string>; myExperience: string; knowsPlaza?: boolean };
   apiKey?: string;
   model?: string;
 }

@@ -181,9 +181,6 @@ export class AgentController {
       }
 
       case 'idle': {
-        // Check survival override before normal idle behavior
-        if (this.shouldOverridePlanForSurvival()) break;
-
         this.idleTimer++;
         if (this.idleTimer >= 30) {
           this.idleTimer = 0;
@@ -249,24 +246,20 @@ export class AgentController {
 
     try {
       this.world.updateAgentState(this.agent.id, 'active', '');
-      let boardContext = this.world.getBoardSummary();
 
-      // Add public artifacts to planning context
-      const publicArtifacts = this.world.getPublicArtifacts().slice(-10);
-      if (publicArtifacts.length > 0) {
-        const artifactText = publicArtifacts.map(a =>
-          `- [${a.type.toUpperCase()}] "${a.title}" by ${a.creatorName}: ${a.content.slice(0, 100)}`
-        ).join('\n');
-        boardContext += `\n\nVILLAGE MEDIA:\n${artifactText}`;
-      }
+      // Only show board context if agent has discovered the plaza
+      let boardContext: string | undefined;
+      if (this.cognition.knownPlaces.has('plaza')) {
+        boardContext = this.world.getBoardSummary();
 
-      const activeElections = Array.from(this.world.elections.values()).filter(e => e.active);
-      if (activeElections.length > 0) {
-        const electionsText = activeElections.map(e => {
-          const candidateNames = e.candidates.map(cid => this.world.getAgent(cid)?.config.name ?? cid).join(', ');
-          return `- Election for ${e.position}: candidates [${candidateNames}], ends day ${e.endDay}`;
-        }).join('\n');
-        boardContext += `\n\nACTIVE ELECTIONS:\n${electionsText}`;
+        // Add public artifacts to planning context
+        const publicArtifacts = this.world.getPublicArtifacts().slice(-10);
+        if (publicArtifacts.length > 0) {
+          const artifactText = publicArtifacts.map(a =>
+            `- [${a.type.toUpperCase()}] "${a.title}" by ${a.creatorName}: ${a.content.slice(0, 100)}`
+          ).join('\n');
+          boardContext += `\n\nVILLAGE MEDIA:\n${artifactText}`;
+        }
       }
 
       const institutionContext = this.buildInstitutionContext();
@@ -279,11 +272,6 @@ export class AgentController {
           `- ${b.name} (${b.type}) at ${b.areaId}, built by ${this.world.getAgent(b.builtBy)?.config.name ?? 'unknown'}`
         ).join('\n');
       }
-      const hasMaterials = this.agent.inventory.some(i => i.type === 'material');
-      if (hasMaterials) {
-        buildingContext += '\nYou have materials — you can BUILD structures or CRAFT items at the workshop.';
-      }
-
       // Season context — physical observation only, no warnings
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
       const currentSeason = SEASON_ORDER[seasonIdx];
@@ -312,8 +300,6 @@ export class AgentController {
   }
 
   followNextIntention(): void {
-    if (this.shouldOverridePlanForSurvival()) return;
-
     if (this.currentIntentionIndex >= this.intentions.length) {
       this.state = 'idle';
       this.world.updateAgentState(this.agent.id, 'idle', '');
@@ -697,7 +683,7 @@ export class AgentController {
       const time = this.world.time;
       this.world.updateAgentState(this.agent.id, 'active', '');
 
-      const boardContext = this.world.getBoardSummary();
+      const boardContext = this.cognition.knownPlaces.has('plaza') ? this.world.getBoardSummary() : undefined;
       const institutionContext = this.buildInstitutionContext();
       const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, institutionContext || undefined);
       this.handleApiSuccess();
@@ -1035,21 +1021,6 @@ export class AgentController {
     return areas[Math.abs(hash) % areas.length];
   }
 
-  private nearestFoodLocation(): string {
-    const pos = this.agent.position;
-    let nearest = AgentController.FOOD_LOCATIONS[0];
-    let minDist = Infinity;
-    for (const loc of AgentController.FOOD_LOCATIONS) {
-      const entrance = getAreaEntrance(loc);
-      const dist = Math.abs(pos.x - entrance.x) + Math.abs(pos.y - entrance.y);
-      if (dist < minDist) {
-        minDist = dist;
-        nearest = loc;
-      }
-    }
-    return nearest;
-  }
-
   private shouldWake(time: GameTime): boolean {
     return time.hour === this.wakeHour && time.minute === 0;
   }
@@ -1061,172 +1032,6 @@ export class AgentController {
       return time.hour >= this.sleepHour || time.hour < this.wakeHour;
     }
     return time.hour >= this.sleepHour;
-  }
-
-  // --- Drive-Based Action Filtering ---
-
-  private survivalOverrideActive: boolean = false;
-  private static readonly FOOD_LOCATIONS = ['farm', 'garden', 'lake', 'forest'];
-
-  private isFoodActivity(activity: string): boolean {
-    const lower = activity.toLowerCase();
-    return lower.includes('eat') || lower.includes('food') || lower.includes('meal')
-      || lower.includes('lunch') || lower.includes('dinner') || lower.includes('breakfast')
-      || lower.includes('cook') || lower.includes('gather') || lower.includes('coffee')
-      || lower.includes('buy bread') || lower.includes('stew') || lower.includes('forage')
-      || lower.includes('harvest') || lower.includes('fish') || lower.includes('mushroom')
-      || lower.includes('wheat') || lower.includes('herb') || lower.includes('crop')
-      || lower.includes('vegetable');
-  }
-
-  private async forceFoodPlan(): Promise<void> {
-    this.survivalOverrideActive = true;
-    this.planningInProgress = true;
-    this.state = 'planning';
-    this.world.updateAgentState(this.agent.id, 'active', '');
-
-    // Step 1: Eat from inventory immediately if we have food — no walking needed
-    const foodItem = this.agent.inventory.find(i => i.type === 'food');
-    if (foodItem) {
-      this.world.removeItem(foodItem.id);
-      if (this.agent.vitals) {
-        this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 30);
-        this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
-      }
-      this.broadcaster.agentAction(this.agent.id, `ate ${foodItem.name}`, '🍽️');
-      this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
-      console.log(`[Agent] ${this.agent.config.name} SURVIVAL: ate ${foodItem.name} from inventory (hunger: ${this.agent.vitals?.hunger})`);
-      this.survivalOverrideActive = false;
-      this.planningInProgress = false;
-      this.state = 'idle';
-      return;
-    }
-
-    // Step 2: No food in inventory — go gather
-    console.log(`[Agent] ${this.agent.config.name} SURVIVAL OVERRIDE: seeking food`);
-
-    try {
-      // LLM replan (skip if API exhausted)
-      if (!this.apiExhausted) {
-        try {
-          const urgencyContext = `URGENT: You are starving (hunger: ${this.agent.vitals?.hunger}). You MUST find food immediately or your health will drop. Focus on: gathering food from farm/garden/lake/forest, trading for food, or asking someone who has food.`;
-          const plan = await this.cognition.plan(
-            { day: this.world.time.day, hour: this.world.time.hour },
-            this.world.getBoardSummary(),
-            urgencyContext,
-          );
-          this.handleApiSuccess();
-          // Validate LLM plan actually targets a food location — reject vague plans
-          const firstIntention = plan[0] || '';
-          const resolvedArea = this.resolveLocation(firstIntention);
-          if (AgentController.FOOD_LOCATIONS.includes(resolvedArea)) {
-            this.intentions = plan;
-            this.currentIntentionIndex = 0;
-            this.followNextIntention();
-            return;
-          }
-          // LLM plan doesn't go to a food location — fall through to mechanical
-          console.log(`[Agent] ${this.agent.config.name} LLM food plan resolved to "${resolvedArea}" — using mechanical fallback`);
-        } catch (err) {
-          this.handleApiFailure(err);
-        }
-      }
-
-      // Mechanical fallback — go to nearest gathering location (no LLM needed)
-      const target = this.nearestFoodLocation();
-      this.intentions = [`gather food at ${target}`];
-      this.currentIntentionIndex = 0;
-      this.followNextIntention();
-    } finally {
-      this.survivalOverrideActive = false;
-      this.planningInProgress = false;
-    }
-  }
-
-  private async forceHospitalPlan(): Promise<void> {
-    console.log(`[Agent] ${this.agent.config.name} HEALTH CRISIS: heading to hospital`);
-    this.survivalOverrideActive = true;
-    this.planningInProgress = true;
-    this.state = 'planning';
-    this.world.updateAgentState(this.agent.id, 'active', '');
-
-    try {
-      // LLM replan (skip if API exhausted)
-      if (!this.apiExhausted) {
-        try {
-          const urgencyContext = `URGENT: Your health is critically low (health: ${this.agent.vitals?.health}). You MUST seek medical treatment immediately. Go to the hospital, use medicine/herbs if you have them, or ask someone for help.`;
-          const plan = await this.cognition.plan(
-            { day: this.world.time.day, hour: this.world.time.hour },
-            this.world.getBoardSummary(),
-            urgencyContext,
-          );
-          this.handleApiSuccess();
-          this.intentions = plan;
-          this.currentIntentionIndex = 0;
-          this.followNextIntention();
-          return;
-        } catch (err) {
-          this.handleApiFailure(err);
-        }
-      }
-
-      // Mechanical fallback — go to hospital (no LLM needed)
-      this.intentions = ['use medicine at hospital'];
-      this.currentIntentionIndex = 0;
-      this.followNextIntention();
-    } finally {
-      this.survivalOverrideActive = false;
-      this.planningInProgress = false;
-    }
-  }
-
-  /**
-   * Check if drives should override the current plan for survival.
-   * Returns true if an override was triggered.
-   */
-  private shouldOverridePlanForSurvival(): boolean {
-    if (this.survivalOverrideActive) return false; // prevent recursion
-    const d = this.agent.drives;
-    const v = this.agent.vitals;
-    if (!d || !v) return false;
-
-    // Already executing a food plan — let it finish instead of replanning every tick
-    if (this.state === 'moving' || this.state === 'performing') {
-      const currentActivity = this.pendingActivity?.activity ?? this.intentions[this.currentIntentionIndex - 1] ?? '';
-      if (this.isFoodActivity(currentActivity)) return false;
-    }
-
-    // HUNGER ALWAYS CHECKS FIRST — starvation is the #1 killer.
-    // Hospital can't fix hunger. Don't send a starving agent to a cardiologist.
-
-    // Emergency hunger: force food-seeking (actual starvation risk only)
-    if (v.hunger >= 95) {
-      void this.forceFoodPlan();
-      return true;
-    }
-
-    // Urgent hunger: insert food if next plan item isn't food-related
-    if (v.hunger >= 90) {
-      if (this.currentIntentionIndex < this.intentions.length) {
-        const nextItem = this.intentions[this.currentIntentionIndex];
-        if (!this.isFoodActivity(nextItem)) {
-          void this.forceFoodPlan();
-          return true;
-        }
-      } else {
-        void this.forceFoodPlan();
-        return true;
-      }
-    }
-
-    // Health crisis: hospital ONLY if not starving (hunger < 75).
-    // If they're starving, food fixes health. Hospital without medicine doesn't.
-    if (v.health <= 40 && v.hunger < 75) {
-      void this.forceHospitalPlan();
-      return true;
-    }
-
-    return false;
   }
 
   /**

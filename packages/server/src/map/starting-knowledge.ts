@@ -46,7 +46,7 @@ export const AREA_DESCRIPTIONS: Record<string, string> = {
   forest_south: 'Southern Woods — dense cedar trees, remote.',
   lake:         'Lake — open water with fish, clay on the banks.',
   park:         'Park — open grass and benches.',
-  plaza:        'Plaza — a stone fountain, open space, and a wooden board where anyone can post a message for the whole village to read.',
+  plaza:        'Plaza — a stone fountain, open space, and a large wooden board.',
 };
 
 /** Human-readable area name for the MY EXPERIENCE section. */
