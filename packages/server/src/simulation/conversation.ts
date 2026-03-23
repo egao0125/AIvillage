@@ -1,5 +1,5 @@
 import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
-import { type AgentCognition, parseIntent, executeAction, RESOURCES, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
+import { type AgentCognition, parseIntent, executeAction, RESOURCES, BUILDINGS, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
 
@@ -465,7 +465,8 @@ export class ConversationManager {
   private buildSkillsForResolver(actor: Agent): Record<string, { level: number; xp: number }> {
     const skills: Record<string, { level: number; xp: number }> = {};
     for (const s of actor.skills) {
-      skills[s.name.toLowerCase()] = { level: s.level, xp: 0 };
+      if (!s.name) continue;
+      skills[s.name.toLowerCase()] = { level: s.level, xp: s.xp ?? 0 };
     }
     return skills;
   }
@@ -554,10 +555,7 @@ export class ConversationManager {
 
     // --- Skill XP ---
     if (outcome.skillXpGained) {
-      this.world.addSkill(actorId, {
-        name: outcome.skillXpGained.skill,
-        level: 1,
-      });
+      this.world.addSkillXP(actorId, outcome.skillXpGained.skill, outcome.skillXpGained.xp);
       const updatedSkill = actor.skills.find(s => s.name === outcome.skillXpGained!.skill);
       if (updatedSkill) this.broadcaster.agentSkill(actorId, updatedSkill);
     }
@@ -640,8 +638,28 @@ export class ConversationManager {
         if (project) {
           project.sessionsComplete = bp.session;
           if (bp.complete) {
+            const buildDef = BUILDINGS[project.buildingDefId];
             this.world.activeBuildProjects.delete(bp.buildingId);
-            this.broadcaster.agentAction(actorId, `finished building!`, '🏗️');
+            if (buildDef) {
+              const bArea = this.world.getAreaAt(actor.position);
+              const building: Building = {
+                id: bp.buildingId,
+                name: buildDef.name,
+                type: buildDef.category ?? 'structure',
+                description: buildDef.description,
+                ownerId: actorId,
+                areaId: bArea?.id ?? 'unknown',
+                durability: buildDef.baseDurability ?? 100,
+                maxDurability: buildDef.baseDurability ?? 100,
+                effects: buildDef.effects?.map((e: any) => e.type) ?? [],
+                builtBy: actorName,
+                builtAt: this.world.time.totalMinutes,
+                materials: buildDef.materials.map((m: any) => `${m.qty} ${m.resource}`),
+                defId: project.buildingDefId,
+              };
+              this.world.addBuilding(building);
+            }
+            this.broadcaster.agentAction(actorId, `finished building ${buildDef?.name ?? 'structure'}!`, '🏗️');
           }
         }
       }
@@ -657,6 +675,7 @@ export class ConversationManager {
           this.world.addSkill(target.id, {
             name: outcome.teachResult.skill,
             level: outcome.teachResult.studentNewLevel,
+            xp: 0,
             learnedFrom: actorId,
           });
           const updatedSkill = target.skills.find(s => s.name === outcome.teachResult!.skill);
@@ -767,11 +786,12 @@ export class ConversationManager {
     void cognition.addMemory({
       id: crypto.randomUUID(),
       agentId: actorId,
-      type: 'observation',
+      type: 'action_outcome',
       content: memoryLines.join('\n'),
-      importance: outcome.success ? 6 : 7,
+      importance: outcome.success ? 4 : 6,
       timestamp: Date.now(),
       relatedAgentIds: [],
+      actionSuccess: outcome.success,
     });
   }
 
@@ -948,7 +968,7 @@ export class ConversationManager {
           }
         }
         else if (field === 'skill') {
-          this.world.addSkill(target.id, { name: op.skill || op.value, level: op.level || 1, learnedFrom: actorId });
+          this.world.addSkill(target.id, { name: op.skill || op.value, level: op.level || 1, xp: 0, learnedFrom: actorId });
           const updatedSkill = target.skills.find(s => s.name === (op.skill || op.value));
           if (updatedSkill) this.broadcaster.agentSkill(target.id, updatedSkill);
         }

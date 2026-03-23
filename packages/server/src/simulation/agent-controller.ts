@@ -1,5 +1,5 @@
 import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
-import { AgentCognition } from '@ai-village/ai-engine';
+import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
@@ -618,9 +618,55 @@ export class AgentController {
       v.health = Math.min(100, v.health + 0.02);
     }
 
+    // Cold damage + building effects (once per game hour)
+    if (this.world.time.minute === 0) {
+      const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
+      const currentSeason = SEASON_ORDER[seasonIdx];
+      const seasonDef = SEASONS[currentSeason];
+
+      // Get buildings in agent's area
+      const area = this.world.getAreaAt(this.agent.position);
+      const buildings = area ? this.world.getBuildingsAt(area.id) : [];
+
+      // Cold damage — mitigated by shelter
+      if (seasonDef.coldDamagePerHour > 0) {
+        let bestColdProtection = 0;
+        for (const b of buildings) {
+          if (b.defId && BUILDINGS[b.defId]) {
+            const bDef = BUILDINGS[b.defId];
+            const coldEffect = bDef.effects?.find((e: any) => e.type === 'cold_protection');
+            if (coldEffect) {
+              bestColdProtection = Math.max(bestColdProtection, coldEffect.value);
+            }
+          } else if (b.effects.includes('shelter')) {
+            bestColdProtection = Math.max(bestColdProtection, 0.5);
+          }
+        }
+        const coldDamage = seasonDef.coldDamagePerHour * (1 - bestColdProtection);
+        if (coldDamage > 0) {
+          v.health = Math.max(0, v.health - coldDamage);
+        }
+      }
+
+      // Building effects — energy regen, hunger reduction
+      for (const b of buildings) {
+        if (!b.defId || !BUILDINGS[b.defId]) continue;
+        const bDef = BUILDINGS[b.defId];
+        if (!bDef.effects) continue;
+        for (const effect of bDef.effects) {
+          if (effect.type === 'energy_regen') {
+            v.energy = Math.min(100, v.energy + effect.value * 0.1);
+          } else if (effect.type === 'hunger_reduction') {
+            v.hunger = Math.max(0, v.hunger - effect.value * 0.05);
+          }
+        }
+      }
+    }
+
     // Death check — health reaching 0 is fatal
     if (v.health <= 0) {
-      const cause = v.hunger >= 80 ? 'starvation' : 'exhaustion';
+      const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
+      const cause = v.hunger >= 80 ? 'starvation' : v.energy <= 5 ? 'exhaustion' : SEASON_ORDER[seasonIdx] === 'winter' ? 'exposure' : 'exhaustion';
       this.die(cause);
       return;
     }

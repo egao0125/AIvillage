@@ -134,6 +134,7 @@ export interface Item {
   createdBy?: string;
   value: number;
   type: ItemType;
+  createdAt?: number;   // world time (totalMinutes) when created
 }
 
 export interface MaterialSpawn {
@@ -160,6 +161,7 @@ export interface Secret {
 export interface Skill {
   name: string;
   level: number;
+  xp: number;           // accumulated XP within current level
   learnedFrom?: string;
 }
 
@@ -224,7 +226,7 @@ export interface MapObject {
 export interface Memory {
   id: string;
   agentId: string;
-  type: "observation" | "conversation" | "reflection" | "plan" | "emotion" | "thought";
+  type: "observation" | "conversation" | "reflection" | "plan" | "emotion" | "thought" | "action_outcome";
   content: string;
   importance: number; // 1-10
   timestamp: number;
@@ -236,6 +238,7 @@ export interface Memory {
   visibility?: 'private' | 'shared' | 'public';
   emotionalValence?: number; // -1 (painful) to +1 (joyful). High-valence = recalled more.
   isCore?: boolean; // Core identity memories — never pruned, boosted in retrieval
+  actionSuccess?: boolean; // for action_outcome memories
 }
 
 // --- Conversation ---
@@ -353,6 +356,7 @@ export interface Building {
   builtBy: string;
   builtAt: number;
   materials: string[];   // What was used to build it
+  defId?: string;        // maps to BUILDINGS[defId] for effect lookup
 }
 
 // --- Phase 7: Technology ---
