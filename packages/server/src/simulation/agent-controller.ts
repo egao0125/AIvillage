@@ -314,6 +314,7 @@ export class AgentController {
     this.currentIntentionIndex++;
 
     // Check if intention mentions talking to a specific agent
+    let talkTargetAgent: Agent | null = null;
     const talkMatch = intention.match(/(?:talk|speak|meet|find|converse|visit|see)\s+(?:to|with)?\s*(\w+)/i);
     if (talkMatch) {
       const targetName = talkMatch[1];
@@ -321,14 +322,18 @@ export class AgentController {
         if (agent.id !== this.agent.id &&
             agent.config.name.toLowerCase().includes(targetName.toLowerCase())) {
           this.pendingConversationTarget = agent.id;
+          talkTargetAgent = agent;
           break;
         }
       }
     }
 
-    // Infer location from intention text using existing resolveLocation()
+    // Path toward target agent's actual position for talk intentions,
+    // otherwise infer location from intention text
     const areaId = this.resolveLocation(intention);
-    const targetPos = getRandomPositionInArea(areaId);
+    const targetPos = talkTargetAgent
+      ? { ...talkTargetAgent.position }
+      : getRandomPositionInArea(areaId);
 
     console.log(`[Agent] ${this.agent.config.name} → ${intention}`);
 

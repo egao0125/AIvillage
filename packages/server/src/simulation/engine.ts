@@ -720,10 +720,10 @@ export class SimulationEngine {
         if (a1.alive === false || a2.alive === false) continue;
         if (a1.state === 'away' || a2.state === 'away') continue;
 
-        // Check conversation pair cooldown (min 600 ticks between same pair)
+        // Check conversation pair cooldown (1800 ticks ≈ allows ~2 conversations per pair per day)
         const pairKey = [a1.id, a2.id].sort().join(':');
         const lastTick = this.lastConversationPair.get(pairKey);
-        if (lastTick !== undefined && (this.tickCount - lastTick) < 3600) continue;
+        if (lastTick !== undefined && (this.tickCount - lastTick) < 1800) continue;
 
         // Check if both are available (not sleeping, conversing, or API exhausted)
         const c1 = this.controllers.get(a1.id);
@@ -740,10 +740,15 @@ export class SimulationEngine {
           continue;
         }
 
-        // Conversations start from agent initiative (plan intention or think ACTION: approach)
+        // Intentional: one agent specifically planned to talk to the other
         const c1WantsC2 = c1.pendingConversationTarget === a2.id;
         const c2WantsC1 = c2.pendingConversationTarget === a1.id;
-        if (c1WantsC2 || c2WantsC1) {
+
+        // Spontaneous: two available agents near each other — small random chance per tick
+        // In a small village, people standing near each other will naturally talk
+        const spontaneous = !c1WantsC2 && !c2WantsC1 && Math.random() < 0.005;
+
+        if (c1WantsC2 || c2WantsC1 || spontaneous) {
           // Start conversation
           const location = { ...a1.position };
           const convId = this.conversationManager.startConversation(a1.id, a2.id, location);
@@ -756,7 +761,7 @@ export class SimulationEngine {
           c2.enterConversation();
 
           console.log(
-            `[Engine] Proximity conversation started: ${a1.config.name} <-> ${a2.config.name}`,
+            `[Engine] ${spontaneous ? 'Spontaneous' : 'Planned'} conversation: ${a1.config.name} <-> ${a2.config.name}`,
           );
 
           // Only start one conversation per tick
