@@ -647,7 +647,7 @@ RULES:
 - Write a new MY EXPERIENCE that replaces the old one entirely.
 - Include: what you've learned, skills you're developing, people you've met, strategies that work, dangers to avoid.
 - Cut anything no longer relevant. Add new lessons from today.
-- Be practical and concise. First person. 3-6 sentences max.
+- Be practical and concise. First person. Max 400 words.
 - Do NOT include section headers — just write the content.
 - Do NOT list places (that's tracked separately). Focus on experience and knowledge.
 
@@ -657,7 +657,7 @@ Return ONLY the new MY EXPERIENCE text. Nothing else.`;
 
     // Sanity check: reject empty or suspiciously long responses
     const trimmed = response.trim();
-    if (trimmed.length < 20 || trimmed.length > 1500) {
+    if (trimmed.length < 20 || trimmed.length > 2400) {
       console.warn(`[WorldView] ${this.agent.config.name} rejected MY EXPERIENCE update (${trimmed.length} chars)`);
       return undefined;
     }
