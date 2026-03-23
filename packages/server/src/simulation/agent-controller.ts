@@ -463,7 +463,7 @@ export class AgentController {
     if (this.state === 'conversing') {
       this.state = 'idle';
       this.idleTimer = 0;
-      this.conversationCooldown = 120; // ~10 seconds before this agent can talk again
+      this.conversationCooldown = 60; // ~5 seconds before this agent can talk again
       this.world.updateAgentState(this.agent.id, 'idle', '');
 
       // Think after conversation — process what was discussed (immediate, bypasses cooldown)
@@ -492,11 +492,10 @@ export class AgentController {
       return;
     }
 
-    // 60 game-minute cooldown between regular thinks
+    // 60 game-minute cooldown between regular thinks — stay idle if not met
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
     if (ticksSinceLast < 60) {
-      this.followNextIntention();
-      return;
+      return; // Wait for cooldown instead of burning through intentions
     }
 
     this.thinkInProgress = true;
@@ -1063,8 +1062,8 @@ export class AgentController {
 
   private static readonly PUBLIC_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery', 'church', 'hospital', 'school', 'town_hall', 'workshop', 'farm', 'forest'];
 
-  private resolveLocation(location: string): string {
-    const lower = location.toLowerCase().trim();
+  private resolveLocation(intention: string): string {
+    const lower = intention.toLowerCase().trim();
 
     if (lower === 'home' || lower === 'house') {
       return this.nameHash(AgentController.PUBLIC_AREAS);
@@ -1129,11 +1128,26 @@ export class AgentController {
       stalls: 'market',
     };
 
-    for (const [key, areaId] of Object.entries(mapping)) {
+    // Sort by key length descending — prefer "herb garden" over "garden", "town hall" over "bar"
+    const sorted = Object.entries(mapping).sort((a, b) => b[0].length - a[0].length);
+
+    // Extract location from prepositional phrase: "gather herbs at the garden past the plaza" → "garden past the plaza"
+    // Then match against that substring — "garden" appears before "plaza" positionally
+    const prepMatch = lower.match(/\b(?:at|to|toward|towards|into|in)\s+(?:the\s+)?(.+)/);
+    if (prepMatch) {
+      const afterPrep = prepMatch[1]
+        .replace(/^(?:the|a|an|my|our|village|town|local|old|new|main)\s+/g, '');
+      for (const [key, areaId] of sorted) {
+        if (afterPrep.includes(key)) return areaId;
+      }
+    }
+
+    // Fallback: scan full text
+    for (const [key, areaId] of sorted) {
       if (lower.includes(key)) return areaId;
     }
 
-    // Fallback: plaza
+    // Default: plaza
     return 'plaza';
   }
 }

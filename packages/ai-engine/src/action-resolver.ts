@@ -181,7 +181,7 @@ const POST_PATTERNS = [
 ];
 
 const REST_PATTERNS = [
-  /rest\b/i,
+  /\brest\b/i,
   /relax\b/i,
   /sit\s+down/i,
   /take\s+a\s+(?:break|nap)/i,
@@ -199,7 +199,16 @@ const TALK_PATTERNS = [
 ];
 
 
-const ACTION_VERBS = /^(?:go|walk|head|move|travel|gather|harvest|collect|pick|forage|fish|chop|dig|craft|cook|bake|make|brew|prepare|create|build|construct|eat|consume|rest|relax|sleep|trade|offer|give|steal|rob|destroy|break|smash|burn|fight|attack|hit|repair|fix|teach|show|post|write|talk|speak|chat|approach|find|meet|visit)\b/i;
+const ACTION_VERBS = /^(?:go|walk|head|move|travel|gather|harvest|collect|pick|forage|fish|chop|dig|craft|cook|bake|make|brew|prepare|create|build|construct|eat|consume|rest|relax|sleep|trade|offer|give|steal|rob|destroy|break|smash|burn|fight|attack|hit|repair|fix|teach|show|post|write|talk|speak|chat|approach|find|meet|visit|attempt|try|start|begin|continue|keep|explore|search|examine|look|check|inspect)\b/i;
+
+// Non-physical concepts that can't be gathered
+const NON_GATHERABLE = new Set([
+  'information', 'knowledge', 'courage', 'strength', 'thoughts',
+  'ideas', 'inspiration', 'wisdom', 'energy', 'supplies', 'resources',
+  'food', 'materials', 'things', 'stuff', 'everything', 'something',
+  'anything', 'nothing', 'people', 'friends', 'allies', 'news',
+  'edible', 'useful', 'enough', 'more', 'some',
+]);
 
 export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
   const text = raw.trim();
@@ -230,6 +239,38 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
   }
 
   const base: ParsedIntent = { type: 'unknown', raw: text, remainder };
+
+  // --- Reject statements & conditionals (not executable actions) ---
+  // "I have nothing to eat" / "I don't know where to go" → internal thought, not a command
+  if (/^I\s+(?:have|don't|can't|couldn't|won't|didn't|cannot|am\s+not)\b/i.test(mainText)) {
+    return { ...base, type: 'intent', message: mainText };
+  }
+  // "eat whatever food I gather before dark" → conditional, not an immediate action
+  if (/\b(?:whatever|whichever)\b/i.test(mainText)) {
+    return { ...base, type: 'intent', message: mainText };
+  }
+
+  // --- Strip conditional clauses ---
+  // "If nothing appears, I gather firewood instead" → "I gather firewood instead"
+  mainText = mainText.replace(/^if\s+.+?,\s*/i, '');
+  // "... if I can" / "... if nothing works" → strip trailing conditional
+  mainText = mainText.replace(/\s+if\s+(?:I|nothing|we|there|it)\b.*$/i, '');
+
+  // --- Handle first-person "I [verb]" prefix ---
+  const iMatch = mainText.match(/^I\s+(\w+.*)/i);
+  if (iMatch) {
+    const afterI = iMatch[1];
+    // Clear command verbs: strip "I" and parse normally
+    if (/^(?:go|walk|head|move|travel|gather|harvest|collect|pick|forage|fish|chop|dig|craft|cook|bake|make|brew|prepare|create|build|construct|eat|consume|rest|relax|sleep|trade|offer|give|steal|rob|destroy|break|smash|burn|fight|attack|hit|repair|fix|teach|show|post|write|talk|speak|chat|visit)\b/i.test(afterI)) {
+      mainText = afterI;
+    } else if (/^(?:need|should|want|plan|hope|wish|intend|ought|decide|resolve|choose)\s+to\b/i.test(afterI) ||
+               /^(?:'m|am|'ll|will)\s+/i.test(afterI)) {
+      // "I need to..." / "I'm going to..." — let INTENT_PATTERNS at bottom handle these
+    } else {
+      // "I meet her eyes" / "I step closer" / "I kneel to examine" — narrative, not a command
+      return { ...base, type: 'intent', message: mainText };
+    }
+  }
 
   // --- Eat ---
   for (const p of EAT_PATTERNS) {
@@ -405,9 +446,22 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
   for (const p of GATHER_PATTERNS) {
     const m = mainText.match(p);
     if (m) {
-      const resource = m[1]?.toLowerCase().trim() || '';
+      let resource = m[1]?.toLowerCase().trim() || '';
+      // Skip non-physical concepts — fall through to social/intent
+      if (NON_GATHERABLE.has(resource)) break;
       // Try to match to a known resource
-      const resDef = RESOURCES[resource] || RESOURCES[resource.replace(/s$/, '')] || RESOURCES[resource + 's'];
+      let resDef = RESOURCES[resource] || RESOURCES[resource.replace(/s$/, '')] || RESOURCES[resource + 's'];
+      // If first word isn't a known resource, scan full text for one
+      // Handles "gather edible plants" → "edible" not found → scan finds "herbs" or similar
+      if (!resDef) {
+        for (const resId of Object.keys(RESOURCES)) {
+          if (mainText.toLowerCase().includes(resId)) {
+            resDef = RESOURCES[resId];
+            resource = resId;
+            break;
+          }
+        }
+      }
       return { ...base, type: 'gather', resource: resDef?.id || resource };
     }
   }
@@ -430,8 +484,16 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
 
   // --- Intent vs Social (everything that didn't match a physical action) ---
   // Intent language: internal plans that feed the next think/plan cycle
-  const INTENT_PATTERNS = /^(?:I (?:need|should|want|plan|hope|wish|intend|ought) to|we (?:need|should|must) |I(?:'m| am) going to|I(?:'ll| will) )/i;
+  const INTENT_PATTERNS = /^(?:I (?:need|should|want|plan|hope|wish|intend|ought|decide|resolve|choose) to|we (?:need|should|must) |I(?:'m| am) going to|I(?:'ll| will) )/i;
   if (INTENT_PATTERNS.test(mainText)) {
+    return { ...base, type: 'intent', message: mainText };
+  }
+
+  // Short imperatives without a clear target or audience are self-talk, not declarations
+  // "speak directly, no preamble" / "be honest" / "stay calm" / "offer to work"
+  const words = mainText.split(/\s+/);
+  if (words.length <= 6 && !/\b(?:post|write|announce|declare|proclaim)\b/i.test(mainText)) {
+    // No board-posting language → treat as internal resolve, not public declaration
     return { ...base, type: 'intent', message: mainText };
   }
 
@@ -675,7 +737,11 @@ function executeBuild(intent: ParsedIntent, agent: AgentState, world: WorldState
   const buildDef = intent.building ? BUILDINGS[intent.building] || findBuilding(intent.building) : undefined;
   if (!buildDef) {
     const available = getBuildableStructures(agent.skills['building']?.level ?? 0);
-    return { ...base, success: false, description: `Don't know how to build that. I could try: ${available.map(b => b.name).join(', ') || 'nothing (need building skill)'}.`, reason: 'unknown building', remediation: `Check your building skill level. Available: ${available.map(b => b.name).join(', ') || 'none yet — practice building first'}.`, energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+    const suggestions = available.map(b => {
+      const mats = b.materials.map(m => `${m.qty} ${m.resource}`).join(' + ');
+      return `${b.name} (needs ${mats} — gather at ${b.materials.map(m => getResourceLocation(m.resource)).join(', ')})`;
+    }).join('; ');
+    return { ...base, success: false, description: `Don't know how to build that.${suggestions ? ` I could try: ${suggestions}.` : ' Need building skill first.'}`, reason: 'unknown building', remediation: suggestions || 'Practice building simpler structures first.', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
   }
 
   const skillLevel = agent.skills['building']?.level ?? 0;
