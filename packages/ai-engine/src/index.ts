@@ -542,7 +542,7 @@ You can do things during conversation:
   [ACTION: teach ${otherAgents[0]?.config.name || 'them'} fishing]
   [ACTION: give bread to ${otherAgents[0]?.config.name || 'them'}]
 
-Talk like a real person. 1-3 sentences. You can negotiate, ask for help, offer to trade, or just talk.
+Talk like a real person. 1-3 sentences.
 Write ONLY what you say out loud. No internal thoughts, no action narration, no italics, no stage directions. Just dialogue.`;
 
     const memoryContext = memories.length > 0
