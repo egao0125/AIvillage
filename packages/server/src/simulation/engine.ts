@@ -744,11 +744,7 @@ export class SimulationEngine {
         const c1WantsC2 = c1.pendingConversationTarget === a2.id;
         const c2WantsC1 = c2.pendingConversationTarget === a1.id;
 
-        // Spontaneous: two available agents near each other — small random chance per tick
-        // In a small village, people standing near each other will naturally talk
-        const spontaneous = !c1WantsC2 && !c2WantsC1 && Math.random() < 0.005;
-
-        if (c1WantsC2 || c2WantsC1 || spontaneous) {
+        if (c1WantsC2 || c2WantsC1) {
           // Start conversation
           const location = { ...a1.position };
           const convId = this.conversationManager.startConversation(a1.id, a2.id, location);
@@ -761,7 +757,7 @@ export class SimulationEngine {
           c2.enterConversation();
 
           console.log(
-            `[Engine] ${spontaneous ? 'Spontaneous' : 'Planned'} conversation: ${a1.config.name} <-> ${a2.config.name}`,
+            `[Engine] Proximity conversation started: ${a1.config.name} <-> ${a2.config.name}`,
           );
 
           // Only start one conversation per tick
