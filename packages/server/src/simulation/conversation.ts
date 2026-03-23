@@ -1,5 +1,6 @@
 import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
 import { type AgentCognition, parseIntent, executeAction, RESOURCES, BUILDINGS, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
+import { AREA_DESCRIPTIONS } from '../map/starting-knowledge.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
 
@@ -479,6 +480,171 @@ export class ConversationManager {
               hearsayDepth: 1,
             });
           } catch {}
+        }
+      }
+    }
+
+    // --- Structured fact extraction (one cheap LLM call per participant) ---
+    await this.extractAndStoreFacts(conversation, cognitions);
+  }
+
+  /**
+   * Extract structured facts from a conversation transcript and store each as a separate memory.
+   * Place facts update knownPlaces immediately. Person facts tag relatedAgentIds for gossip.
+   * Agreement facts are stored for both participants.
+   */
+  private async extractAndStoreFacts(
+    conversation: Conversation,
+    cognitions: Map<string, AgentCognition>,
+  ): Promise<void> {
+    const messages = conversation.messages;
+    if (messages.length < 2) return;
+
+    const transcript = messages.map(m => `${m.agentName}: ${m.content}`).join('\n');
+
+    // Build area key lookup from AREA_DESCRIPTIONS keys + area names
+    const areaNameToKey = new Map<string, string>();
+    for (const [key, desc] of Object.entries(AREA_DESCRIPTIONS)) {
+      areaNameToKey.set(key, key);
+      // Also index by display name (e.g. "Bakery" -> "bakery")
+      const displayName = desc.split(' — ')[0].toLowerCase();
+      areaNameToKey.set(displayName, key);
+    }
+
+    for (const participantId of conversation.participants) {
+      const cognition = cognitions.get(participantId);
+      const participant = this.world.getAgent(participantId);
+      if (!cognition || !participant) continue;
+
+      const otherIds = conversation.participants.filter(id => id !== participantId);
+      const otherNames = otherIds
+        .map(id => this.world.getAgent(id)?.config.name)
+        .filter(Boolean) as string[];
+
+      let facts: { category: string; content: string; about?: string; source?: string }[];
+      try {
+        facts = await cognition.extractFacts(transcript, participant.config.name, otherNames);
+      } catch (err) {
+        console.error(`[Facts] Extraction failed for ${participant.config.name}:`, err);
+        continue;
+      }
+
+      if (facts.length === 0) continue;
+      console.log(`[Facts] ${participant.config.name} extracted ${facts.length} facts`);
+
+      for (const fact of facts) {
+        const sourceName = fact.source || otherNames[0] || 'someone';
+
+        switch (fact.category) {
+          case 'place': {
+            // Try to match an area key from content
+            const contentLower = fact.content.toLowerCase();
+            for (const [name, key] of areaNameToKey) {
+              if (contentLower.includes(name)) {
+                cognition.addDiscovery(key, AREA_DESCRIPTIONS[key]);
+                break;
+              }
+            }
+            await cognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: participantId,
+              type: 'observation',
+              content: `${sourceName} told me: ${fact.content}`,
+              importance: 6,
+              timestamp: Date.now(),
+              relatedAgentIds: otherIds,
+            });
+            break;
+          }
+
+          case 'resource': {
+            await cognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: participantId,
+              type: 'observation',
+              content: `${sourceName} told me: ${fact.content}`,
+              importance: 6,
+              timestamp: Date.now(),
+              relatedAgentIds: otherIds,
+            });
+            break;
+          }
+
+          case 'person': {
+            const mentionedAgent = fact.about ? this.findAgentByName(fact.about) : undefined;
+            const relatedIds = [...otherIds];
+            if (mentionedAgent && !relatedIds.includes(mentionedAgent.id)) {
+              relatedIds.push(mentionedAgent.id);
+            }
+            await cognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: participantId,
+              type: 'observation',
+              content: `${sourceName} told me: ${fact.content}`,
+              importance: 5,
+              timestamp: Date.now(),
+              relatedAgentIds: relatedIds,
+              sourceAgentId: otherIds[0],
+              hearsayDepth: 1,
+            });
+            break;
+          }
+
+          case 'agreement': {
+            // Store for this participant
+            await cognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: participantId,
+              type: 'plan',
+              content: `AGREEMENT with ${otherNames.join(', ')}: ${fact.content}`,
+              importance: 7,
+              timestamp: Date.now(),
+              relatedAgentIds: otherIds,
+            });
+            // Store for other participants too
+            for (const otherId of otherIds) {
+              const otherCognition = cognitions.get(otherId);
+              if (!otherCognition) continue;
+              try {
+                await otherCognition.addMemory({
+                  id: crypto.randomUUID(),
+                  agentId: otherId,
+                  type: 'plan',
+                  content: `AGREEMENT with ${participant.config.name}: ${fact.content}`,
+                  importance: 7,
+                  timestamp: Date.now(),
+                  relatedAgentIds: [participantId],
+                });
+              } catch {}
+            }
+            break;
+          }
+
+          case 'need': {
+            await cognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: participantId,
+              type: 'observation',
+              content: `${sourceName} said they need: ${fact.content}`,
+              importance: 4,
+              timestamp: Date.now(),
+              relatedAgentIds: otherIds,
+            });
+            break;
+          }
+
+          case 'skill': {
+            await cognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: participantId,
+              type: 'observation',
+              content: `${sourceName} told me: ${fact.content}`,
+              importance: 5,
+              timestamp: Date.now(),
+              relatedAgentIds: otherIds,
+            });
+            break;
+          }
         }
       }
     }

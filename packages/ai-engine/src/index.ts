@@ -110,6 +110,59 @@ ${this.myExperience}`;
   }
 
   /**
+   * Programmatically add a discovered place to this agent's known places.
+   * Used by perceive() for physical discovery and conversation fact extraction for hearsay.
+   */
+  addDiscovery(areaKey: string, description: string): void {
+    if (this.knownPlaces.has(areaKey)) return;
+    this.knownPlaces.set(areaKey, description);
+    if (areaKey === 'plaza') {
+      this.knowsPlaza = true;
+    }
+    console.log(`[Discovery] ${this.agent.config.name} learned about ${areaKey}`);
+  }
+
+  /**
+   * Extract structured facts from a conversation transcript using a cheap LLM call.
+   * Returns categorized facts that become separate retrievable memories.
+   */
+  async extractFacts(transcript: string, myName: string, partnerNames: string[]): Promise<{
+    category: 'place' | 'resource' | 'person' | 'agreement' | 'need' | 'skill';
+    content: string;
+    about?: string;
+    source?: string;
+  }[]> {
+    const systemPrompt = `Extract the key facts from this conversation. For each fact, categorize it.
+
+CATEGORIES:
+- place: a location was mentioned that the listener might not know about
+- resource: where to find something, how to make something, a recipe
+- person: information about a third party (gossip, reputation, warning)
+- agreement: a deal was made, a promise exchanged, a plan agreed on
+- need: someone expressed they need something or are looking for something
+- skill: someone mentioned they know how to do something or offered to teach
+
+Return JSON array ONLY. Each item: {"category": "...", "content": "...", "about": "optional agent name", "source": "who said it"}
+If nothing notable was exchanged, return []`;
+
+    try {
+      const response = await this.llm.complete(
+        systemPrompt,
+        `Conversation between ${myName} and ${partnerNames.join(', ')}:\n${transcript}`,
+      );
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((f: any) =>
+        f && typeof f.category === 'string' && typeof f.content === 'string' &&
+        ['place', 'resource', 'person', 'agreement', 'need', 'skill'].includes(f.category)
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Qualitative vitals — only surfaces when thresholds are crossed.
    * Returns empty string when everything is fine.
    */
@@ -603,7 +656,7 @@ End with: MOOD: how you feel (in your own words)`;
     let updatedWorldView: string | undefined;
     try {
       const memoryText = recentMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
-      updatedWorldView = await this.updateWorldView(memoryText);
+      updatedWorldView = await this.updateWorldView(memoryText, reflection);
     } catch (err) {
       console.error(`[WorldView] ${this.agent.config.name} failed to update worldView:`, err);
     }
@@ -620,32 +673,41 @@ End with: MOOD: how you feel (in your own words)`;
    * Places are added programmatically via perceive() discovery.
    * Only MY EXPERIENCE gets rewritten each night.
    */
-  async updateWorldView(recentMemoriesText: string): Promise<string | undefined> {
+  async updateWorldView(recentMemoriesText: string, reflection?: string): Promise<string | undefined> {
     const placesKnown = Array.from(this.knownPlaces.values()).join('\n') || '(none yet)';
 
-    const systemPrompt = `You are ${this.agent.config.name}. Rewrite your MY EXPERIENCE section based on today.
+    const systemPrompt = `You are ${this.agent.config.name}. It's the end of the day. Rewrite your personal field guide based on what happened today.
+
+WHAT YOU WROTE YESTERDAY:
+${this.myExperience}
+
+WHAT YOU REALIZED TODAY:
+${reflection || 'Nothing in particular.'}
+
+YOUR CURRENT STATE:
+${this.buildContextBlock()}
 
 PLACES I KNOW:
 ${placesKnown}
 
-YOUR CURRENT MY EXPERIENCE:
-${this.myExperience}
+TODAY'S EVENTS (for reference):
+${recentMemoriesText}
 
-RULES:
-- Write a new MY EXPERIENCE that replaces the old one entirely.
-- Include: what you've learned, skills you're developing, people you've met, strategies that work, dangers to avoid.
-- Cut anything no longer relevant. Add new lessons from today.
-- Be practical and concise. First person. Max 400 words.
-- Do NOT include section headers — just write the content.
-- Do NOT list places (that's tracked separately). Focus on experience and knowledge.
+Rewrite your MY EXPERIENCE. This is your personal document — write what matters to you. Be honest about what you need, what you've learned, and what you're planning.
 
-Return ONLY the new MY EXPERIENCE text. Nothing else.`;
+Be specific. "Bread needs 2 wheat at the bakery" not "I can make food." "Mei traded fairly twice" not "some people are nice." Include names, numbers, locations, skill levels when you know them.
 
-    const response = await this.llm.complete(systemPrompt, recentMemoriesText);
+Remove anything that's no longer true or no longer matters. Add what you learned today. This is what you'll read tomorrow morning before making decisions.
+
+Max 450 words. First person. No section headers. No lists of places — that's tracked separately.
+
+Return ONLY the new MY EXPERIENCE text.`;
+
+    const response = await this.llm.complete(systemPrompt, 'Rewrite now.');
 
     // Sanity check: reject empty or suspiciously long responses
     const trimmed = response.trim();
-    if (trimmed.length < 20 || trimmed.length > 2400) {
+    if (trimmed.length < 20 || trimmed.length > 2700) {
       console.warn(`[WorldView] ${this.agent.config.name} rejected MY EXPERIENCE update (${trimmed.length} chars)`);
       return undefined;
     }
@@ -799,13 +861,7 @@ Output a JSON array ONLY, no other text:
     for (const area of nearbyAreas) {
       const areaKey = area.id;
       if (!this.knownPlaces.has(areaKey)) {
-        // New discovery — add to knownPlaces with a basic description
-        this.knownPlaces.set(areaKey, `${area.name} — ${area.type} area`);
-
-        // Check if this is the plaza — unlocks announcements
-        if (areaKey === 'plaza') {
-          this.knowsPlaza = true;
-        }
+        this.addDiscovery(areaKey, `${area.name} — ${area.type} area`);
 
         await this.memory.add({
           id: crypto.randomUUID(),
@@ -816,7 +872,6 @@ Output a JSON array ONLY, no other text:
           timestamp: Date.now(),
           relatedAgentIds: [],
         });
-        console.log(`[Discovery] ${this.agent.config.name} discovered ${area.name}`);
       }
     }
 
