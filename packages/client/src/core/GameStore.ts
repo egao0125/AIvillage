@@ -294,6 +294,15 @@ class GameStore {
 
   // --- Agent sub-field updates ---
 
+  updateAgentWorldView(agentId: string, worldView: string): void {
+    const agent = this.state.agents.get(agentId);
+    if (!agent) return;
+    const newAgents = new Map(this.state.agents);
+    newAgents.set(agentId, { ...agent, worldView });
+    this.state = { ...this.state, agents: newAgents };
+    this.notify();
+  }
+
   updateAgentMood(agentId: string, mood: string): void {
     const agent = this.state.agents.get(agentId);
     if (!agent) return;

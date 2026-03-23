@@ -14,11 +14,12 @@ import {
 // --- Types ---
 
 export type ActionType =
-  | 'gather' | 'craft' | 'build' | 'eat' | 'rest'
+  | 'gather' | 'craft' | 'build' | 'repair' | 'eat' | 'rest' | 'sleep'
   | 'trade_offer' | 'trade_accept' | 'trade_reject'
-  | 'teach' | 'give' | 'post'
+  | 'teach' | 'give' | 'steal' | 'destroy' | 'fight' | 'post'
   | 'move' | 'talk'
   | 'use_medicine'
+  | 'social' | 'intent'
   | 'unknown';
 
 export interface ParsedIntent {
@@ -51,6 +52,8 @@ export interface ActionOutcome {
   tradeProposal?: TradeProposal;
   buildProgress?: { buildingId: string; session: number; total: number; complete: boolean };
   teachResult?: { skill: string; studentNewLevel: number };
+  witnesses?: string[];  // names of agents who perceived a social act
+  socialMeaning?: string; // what the social act means in context
 }
 
 // --- Agent State Interface (what the resolver needs to know) ---
@@ -99,9 +102,44 @@ const CRAFT_PATTERNS = [
 const BUILD_PATTERNS = [
   /build\s+(?:a\s+)?(.+?)(?:\s+at\s+|$)/i,
   /construct\s+(?:a\s+)?(.+?)(?:\s+at\s+|$)/i,
-  /repair\s+(.+)/i,
   /continue\s+building/i,
   /work\s+on\s+(?:the\s+)?(?:building|shelter|house|construction)/i,
+];
+
+const REPAIR_PATTERNS = [
+  /repair\s+(?:the\s+)?(.+)/i,
+  /fix\s+(?:the\s+)?(.+)/i,
+  /restore\s+(?:the\s+)?(.+)/i,
+  /patch\s+(?:the\s+)?(.+)/i,
+];
+
+const STEAL_PATTERNS = [
+  /steal\s+(?:(\d+)\s+)?(\w[\w\s]*?)\s+from\s+(\w+)/i,
+  /take\s+(?:(\d+)\s+)?(\w[\w\s]*?)\s+from\s+(\w+)/i,
+  /pickpocket\s+(\w+)/i,
+  /rob\s+(\w+)/i,
+];
+
+const DESTROY_PATTERNS = [
+  /destroy\s+(?:the\s+)?(.+)/i,
+  /break\s+(?:the\s+)?(.+)/i,
+  /smash\s+(?:the\s+)?(.+)/i,
+  /burn\s+(?:the\s+)?(.+)/i,
+  /tear\s+down\s+(?:the\s+)?(.+)/i,
+  /demolish\s+(?:the\s+)?(.+)/i,
+];
+
+const FIGHT_PATTERNS = [
+  /(?:fight|attack|hit|punch|strike|kick)\s+(\w+)/i,
+  /(?:assault|ambush)\s+(\w+)/i,
+  /pick\s+a\s+fight\s+with\s+(\w+)/i,
+];
+
+const SLEEP_PATTERNS = [
+  /sleep\b/i,
+  /go\s+to\s+(?:bed|sleep)/i,
+  /turn\s+in\s+for\s+the\s+night/i,
+  /call\s+it\s+a\s+(?:day|night)/i,
 ];
 
 const TRADE_PATTERNS = [
@@ -144,7 +182,6 @@ const REST_PATTERNS = [
   /relax\b/i,
   /sit\s+down/i,
   /take\s+a\s+(?:break|nap)/i,
-  /sleep\b/i,
   /meditat/i,
 ];
 
@@ -179,10 +216,55 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
     }
   }
 
+  // --- Sleep ---
+  for (const p of SLEEP_PATTERNS) {
+    if (p.test(text)) {
+      return { ...base, type: 'sleep' };
+    }
+  }
+
   // --- Rest ---
   for (const p of REST_PATTERNS) {
     if (p.test(text)) {
       return { ...base, type: 'rest' };
+    }
+  }
+
+  // --- Steal ---
+  for (const p of STEAL_PATTERNS) {
+    const m = text.match(p);
+    if (m) {
+      // "steal 3 wheat from Mei" or "rob Mei"
+      if (m.length >= 4) {
+        return { ...base, type: 'steal', quantity: parseInt(m[1]) || 1, resource: m[2]?.toLowerCase().trim().replace(/\s+/g, '_'), targetAgent: m[3] };
+      }
+      // "pickpocket Mei" / "rob Mei"
+      return { ...base, type: 'steal', targetAgent: m[1] };
+    }
+  }
+
+  // --- Destroy ---
+  for (const p of DESTROY_PATTERNS) {
+    const m = text.match(p);
+    if (m) {
+      return { ...base, type: 'destroy', resource: m[1]?.toLowerCase().trim() };
+    }
+  }
+
+  // --- Fight ---
+  for (const p of FIGHT_PATTERNS) {
+    const m = text.match(p);
+    if (m) {
+      return { ...base, type: 'fight', targetAgent: m[1] };
+    }
+  }
+
+  // --- Repair ---
+  for (const p of REPAIR_PATTERNS) {
+    const m = text.match(p);
+    if (m) {
+      const target = m[1]?.toLowerCase().trim().replace(/\s+/g, '_') || '';
+      return { ...base, type: 'repair', building: target };
     }
   }
 
@@ -315,7 +397,15 @@ export function parseIntent(raw: string, agentState: AgentState): ParsedIntent {
     }
   }
 
-  return base;
+  // --- Intent vs Social (everything that didn't match a physical action) ---
+  // Intent language: internal plans that feed the next think/plan cycle
+  const INTENT_PATTERNS = /^(?:I (?:need|should|want|plan|hope|wish|intend|ought) to|we (?:need|should|must) |I(?:'m| am) going to|I(?:'ll| will) )/i;
+  if (INTENT_PATTERNS.test(text)) {
+    return { ...base, type: 'intent', message: text };
+  }
+
+  // Everything else is a social act — declarations, announcements, promises, threats, etc.
+  return { ...base, type: 'social', message: text };
 }
 
 
@@ -331,10 +421,15 @@ export function executeAction(
     case 'gather': return executeGather(intent, agent, world);
     case 'craft': return executeCraft(intent, agent, world);
     case 'build': return executeBuild(intent, agent, world);
+    case 'repair': return executeRepair(intent, agent, world);
     case 'eat': return executeEat(intent, agent);
     case 'use_medicine': return executeUseMedicine(agent);
     case 'rest': return executeRest(agent);
+    case 'sleep': return executeSleep(agent);
     case 'give': return executeGive(intent, agent, world);
+    case 'steal': return executeSteal(intent, agent, world);
+    case 'destroy': return executeDestroy(intent, agent, world);
+    case 'fight': return executeFight(intent, agent, world);
     case 'trade_offer': return executeTradeOffer(intent, agent, world);
     case 'trade_accept': return executeTradeAccept(agent, world);
     case 'trade_reject': return executeTradeReject(agent, world);
@@ -342,6 +437,9 @@ export function executeAction(
     case 'post': return executePost(intent, agent);
     case 'move': return { success: true, type: 'move', description: `heading to ${intent.location}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 };
     case 'talk': return { success: true, type: 'talk', description: `wants to talk to ${intent.targetAgent}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 };
+
+    case 'intent': return executeSocialIntent(intent);
+    case 'social': return executeSocialAct(intent, agent);
 
     default:
       return {
@@ -773,6 +871,186 @@ function executePost(intent: ParsedIntent, agent: AgentState): ActionOutcome {
     success: true, type: 'post',
     description: `Posted on the village board: "${intent.message}"`,
     energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 5,
+  };
+}
+
+
+function executeSleep(agent: AgentState): ActionOutcome {
+  return {
+    success: true, type: 'sleep',
+    description: 'Settled down to sleep.',
+    energySpent: -40, // big energy recovery
+    hungerChange: 3,  // sleeping makes you hungrier
+    healthChange: 3,
+    durationMinutes: 480, // 8 game hours
+  };
+}
+
+
+function executeRepair(intent: ParsedIntent, agent: AgentState, world: WorldState): ActionOutcome {
+  const base: Partial<ActionOutcome> = { type: 'repair', hungerChange: 0, healthChange: 0 };
+
+  if (!intent.building) {
+    return { ...base, success: false, description: 'Repair what?', reason: 'no target', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+  }
+
+  // Check for hammer
+  const hasHammer = agent.inventory.some(i => i.resource === 'hammer');
+  if (!hasHammer) {
+    return { ...base, success: false, description: 'Need a hammer to repair.', reason: 'missing hammer', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+  }
+
+  if (agent.energy < 15) {
+    return { ...base, success: false, description: 'Too tired to repair anything.', reason: 'not enough energy', energySpent: 0, durationMinutes: 0 } as ActionOutcome;
+  }
+
+  return {
+    ...base, success: true,
+    description: `Repaired the ${intent.building.replace(/_/g, ' ')}.`,
+    energySpent: 15,
+    durationMinutes: 45,
+    skillXpGained: { skill: 'building', xp: 2 },
+  } as ActionOutcome;
+}
+
+
+function executeSteal(intent: ParsedIntent, agent: AgentState, world: WorldState): ActionOutcome {
+  const base: Partial<ActionOutcome> = { type: 'steal', hungerChange: 0, healthChange: 0, durationMinutes: 5 };
+
+  if (!intent.targetAgent) {
+    return { ...base, success: false, description: 'Steal from whom?', reason: 'no target', energySpent: 0 } as ActionOutcome;
+  }
+
+  const nearby = agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase()));
+  if (!nearby) {
+    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', energySpent: 0 } as ActionOutcome;
+  }
+
+  // Steal has a chance of failure based on no skill system yet — flat 40% success
+  const succeeded = Math.random() < 0.4;
+
+  if (!succeeded) {
+    return {
+      ...base, success: false,
+      description: `Tried to steal from ${nearby.name} but got caught!`,
+      reason: 'caught',
+      energySpent: 5,
+    } as ActionOutcome;
+  }
+
+  // Pick a random item from target's inventory
+  const targetInventory = world.getAgentInventory(nearby.id);
+  if (targetInventory.length === 0) {
+    return { ...base, success: false, description: `${nearby.name} has nothing to steal.`, reason: 'target has nothing', energySpent: 3 } as ActionOutcome;
+  }
+
+  const stolen = intent.resource
+    ? targetInventory.find(i => i.resource === intent.resource)
+    : targetInventory[Math.floor(Math.random() * targetInventory.length)];
+
+  if (!stolen) {
+    return { ...base, success: false, description: `${nearby.name} doesn't have that.`, reason: 'item not found', energySpent: 3 } as ActionOutcome;
+  }
+
+  const qty = Math.min(intent.quantity || 1, stolen.qty);
+  return {
+    ...base, success: true,
+    description: `Stole ${qty} ${stolen.resource} from ${nearby.name}.`,
+    itemsGained: [{ resource: stolen.resource, qty }],
+    energySpent: 5,
+  } as ActionOutcome;
+}
+
+
+function executeDestroy(intent: ParsedIntent, agent: AgentState, world: WorldState): ActionOutcome {
+  const base: Partial<ActionOutcome> = { type: 'destroy', hungerChange: 0, healthChange: 0, durationMinutes: 10 };
+
+  if (!intent.resource) {
+    return { ...base, success: false, description: 'Destroy what?', reason: 'no target', energySpent: 0 } as ActionOutcome;
+  }
+
+  if (agent.energy < 10) {
+    return { ...base, success: false, description: 'Too tired.', reason: 'not enough energy', energySpent: 0 } as ActionOutcome;
+  }
+
+  // Check if it's an item in own inventory
+  const ownItem = agent.inventory.find(i => i.resource.includes(intent.resource!));
+  if (ownItem) {
+    return {
+      ...base, success: true,
+      description: `Destroyed ${ownItem.resource}.`,
+      itemsConsumed: [{ resource: ownItem.resource, qty: 1 }],
+      energySpent: 5,
+    } as ActionOutcome;
+  }
+
+  // Otherwise it's a structure/building/environmental target
+  return {
+    ...base, success: true,
+    description: `Damaged the ${intent.resource.replace(/_/g, ' ')}.`,
+    energySpent: 10,
+  } as ActionOutcome;
+}
+
+
+function executeFight(intent: ParsedIntent, agent: AgentState, world: WorldState): ActionOutcome {
+  const base: Partial<ActionOutcome> = { type: 'fight', hungerChange: 0, durationMinutes: 10 };
+
+  if (!intent.targetAgent) {
+    return { ...base, success: false, description: 'Fight whom?', reason: 'no target', energySpent: 0, healthChange: 0 } as ActionOutcome;
+  }
+
+  const nearby = agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase()));
+  if (!nearby) {
+    return { ...base, success: false, description: `${intent.targetAgent} isn't nearby.`, reason: 'target not nearby', energySpent: 0, healthChange: 0 } as ActionOutcome;
+  }
+
+  if (agent.energy < 10) {
+    return { ...base, success: false, description: 'Too exhausted to fight.', reason: 'not enough energy', energySpent: 0, healthChange: 0 } as ActionOutcome;
+  }
+
+  // Both sides take damage, attacker has slight advantage
+  const attackerDamage = Math.floor(Math.random() * 10) + 5;  // 5-14 damage dealt
+  const defenderDamage = Math.floor(Math.random() * 12) + 3;  // 3-14 damage taken
+
+  return {
+    ...base, success: true,
+    description: `Fought ${nearby.name}. Dealt ${attackerDamage} damage, took ${defenderDamage} damage.`,
+    energySpent: 15,
+    healthChange: -defenderDamage,
+  } as ActionOutcome;
+}
+
+
+function executeSocialIntent(intent: ParsedIntent): ActionOutcome {
+  // Intent is internal — stored as thought, not broadcast
+  return {
+    success: true, type: 'intent',
+    description: intent.message || intent.raw,
+    energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0,
+  };
+}
+
+
+function executeSocialAct(intent: ParsedIntent, agent: AgentState): ActionOutcome {
+  // Social acts always succeed as speech acts. The agent said the words.
+  // Whether anyone respects it depends on witnesses and their reactions.
+  const witnessNames = agent.nearbyAgents.map(a => a.name);
+  const whoHeard = witnessNames.length > 0
+    ? `${witnessNames.join(', ')} heard you.`
+    : 'Nobody was around to hear you.';
+  const meaning = witnessNames.length > 0
+    ? 'This is a claim, not a fact. Whether anyone respects it depends on whether they agree.'
+    : 'A declaration with no audience is just words to yourself.';
+
+  return {
+    success: true, type: 'social',
+    description: `You declared: "${intent.message || intent.raw}"`,
+    energySpent: 3,
+    hungerChange: 0, healthChange: 0,
+    durationMinutes: 5,
+    witnesses: witnessNames,
+    socialMeaning: meaning,
   };
 }
 

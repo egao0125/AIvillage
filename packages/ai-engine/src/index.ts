@@ -39,7 +39,20 @@ You may encounter other people. They have their own thoughts and feelings.
 Weather changes. Seasons change. Winter is hard.
 You work for what you need.
 
-You can: gather, craft, build, eat, rest, trade, teach, talk, post on the village board.
+ACTIONS:
+gather    — take resources from nature
+craft     — transform materials into products
+build     — construct structures (multi-session)
+repair    — restore damaged structures
+eat       — consume food
+rest      — recover energy (short)
+sleep     — deep rest (long, advances time)
+move      — walk to a location
+give      — hand items to a nearby agent voluntarily
+trade     — exchange items with agreement from both sides
+steal     — take items from another agent without consent
+destroy   — damage items, buildings, or resources
+
 To act: [ACTION: what you want to do]
 Talk like a real person. You change through experience.`;
 
@@ -280,13 +293,11 @@ This is your inner voice. Think honestly. You can also act.
 
 Think about your situation. 1-3 sentences, first person, private and honest.
 
-If you want to DO something, add an action:
-  [ACTION: gather wheat at the farm]
-  [ACTION: cook stew at the café]
-  [ACTION: trade 3 wheat for 2 fish with Mei]
-You will be told what happened — you might fail.
+If you want to DO something, add: [ACTION: what you do]
+Describe it naturally. Physical actions like gathering and crafting might fail if you lack materials or skill — you'll be told why.
+Anything you say out loud — declarations, promises, threats — will be heard by people nearby.
 
-If your mood changed, add: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
+If your mood changed, add: MOOD: how you feel (in your own words)`;
 
     const memories = await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
     const memoryContext = memories.length > 0
@@ -302,22 +313,23 @@ Context: ${context}`;
 
     // Parse structured output
     const actions = AgentCognition.parseActions(response);
-    const moodMatch = response.match(/^MOOD:\s*(neutral|happy|angry|sad|anxious|excited|scheming|afraid)\s*$/mi);
-    const mood = moodMatch ? moodMatch[1] as Mood : undefined;
+    const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
+    const mood: Mood | undefined = moodMatch ? moodMatch[1].trim() : undefined;
 
     // Clean thought text: strip action tags, mood lines
     const thought = response
       .replace(/\s*\[ACTION:\s*.+?\]/gi, '')
-      .replace(/^\s*MOOD:\s*(neutral|happy|angry|sad|anxious|excited|scheming|afraid)\s*$/mi, '')
+      .replace(/^\s*MOOD:\s*.+$/mi, '')
       .trim();
 
-    // Store as private memory (fixed importance 3 — saves one LLM call per thought)
+    // Variable importance: actions/mood = 5, passive = 3
+    const importance = (actions.length > 0 || mood) ? 5 : 3;
     await this.addMemory({
       id: crypto.randomUUID(),
       agentId: this.agent.id,
       type: 'thought',
       content: thought,
-      importance: 3,
+      importance,
       timestamp: Date.now(),
       relatedAgentIds: [],
       visibility: 'private',
@@ -416,26 +428,9 @@ Today is day ${currentTime.day}.`;
 Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
 
-What do you need to do today? List 4-6 concrete actions.
+What do you want to do today? Write 4-6 lines, each one completely different, in your own voice.
 
-Before planning, consider:
-- How hungry are you? Do you have food, or do you need to gather/trade for some?
-- How is your energy? Can you do hard work today, or do you need to rest?
-- What resources do you have? What could you make from them?
-- What failed yesterday? Don't repeat the same mistake.
-- What did you promise someone? Will you keep that promise?
-- Winter is coming (or here). Are you prepared?
-
-Every intention must be a physical action at a specific place:
-  "gather wheat at farm"
-  "cook bread at bakery"
-  "trade fish with Mei at market"
-  "build shelter at lake"
-  "teach Koji fishing at lake"
-NOT: "think about my situation" or "explore possibilities"
-
-Return a JSON array of strings ONLY:
-["gather wheat at farm", "cook bread at bakery", ...]`;
+Return a JSON array of strings ONLY.`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
@@ -566,18 +561,18 @@ Reflect:
 
 2-3 sentences. First person. Be practical and honest.
 
-End with: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
+End with: MOOD: how you feel (in your own words)`;
 
     const userPrompt = `Recent experiences:\n${recentMemories.map(m => m.content).join('\n')}`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
-    // Parse mood from response
-    const moodMatch = response.match(/^MOOD:\s*(neutral|happy|angry|sad|anxious|excited|scheming|afraid)\s*$/mi);
-    const mood: Mood = moodMatch ? moodMatch[1] as Mood : "neutral";
+    // Parse mood from response (free-form)
+    const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
+    const mood: Mood = moodMatch ? moodMatch[1].trim() : "neutral";
 
     // Strip the MOOD line from the reflection text
-    const reflection = response.replace(/^\s*MOOD:\s*(neutral|happy|angry|sad|anxious|excited|scheming|afraid)\s*$/mi, '').trim();
+    const reflection = response.replace(/^\s*MOOD:\s*.+$/mi, '').trim();
 
     // Score importance dynamically
     const importance = await this.scoreImportance(reflection, 'reflection');

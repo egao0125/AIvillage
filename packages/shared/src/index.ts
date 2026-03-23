@@ -86,7 +86,7 @@ export type AgentState =
 
 // --- Mood ---
 
-export type Mood = 'neutral' | 'happy' | 'angry' | 'sad' | 'anxious' | 'excited' | 'scheming' | 'afraid';
+export type Mood = string;
 
 // --- Phase 3: Drives ---
 // NOT a Maslow ladder. Dysfunctional patterns create the best drama.

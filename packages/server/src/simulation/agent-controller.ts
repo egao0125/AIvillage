@@ -41,7 +41,10 @@ export class AgentController {
   private lastReplanTick: number = 0;
   private currentPerformingActivity: string = '';
   onDeath?: (agentId: string, cause: string) => void;
-  private thinkCooldown: number = 0;
+  private thinkInProgress: boolean = false;
+  private lastHungerBand: number = 0;
+  private lastEnergyBand: number = 0;
+  private lastHealthBand: number = 0;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -158,10 +161,8 @@ export class AgentController {
       case 'performing': {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
-          this.currentPerformingActivity = '';
-          this.state = 'idle';
-          this.idleTimer = 0;
-          this.world.updateAgentState(this.agent.id, 'idle', 'between activities');
+          // Think about what just happened before going idle
+          void this.thinkAfterOutcome();
         }
         break;
       }
@@ -189,8 +190,9 @@ export class AgentController {
           if ((this.intentions.length === 0 || allIntentionsDone) && !this.planningInProgress) {
             // No plan or exhausted all intentions — replan
             void this.doPlan(time);
-          } else {
-            this.followNextIntention();
+          } else if (!this.thinkInProgress) {
+            // Think before acting — let the agent decide whether to follow the plan
+            void this.thinkThenAct();
           }
         }
         break;
@@ -200,9 +202,30 @@ export class AgentController {
 
   async wake(): Promise<void> {
     this.state = 'planning';
-    this.world.updateAgentState(this.agent.id, 'active', 'waking up');
+    this.world.updateAgentState(this.agent.id, 'active', '');
     this.broadcaster.agentAction(this.agent.id, 'waking up', '\u{1F31E}');
     console.log(`[Agent] ${this.agent.config.name} wakes up`);
+
+    // Think on waking — assess situation before planning
+    if (!this.apiExhausted) {
+      try {
+        const area = getAreaAt(this.agent.position);
+        const v = this.agent.vitals;
+        const vitalsNote = v ? `Health: ${Math.round(v.health)}, Hunger: ${Math.round(v.hunger)}, Energy: ${Math.round(v.energy)}.` : '';
+        const output = await this.cognition.think(
+          `You just woke up. It's morning on day ${this.world.time.day}.`,
+          `Location: ${area?.name ?? 'unknown'}. ${vitalsNote}`
+        );
+        this.handleApiSuccess();
+        if (output.mood) {
+          this.agent.mood = output.mood;
+          this.broadcaster.agentMood(this.agent.id, output.mood);
+        }
+        this.broadcaster.agentThought(this.agent.id, output.thought);
+      } catch (err) {
+        this.handleApiFailure(err);
+      }
+    }
 
     // Start planning the day
     void this.doPlan({
@@ -224,7 +247,7 @@ export class AgentController {
     this.state = 'planning';
 
     try {
-      this.world.updateAgentState(this.agent.id, 'active', 'planning the day');
+      this.world.updateAgentState(this.agent.id, 'active', '');
       let boardContext = this.world.getBoardSummary();
 
       // Add public artifacts to planning context
@@ -283,7 +306,7 @@ export class AgentController {
 
     if (this.currentIntentionIndex >= this.intentions.length) {
       this.state = 'idle';
-      this.world.updateAgentState(this.agent.id, 'idle', 'relaxing');
+      this.world.updateAgentState(this.agent.id, 'idle', '');
       return;
     }
 
@@ -339,7 +362,7 @@ export class AgentController {
     this.path = path;
     this.pathIndex = 1; // Skip start position (already there)
     this.state = 'moving';
-    this.world.updateAgentState(this.agent.id, 'routine', 'walking');
+    this.world.updateAgentState(this.agent.id, 'routine', this.pendingActivity?.activity || '');
   }
 
   private advanceMovement(): void {
@@ -350,7 +373,7 @@ export class AgentController {
         this.pendingActivity = null;
       } else {
         this.state = 'idle';
-        this.world.updateAgentState(this.agent.id, 'idle', 'arrived');
+        this.world.updateAgentState(this.agent.id, 'idle', '');
       }
       return;
     }
@@ -381,11 +404,6 @@ export class AgentController {
     this.world.updateAgentState(this.agent.id, 'active', activity);
     this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
 
-    let actionCompleted = false; // Track if the intention was fulfilled immediately
-
-    const lowerActivity = activity.toLowerCase();
-    const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick') || lowerActivity.includes('find food') || lowerActivity.includes('get food') || lowerActivity.includes('look for food') || lowerActivity.includes('mushroom') || lowerActivity.includes('wheat') || lowerActivity.includes('wood') || lowerActivity.includes('herb') || lowerActivity.includes('crop') || lowerActivity.includes('vegetable');
-
     // Auto-drop lowest-value non-food item when inventory is full
     if (this.agent.inventory.length >= 30) {
       const droppable = this.agent.inventory
@@ -400,67 +418,17 @@ export class AgentController {
       }
     }
 
-    // Gathering/crafting/building is now handled by the deterministic action resolver
-    // via [ACTION: ...] tags from think(). The agent will attempt the action and
-    // receive structured feedback (success/fail, items gained, XP, etc.)
-    if (isGatherActivity && this.soloActionExecutor) {
-      // Execute the activity text as a deterministic action immediately
+    // Route ALL activities through the action executor — no keyword filtering
+    if (this.soloActionExecutor) {
       void this.soloActionExecutor.executeSocialAction(
         this.agent.id, this.agent.config.name, '', activity, this.cognition
       );
-      actionCompleted = true;
     }
 
-    // Eating and healing now also route through the deterministic action resolver
-    const isFoodActivity = lowerActivity.includes('eat') || lowerActivity.includes('food') || lowerActivity.includes('meal') || lowerActivity.includes('lunch') || lowerActivity.includes('dinner') || lowerActivity.includes('breakfast') || lowerActivity.includes('coffee') || lowerActivity.includes('drink');
-    const isHealingActivity = lowerActivity.includes('heal') || lowerActivity.includes('medicine') || lowerActivity.includes('treat') || lowerActivity.includes('doctor') || lowerActivity.includes('clinic');
+    // Brief pause then move on
+    this.activityTimer = 30;
 
-    if ((isFoodActivity || isHealingActivity) && this.soloActionExecutor && !actionCompleted) {
-      void this.soloActionExecutor.executeSocialAction(
-        this.agent.id, this.agent.config.name, '', activity, this.cognition
-      );
-      actionCompleted = true;
-    }
-
-    // Rest/relax activities — also route through resolver for energy gain
-    const isRestActivity = lowerActivity.includes('rest') || lowerActivity.includes('relax') || lowerActivity.includes('nap') || lowerActivity.includes('sit') || lowerActivity.includes('meditat');
-    if (isRestActivity && this.soloActionExecutor && !actionCompleted) {
-      void this.soloActionExecutor.executeSocialAction(
-        this.agent.id, this.agent.config.name, '', 'rest', this.cognition
-      );
-      actionCompleted = true;
-    }
-
-    // Set timer based on what happened:
-    // - Action completed instantly (gather/eat/heal): brief pause then move on
-    // - Resting/relaxing: long enough to actually restore energy
-    // - Everything else: hold activity long enough to feel real (~15s at 83ms/tick)
-    this.activityTimer = actionCompleted ? 15 : isRestActivity ? 240 : 180;
-
-    // Think — let agent react to what they're doing at this location (skip if API exhausted)
-    const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
-    if (ticksSinceLast >= 360 && !isFoodActivity && !isHealingActivity && !isGatherActivity && this.soloActionExecutor && !this.apiExhausted) {
-      this.lastSoloActionTick = this.world.time.totalMinutes;
-      void this.cognition.think(
-        `doing: ${activity}`,
-        `Location: ${this.currentAreaId ?? 'unknown'}. Time: hour ${this.world.time.hour}.`
-      ).then(output => {
-        this.handleApiSuccess();
-        // Execute any actions from think output
-        if (output.actions) {
-          for (const action of output.actions) {
-            this.soloActionExecutor!.executeSocialAction(
-              this.agent.id, this.agent.config.name, '', action, this.cognition
-            );
-          }
-        }
-        // Update mood if changed
-        if (output.mood) {
-          this.agent.mood = output.mood;
-          this.broadcaster.agentMood(this.agent.id, output.mood);
-        }
-      }).catch((err) => { this.handleApiFailure(err); });
-    }
+    // Think is now handled by thinkThenAct (before) and thinkAfterOutcome (after)
 
     console.log(
       `[Agent] ${this.agent.config.name} starts: ${activity} (${duration} min)`,
@@ -489,11 +457,171 @@ export class AgentController {
       this.state = 'idle';
       this.idleTimer = 0;
       this.conversationCooldown = 120; // ~10 seconds before this agent can talk again
-      this.world.updateAgentState(this.agent.id, 'idle', 'finished conversation');
+      this.world.updateAgentState(this.agent.id, 'idle', '');
+
+      // Think after conversation — process what was discussed (immediate, bypasses cooldown)
+      const area = getAreaAt(this.agent.position);
+      void this.thinkOnEvent(
+        'You just finished a conversation.',
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}.`
+      );
 
       // After a conversation, replan the rest of the day based on new memories
       // This allows agents to react to what was said (e.g. "meet me at the market")
       void this.replanAfterConversation();
+    }
+  }
+
+  /**
+   * Think before acting — the agent considers the next intention and decides what to actually do.
+   * This is the core of the think-act-learn loop: plan sets intentions, think decides actions.
+   */
+  private async thinkThenAct(): Promise<void> {
+    if (this.thinkInProgress || this.apiExhausted) return;
+
+    const intention = this.intentions[this.currentIntentionIndex];
+    if (!intention) {
+      this.followNextIntention();
+      return;
+    }
+
+    // 60 game-minute cooldown between regular thinks
+    const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
+    if (ticksSinceLast < 60) {
+      this.followNextIntention();
+      return;
+    }
+
+    this.thinkInProgress = true;
+    this.lastSoloActionTick = this.world.time.totalMinutes;
+
+    try {
+      const area = getAreaAt(this.agent.position);
+      const nearby = this.world.getNearbyAgents(this.agent.position, 5)
+        .filter(a => a.id !== this.agent.id && a.alive !== false);
+      const nearbyNames = nearby.map(a => a.config.name).join(', ');
+
+      const output = await this.cognition.think(
+        `You're about to: ${intention}`,
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}`
+      );
+      this.handleApiSuccess();
+
+      if (output.mood) {
+        this.agent.mood = output.mood;
+        this.broadcaster.agentMood(this.agent.id, output.mood);
+      }
+      this.broadcaster.agentThought(this.agent.id, output.thought);
+
+      if (output.actions && output.actions.length > 0) {
+        // think() produced specific actions — execute them instead of the raw intention
+        this.currentIntentionIndex++;
+        for (const action of output.actions) {
+          this.soloActionExecutor?.executeSocialAction(
+            this.agent.id, this.agent.config.name, '', action, this.cognition
+          );
+        }
+        const firstAction = output.actions[0];
+        this.state = 'performing';
+        this.currentPerformingActivity = firstAction;
+        this.activityTimer = 30;
+        this.world.updateAgentState(this.agent.id, 'active', '');
+        this.broadcaster.agentAction(this.agent.id, firstAction);
+      } else {
+        // No specific action from think — follow intention as planned
+        this.followNextIntention();
+      }
+    } catch (err) {
+      this.handleApiFailure(err);
+      this.followNextIntention();
+    } finally {
+      this.thinkInProgress = false;
+    }
+  }
+
+  /**
+   * Think after an action completes — process the outcome, update mood, decide next steps.
+   */
+  private async thinkAfterOutcome(): Promise<void> {
+    const activity = this.currentPerformingActivity;
+    this.currentPerformingActivity = '';
+
+    const goIdle = () => {
+      this.state = 'idle';
+      this.idleTimer = 0;
+      const nextIdx = this.currentIntentionIndex;
+      const nextIntention = nextIdx < this.intentions.length ? this.intentions[nextIdx] : null;
+      this.world.updateAgentState(this.agent.id, 'idle', nextIntention || '');
+    };
+
+    if (this.apiExhausted || !this.soloActionExecutor || !activity) {
+      goIdle();
+      return;
+    }
+
+    // 60 game-minute cooldown
+    const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
+    if (ticksSinceLast < 60) {
+      goIdle();
+      return;
+    }
+
+    this.lastSoloActionTick = this.world.time.totalMinutes;
+
+    try {
+      const area = getAreaAt(this.agent.position);
+      const output = await this.cognition.think(
+        `You just finished: ${activity}`,
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}.`
+      );
+      this.handleApiSuccess();
+
+      if (output.mood) {
+        this.agent.mood = output.mood;
+        this.broadcaster.agentMood(this.agent.id, output.mood);
+      }
+      this.broadcaster.agentThought(this.agent.id, output.thought);
+
+      if (output.actions) {
+        for (const action of output.actions) {
+          this.soloActionExecutor!.executeSocialAction(
+            this.agent.id, this.agent.config.name, '', action, this.cognition
+          );
+        }
+      }
+    } catch (err) {
+      this.handleApiFailure(err);
+    }
+
+    goIdle();
+  }
+
+  /**
+   * Event-driven think — immediate, bypasses the 60-minute cooldown.
+   * Used for: witnessing events, vital threshold crossings, conversation endings.
+   */
+  async thinkOnEvent(trigger: string, context: string): Promise<void> {
+    if (this.apiExhausted || this.state === 'sleeping') return;
+
+    try {
+      const output = await this.cognition.think(trigger, context);
+      this.handleApiSuccess();
+
+      if (output.mood) {
+        this.agent.mood = output.mood;
+        this.broadcaster.agentMood(this.agent.id, output.mood);
+      }
+      this.broadcaster.agentThought(this.agent.id, output.thought);
+
+      if (output.actions && this.soloActionExecutor) {
+        for (const action of output.actions) {
+          this.soloActionExecutor.executeSocialAction(
+            this.agent.id, this.agent.config.name, '', action, this.cognition
+          );
+        }
+      }
+    } catch (err) {
+      this.handleApiFailure(err);
     }
   }
 
@@ -517,7 +645,7 @@ export class AgentController {
     this.state = 'planning';
     try {
       const time = this.world.time;
-      this.world.updateAgentState(this.agent.id, 'active', 'thinking about what to do next');
+      this.world.updateAgentState(this.agent.id, 'active', '');
 
       const boardContext = this.world.getBoardSummary();
       const institutionContext = this.buildInstitutionContext();
@@ -554,7 +682,7 @@ export class AgentController {
     this.state = 'reflecting';
 
     console.log(`[Agent] ${this.agent.config.name} is reflecting on the day`);
-    this.world.updateAgentState(this.agent.id, 'active', 'reflecting');
+    this.world.updateAgentState(this.agent.id, 'active', '');
 
     try {
       const result = await this.cognition.reflect();
@@ -568,6 +696,7 @@ export class AgentController {
       // WorldView is updated internally by cognition.reflect() → updateWorldView()
       if (result.updatedWorldView) {
         console.log(`[Agent] ${this.agent.config.name} evolved worldView`);
+        this.broadcaster.agentWorldView(this.agent.id, this.cognition.worldView);
       }
 
       // Use mood from LLM response, fall back to keyword parsing
@@ -686,6 +815,35 @@ export class AgentController {
       return;
     }
 
+    // Vital threshold think triggers — immediate, bypasses cooldown
+    const hungerBand = v.hunger >= 80 ? 2 : v.hunger >= 50 ? 1 : 0;
+    const energyBand = v.energy <= 10 ? 2 : v.energy <= 30 ? 1 : 0;
+    const healthBand = v.health <= 25 ? 2 : v.health <= 50 ? 1 : 0;
+
+    if (hungerBand > this.lastHungerBand) {
+      const foodCount = this.agent.inventory.filter(i => i.type === 'food').length;
+      void this.thinkOnEvent(
+        `You're getting ${hungerBand === 2 ? 'very hungry — your health is starting to drop' : 'hungry'}.`,
+        `Hunger: ${Math.round(v.hunger)}/100. Food in inventory: ${foodCount} items.`
+      );
+    }
+    if (energyBand > this.lastEnergyBand) {
+      void this.thinkOnEvent(
+        `You're ${energyBand === 2 ? 'completely exhausted' : 'getting tired'}.`,
+        `Energy: ${Math.round(v.energy)}/100.`
+      );
+    }
+    if (healthBand > this.lastHealthBand) {
+      void this.thinkOnEvent(
+        `You're ${healthBand === 2 ? 'critically injured' : 'hurt and need care'}.`,
+        `Health: ${Math.round(v.health)}/100.`
+      );
+    }
+
+    this.lastHungerBand = hungerBand;
+    this.lastEnergyBand = energyBand;
+    this.lastHealthBand = healthBand;
+
     // Broadcast vitals every 30 ticks
     if (this.world.time.totalMinutes % 30 === 0) {
       this.broadcaster.agentVitals(this.agent.id, v);
@@ -796,7 +954,7 @@ export class AgentController {
     this.state = 'sleeping';
     this.intentions = [];
     this.currentIntentionIndex = 0;
-    this.world.updateAgentState(this.agent.id, 'sleeping', 'sleeping');
+    this.world.updateAgentState(this.agent.id, 'sleeping', '');
     this.broadcaster.agentAction(this.agent.id, 'sleeping', '\u{1F634}');
     console.log(`[Agent] ${this.agent.config.name} goes to sleep`);
 
@@ -864,7 +1022,7 @@ export class AgentController {
     this.survivalOverrideActive = true;
     this.planningInProgress = true;
     this.state = 'planning';
-    this.world.updateAgentState(this.agent.id, 'active', 'looking for food');
+    this.world.updateAgentState(this.agent.id, 'active', '');
 
     // Step 1: Eat from inventory immediately if we have food — no walking needed
     const foodItem = this.agent.inventory.find(i => i.type === 'food');
@@ -929,7 +1087,7 @@ export class AgentController {
     this.survivalOverrideActive = true;
     this.planningInProgress = true;
     this.state = 'planning';
-    this.world.updateAgentState(this.agent.id, 'active', 'seeking medical help');
+    this.world.updateAgentState(this.agent.id, 'active', '');
 
     try {
       // LLM replan (skip if API exhausted)
@@ -980,14 +1138,14 @@ export class AgentController {
     // HUNGER ALWAYS CHECKS FIRST — starvation is the #1 killer.
     // Hospital can't fix hunger. Don't send a starving agent to a cardiologist.
 
-    // Emergency hunger: force food-seeking
-    if (d.survival > 75 || v.hunger >= 90) {
+    // Emergency hunger: force food-seeking (actual starvation risk only)
+    if (v.hunger >= 95) {
       void this.forceFoodPlan();
       return true;
     }
 
     // Urgent hunger: insert food if next plan item isn't food-related
-    if (d.survival > 55 || v.hunger >= 75) {
+    if (v.hunger >= 90) {
       if (this.currentIntentionIndex < this.intentions.length) {
         const nextItem = this.intentions[this.currentIntentionIndex];
         if (!this.isFoodActivity(nextItem)) {
