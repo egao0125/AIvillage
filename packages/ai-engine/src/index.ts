@@ -1087,6 +1087,44 @@ Output a JSON array ONLY, no other text:
     const matches = text.matchAll(/\[ACTION:\s*(.+?)\]/gi);
     return Array.from(matches, m => m[1].trim());
   }
+
+  /**
+   * Strip narration from LLM talk() output, keeping only spoken dialogue.
+   * Removes sentences that describe actions/thoughts rather than speech.
+   * Used to clean conversation history so subsequent turns don't copy the narrative style.
+   */
+  static stripNarration(text: string): string {
+    // Split into sentences (handling periods, question marks, exclamation points)
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    const dialogue: string[] = [];
+
+    for (const sentence of sentences) {
+      const trimmed = sentence.trim();
+      if (!trimmed) continue;
+
+      // Skip obvious narration patterns:
+      // "I stop walking." "I look at them." "I lean against the wall." "My voice cracks."
+      // "I'm still standing at the bar." "I turn around slow."
+      if (/^I\s+(?:stop|look|lean|push|pull|turn|shift|hear|stand|walk|sit|reach|take|grab|hold|notice|watch|feel|pause|move|step|see|find|put|set|shake|nod|close|open|swallow|breathe|inhale|exhale|stare|glance|blink)\b/i.test(trimmed)) {
+        continue;
+      }
+      // "My voice cracks." "My hands shake." "My breath comes short."
+      if (/^My\s+(?:voice|breath|hands?|legs?|chest|eyes?|head|body|stomach|heart|shoulders?|back|throat|jaw|fingers?|arms?|feet|knees?)\b/i.test(trimmed)) {
+        continue;
+      }
+      // "I'm standing/sitting/leaning/still standing at..."
+      if (/^I'?m\s+(?:still\s+)?(?:standing|sitting|leaning|walking|looking|holding|watching|shaking|breathing|kneeling|crouching|lying)\b/i.test(trimmed)) {
+        continue;
+      }
+      // Skip italicized stage directions
+      if (/^\*[^*]+\*$/.test(trimmed)) continue;
+
+      dialogue.push(trimmed);
+    }
+
+    // If stripping removed everything, return original (better than empty)
+    return dialogue.length > 0 ? dialogue.join(' ') : text;
+  }
 }
 
 export { AgentCognition as default };
