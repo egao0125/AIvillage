@@ -514,19 +514,11 @@ export class AgentController {
       this.broadcaster.agentThought(this.agent.id, output.thought);
 
       if (output.actions && output.actions.length > 0) {
-        // think() produced specific actions — execute them instead of the raw intention
-        this.currentIntentionIndex++;
-        for (const action of output.actions) {
-          this.soloActionExecutor?.executeSocialAction(
-            this.agent.id, this.agent.config.name, '', action, this.cognition
-          );
-        }
-        const firstAction = output.actions[0];
-        this.state = 'performing';
-        this.currentPerformingActivity = firstAction;
-        this.activityTimer = 30;
-        this.world.updateAgentState(this.agent.id, 'active', '');
-        this.broadcaster.agentAction(this.agent.id, firstAction);
+        // think() produced specific actions — replace current intention and route through
+        // followNextIntention so the agent properly moves to the right location.
+        this.intentions.splice(this.currentIntentionIndex, 1, ...output.actions);
+        console.log(`[Agent] ${this.agent.config.name} thinkThenAct replaced intention with: ${output.actions.join(', ')}`);
+        this.followNextIntention();
       } else {
         // No specific action from think — follow intention as planned
         this.followNextIntention();
@@ -582,12 +574,14 @@ export class AgentController {
       }
       this.broadcaster.agentThought(this.agent.id, output.thought);
 
-      if (output.actions) {
-        for (const action of output.actions) {
-          this.soloActionExecutor!.executeSocialAction(
-            this.agent.id, this.agent.config.name, '', action, this.cognition
-          );
-        }
+      if (output.actions && output.actions.length > 0) {
+        // Insert actions as new intentions so the agent properly moves to the right location.
+        // Firing in-place fails when the action needs a different area (e.g. "gather mushrooms" while at park).
+        this.intentions.splice(this.currentIntentionIndex, 0, ...output.actions);
+        console.log(`[Agent] ${this.agent.config.name} thinkAfterOutcome inserted ${output.actions.length} new intentions: ${output.actions.join(', ')}`);
+        this.state = 'idle';
+        this.idleTimer = 25; // trigger followNextIntention quickly
+        return;
       }
     } catch (err) {
       this.handleApiFailure(err);
