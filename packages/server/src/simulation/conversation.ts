@@ -794,7 +794,7 @@ export class ConversationManager {
     if (outcome.type === 'post' && outcome.success) {
       const messageMatch = outcome.description.match(/"(.+)"/);
       if (messageMatch) {
-        this.world.addBoardPost({
+        const post = {
           id: crypto.randomUUID(),
           authorId: actorId,
           authorName: actorName,
@@ -802,7 +802,9 @@ export class ConversationManager {
           content: messageMatch[1],
           timestamp: Date.now(),
           day: this.world.time.day,
-        });
+        };
+        this.world.addBoardPost(post);
+        this.broadcaster.boardPost(post);
         this.broadcaster.agentAction(actorId, `posted: "${messageMatch[1].slice(0, 60)}"`, '📋');
       }
     }

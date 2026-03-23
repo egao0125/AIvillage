@@ -228,7 +228,6 @@ export class SimulationEngine {
     agent.institutionIds = [];
 
     this.world.addAgent(agent);
-    this.broadcaster.agentSpawn(agent);
 
     // Create cognition stack with per-agent API key (falls back to global env)
     const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -243,6 +242,10 @@ export class SimulationEngine {
     const startingWorldView = buildStartingWorldView(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingWorldView);
     this.cognitions.set(id, cognition);
+
+    // Broadcast spawn AFTER cognition is set so getSnapshot() can enrich with worldView
+    agent.worldView = cognition.worldView;
+    this.broadcaster.agentSpawn(agent);
 
     // Seed core identity memories — these survive pruning and get boosted in retrieval
     void cognition.addMemory({
