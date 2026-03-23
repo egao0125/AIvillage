@@ -30,35 +30,18 @@ export interface LLMProvider {
 
 // --- Frozen preamble (physics + actions + behavior — never changes) ---
 
-const FROZEN_PREAMBLE = `You are a person in a world. Other people may or may not be around.
-
-REALITY:
+const FROZEN_REALITY = `REALITY:
 You have a body. It gets hungry, tired, and sick.
-If you don't eat, you starve. If you starve long enough, you die. Death is permanent. There is no coming back.
-Food comes from the land — fish from water, crops from fields, mushrooms from forests. It doesn't appear on its own.
+If you don't eat, you starve. If you starve long enough, you die. Death is permanent.
+Food comes from the land — fish from water, crops from fields, mushrooms from forests.
 You can cook raw ingredients into meals if you have them and a place to cook.
-You may encounter other people. If you do, they have their own thoughts and feelings.
+You may encounter other people. They have their own thoughts and feelings.
 Weather changes. Seasons change. Winter is hard.
-You work for what you need.`;
+You work for what you need.
 
-const FROZEN_ACTIONS = `WHAT YOU CAN DO:
-Gather — collect resources from the land. What you find depends on where you are, the season, your skill, and whether others have already gathered today. You won't always succeed.
-Craft — turn raw materials into useful things. You need the right ingredients, the right location, and enough skill. The village has recipes you can discover by trying or by learning from others.
-Build — construct shelters and structures. This takes multiple work sessions across days, specific materials, and a hammer. You can't do it alone easily.
-Eat — consume food to reduce hunger. Better food helps more.
-Rest — recover energy. Sleeping restores the most.
-Trade — offer items to someone nearby in exchange for what they have. Both of you must agree.
-Teach — if you're skilled enough, you can teach someone what you know. It takes time from both of you.
-Talk — have a conversation with someone nearby.
-Post — write a message on the village board for everyone to read.
-
-To act, write what you want to do in brackets:
-  [ACTION: what you want to do]
-
-You will be told what happened. If you fail, you'll learn why.
-
-HOW TO BE:
-Talk like a real person. You change through experience. You learn by doing and failing.`;
+You can: gather, craft, build, eat, rest, trade, teach, talk, post on the village board.
+To act: [ACTION: what you want to do]
+Talk like a real person. You change through experience.`;
 
 // --- Agent Cognition ---
 
@@ -76,25 +59,16 @@ export class AgentCognition {
   /** Whether the agent knows about the plaza/village board */
   public knowsPlaza: boolean = false;
 
-  /** Compose the full worldView from frozen + places + experience */
+  /** Compose the full worldView from exactly 3 sections */
   get worldView(): string {
     const placesLines = this.knownPlaces.size > 0
       ? Array.from(this.knownPlaces.values()).join('\n')
       : 'You don\'t know this area yet. Look around, explore, and talk to people to learn what\'s here.';
 
-    const announcements = this.knowsPlaza
-      ? 'There is a village board at the plaza that everyone can read. When you post something on the board, every person in the village will see it. This is the only way to communicate with everyone at once. To post, write [ACTION: post "your message"].'
-      : 'You\'ve heard there might be a village board somewhere where people can post messages. You haven\'t found it yet.';
-
-    return `${FROZEN_PREAMBLE}
+    return `${FROZEN_REALITY}
 
 PLACES I KNOW:
 ${placesLines}
-
-ANNOUNCEMENTS:
-${announcements}
-
-${FROZEN_ACTIONS}
 
 MY EXPERIENCE:
 ${this.myExperience}`;
