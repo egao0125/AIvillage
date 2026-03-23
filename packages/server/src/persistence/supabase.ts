@@ -125,11 +125,12 @@ export class SupabasePersistence {
     controllers: Map<string, AgentController>,
     apiKeys?: Map<string, { apiKey: string; model: string }>,
   ): Promise<void> {
+    // Agents must be saved before controllers (FK constraint: agent_controllers → agents)
     await Promise.all([
       this.saveWorldState(world),
       this.saveAgents(world.agents),
-      this.saveAgentControllers(controllers, apiKeys),
     ]);
+    await this.saveAgentControllers(controllers, apiKeys);
     console.log(`[Persistence] Saved: ${world.agents.size} agents, ${controllers.size} controllers`);
   }
 

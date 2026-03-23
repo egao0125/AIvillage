@@ -56,7 +56,7 @@ export class SupabaseMemoryStore implements MemoryStore {
     memory.embedding = embedder.embed(memory.content);
 
     try {
-      await this.supabase.from('memories').upsert({
+      const { error } = await this.supabase.from('memories').upsert({
         id: memory.id,
         agent_id: memory.agentId,
         type: memory.type,
@@ -68,6 +68,9 @@ export class SupabaseMemoryStore implements MemoryStore {
         emotional_valence: memory.emotionalValence ?? 0,
         is_core: memory.isCore ?? false,
       });
+      if (error) {
+        console.error(`[SupabaseMemoryStore] add() error for ${memory.agentId}: ${error.message}`);
+      }
     } catch (err) {
       console.error('[SupabaseMemoryStore] add() failed:', err);
       // Don't throw — memory failure shouldn't crash the simulation

@@ -443,22 +443,12 @@ Return a JSON array of strings ONLY:
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-        // Filter out vague non-actionable intentions
-        const vaguePatterns = /\b(daily routine|figure out|find out|wander|investigate|assess|understand what|observe what|explore the village|look around)\b/i;
-        const filtered = parsed.filter((s: string) => !vaguePatterns.test(s));
-        // Ensure minimum 4 intentions — pad with useful defaults if needed
-        const defaults = ['gather food at farm', 'gather wood at forest', 'talk to someone at plaza', 'gather fish at lake', 'gather herbs at garden', 'rest at park'];
-        while (filtered.length < 4) {
-          const next = defaults.find(d => !filtered.includes(d));
-          if (next) { filtered.push(next); defaults.splice(defaults.indexOf(next), 1); }
-          else break;
-        }
-        return filtered;
+        return parsed;
       }
     } catch {}
 
-    // Fallback on parse error — concrete actions, not vague
-    return ['gather food at farm', 'gather wood at forest', 'talk to someone at plaza', 'rest at park'];
+    // Fallback on parse error — let the agent figure it out via think()
+    return [];
   }
 
   /**

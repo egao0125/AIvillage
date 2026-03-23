@@ -248,26 +248,6 @@ export class SimulationEngine {
     agent.worldView = cognition.worldView;
     this.broadcaster.agentSpawn(agent);
 
-    // Seed core identity memories — these survive pruning and get boosted in retrieval
-    void cognition.addMemory({
-      id: crypto.randomUUID(), agentId: id, type: 'reflection',
-      content: `I am ${config.name}. ${config.backstory}`,
-      importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
-    });
-    if (config.goal) {
-      void cognition.addMemory({
-        id: crypto.randomUUID(), agentId: id, type: 'reflection',
-        content: `My goal: ${config.goal}`,
-        importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
-      });
-    }
-    // Seed discovery memory — reinforces that the agent doesn't know the full map
-    void cognition.addMemory({
-      id: crypto.randomUUID(), agentId: id, type: 'observation',
-      content: `I just arrived at the ${spawnArea}. I should explore to discover what else is in this village, or ask someone who's been here longer.`,
-      importance: 5, timestamp: Date.now(), relatedAgentIds: [],
-    });
-
     // Create controller (homeArea defaults to 'plaza' — just a fallback sleeping spot)
     const controller = new AgentController(
       agent,
@@ -286,11 +266,36 @@ export class SimulationEngine {
       `[Engine] Agent created: ${config.name}${config.occupation ? ' (' + config.occupation + ')' : ''} at ${spawnArea}`,
     );
 
-    // Save immediately so agents survive restarts
+    // Save agent to Supabase FIRST, then seed memories (FK: memories.agent_id → agents.id)
+    const seedMemories = () => {
+      void cognition.addMemory({
+        id: crypto.randomUUID(), agentId: id, type: 'reflection',
+        content: `I am ${config.name}. ${config.backstory}`,
+        importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+      });
+      if (config.goal) {
+        void cognition.addMemory({
+          id: crypto.randomUUID(), agentId: id, type: 'reflection',
+          content: `My goal: ${config.goal}`,
+          importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+        });
+      }
+      void cognition.addMemory({
+        id: crypto.randomUUID(), agentId: id, type: 'observation',
+        content: `I just arrived at the ${spawnArea}. I should explore to discover what else is in this village.`,
+        importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+      });
+    };
+
     if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after addAgent failed:', err)
-      );
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
+        .then(() => seedMemories())
+        .catch(err => {
+          console.error('[Persistence] Save after addAgent failed:', err);
+          seedMemories(); // still seed in-memory even if DB fails
+        });
+    } else {
+      seedMemories();
     }
 
     return agent;
