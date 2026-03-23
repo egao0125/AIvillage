@@ -1,6 +1,6 @@
 import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldSnapshot } from '@ai-village/shared';
 import type { TradeProposal } from '@ai-village/ai-engine';
-import { RESOURCES } from '@ai-village/ai-engine';
+import { RESOURCES, SKILLS, BUILDINGS } from '@ai-village/ai-engine';
 import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
 
 export class World {
@@ -104,6 +104,16 @@ export class World {
 
   getAreaAt(pos: Position): MapArea | undefined {
     return mapGetAreaAt(pos);
+  }
+
+  getAgentsInArea(areaId: string): Agent[] {
+    const result: Agent[] = [];
+    for (const agent of this.agents.values()) {
+      if (agent.alive === false) continue;
+      const area = this.getAreaAt(agent.position);
+      if (area?.id === areaId) result.push(agent);
+    }
+    return result;
   }
 
   /**
@@ -237,10 +247,26 @@ export class World {
 
   // --- Items ---
 
+  getMaxInventory(agentId: string): number {
+    const BASE_INVENTORY = 30;
+    const agent = this.agents.get(agentId);
+    if (!agent) return BASE_INVENTORY;
+    const area = this.getAreaAt(agent.position);
+    if (!area) return BASE_INVENTORY;
+    let bonus = 0;
+    for (const b of this.getBuildingsAt(area.id)) {
+      if (!b.defId || !BUILDINGS[b.defId]) continue;
+      const bDef = BUILDINGS[b.defId];
+      const storageEffect = bDef.effects?.find((e: any) => e.type === 'storage_bonus');
+      if (storageEffect) bonus = Math.max(bonus, storageEffect.value);
+    }
+    return BASE_INVENTORY + Math.round(bonus * 10);
+  }
+
   addItem(item: Item): void {
-    const MAX_INVENTORY = 30;
+    const maxInv = this.getMaxInventory(item.ownerId);
     const owner = this.agents.get(item.ownerId);
-    if (owner && owner.inventory.length >= MAX_INVENTORY) return; // inventory full
+    if (owner && owner.inventory.length >= maxInv) return; // inventory full
     if (!item.createdAt) item.createdAt = this.time.totalMinutes;
     this.items.set(item.id, item);
     if (owner) {
@@ -259,13 +285,12 @@ export class World {
   }
 
   transferItem(itemId: string, fromId: string, toId: string): void {
-    const MAX_INVENTORY = 30;
     const item = this.items.get(itemId);
     if (!item) return;
     const from = this.agents.get(fromId);
     const to = this.agents.get(toId);
     if (!from || !to) return;
-    if (to.inventory.length >= MAX_INVENTORY) return; // receiver full
+    if (to.inventory.length >= this.getMaxInventory(toId)) return; // receiver full
 
     from.inventory = from.inventory.filter(i => i.id !== itemId);
     item.ownerId = toId;
@@ -273,10 +298,10 @@ export class World {
   }
 
   gatherMaterial(agentId: string, areaId: string): Item | null {
-    const MAX_INVENTORY = 30;
+    const maxInv = this.getMaxInventory(agentId);
     const agent = this.agents.get(agentId);
-    if (agent && agent.inventory.length >= MAX_INVENTORY) {
-      console.log(`[World] ${agent.config.name} can't gather — inventory full (${agent.inventory.length}/${MAX_INVENTORY})`);
+    if (agent && agent.inventory.length >= maxInv) {
+      console.log(`[World] ${agent.config.name} can't gather — inventory full (${agent.inventory.length}/${maxInv})`);
       return null;
     }
 
@@ -448,7 +473,8 @@ export class World {
       agent.skills.push(skill);
     }
 
-    const XP_PER_LEVEL = 50;
+    const skillDef = SKILLS[skillName] ?? SKILLS[skillName.toLowerCase()];
+    const XP_PER_LEVEL = skillDef?.xpPerLevel ?? 50;
     const MAX_LEVEL = 10;
     skill.xp = (skill.xp ?? 0) + xpGained;
 
