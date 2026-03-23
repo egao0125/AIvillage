@@ -545,7 +545,10 @@ Your turn to speak:`;
   async reflect(): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string }> {
     const recentMemories = await this.memory.getRecent(this.agent.id, 20);
 
-    if (recentMemories.length < 5) return { reflection: "", mood: "neutral" };
+    if (recentMemories.length < 3) {
+      console.log(`[Reflect] ${this.agent.config.name} skipped — only ${recentMemories.length} memories`);
+      return { reflection: "", mood: "neutral" };
+    }
 
     const systemPrompt = `${this.worldView}
 

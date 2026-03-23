@@ -120,6 +120,14 @@ export class AgentController {
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
 
+    // Universal sleep check — fires regardless of current state
+    if (this.state !== 'sleeping' && this.state !== 'reflecting' && this.state !== 'waking') {
+      if (this.shouldSleep(time)) {
+        void this.doReflect();
+        return;
+      }
+    }
+
     switch (this.state) {
       case 'sleeping': {
         // Check if it's time to wake up
@@ -184,10 +192,6 @@ export class AgentController {
           } else {
             this.followNextIntention();
           }
-        }
-        // Check if it's time to sleep
-        if (this.shouldSleep(time)) {
-          void this.doReflect();
         }
         break;
       }
@@ -832,12 +836,12 @@ export class AgentController {
   }
 
   private shouldSleep(time: GameTime): boolean {
-    // Handle sleep hours that cross midnight (e.g., Hana sleeps at 1 AM)
+    // Use range check instead of exact-tick match so agents don't miss the window
     if (this.sleepHour < this.wakeHour) {
-      // Crosses midnight: sleep if hour >= sleepHour AND hour < wakeHour
-      return time.hour === this.sleepHour && time.minute === 0;
+      // Crosses midnight: sleep if hour >= sleepHour OR hour < wakeHour
+      return time.hour >= this.sleepHour || time.hour < this.wakeHour;
     }
-    return time.hour === this.sleepHour && time.minute === 0;
+    return time.hour >= this.sleepHour;
   }
 
   // --- Drive-Based Action Filtering ---
