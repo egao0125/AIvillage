@@ -1,5 +1,5 @@
 import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
-import { type AgentCognition, parseIntent, executeAction, RESOURCES, BUILDINGS, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
+import { AgentCognition, parseIntent, executeAction, RESOURCES, BUILDINGS, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
 import { AREA_DESCRIPTIONS } from '../map/starting-knowledge.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -207,20 +207,24 @@ export class ConversationManager {
       // Strip the ACTION tag from the displayed message
       const displayResponse = response.replace(/\s*\[ACTION:\s*.+?\]/gi, '').trim();
 
-      // Add message to conversation
+      // Strip narration from conversation history so subsequent turns don't copy narrative style.
+      // The display/broadcast keeps the raw text; only the history fed to the LLM is cleaned.
+      const dialogueOnly = AgentCognition.stripNarration(displayResponse || response);
+
+      // Add cleaned message to conversation (this becomes history for subsequent turns)
       const message = {
         agentId: speakerId,
         agentName: speakerAgent.config.name,
-        content: displayResponse || response,
+        content: dialogueOnly,
         timestamp: Date.now(),
       };
       active.conversation.messages.push(message);
 
-      // Broadcast (clean version without ACTION tags)
+      // Broadcast cleaned dialogue
       this.broadcaster.agentSpeak(
         speakerId,
         speakerAgent.config.name,
-        displayResponse || response,
+        dialogueOnly,
         conversationId,
       );
 
