@@ -628,7 +628,7 @@ export class AgentController {
       const area = this.world.getAreaAt(this.agent.position);
       const buildings = area ? this.world.getBuildingsAt(area.id) : [];
 
-      // Cold damage — mitigated by shelter
+      // Cold damage — mitigated by shelter (degraded when over capacity)
       if (seasonDef.coldDamagePerHour > 0) {
         let bestColdProtection = 0;
         for (const b of buildings) {
@@ -636,7 +636,16 @@ export class AgentController {
             const bDef = BUILDINGS[b.defId];
             const coldEffect = bDef.effects?.find((e: any) => e.type === 'cold_protection');
             if (coldEffect) {
-              bestColdProtection = Math.max(bestColdProtection, coldEffect.value);
+              let protection = coldEffect.value;
+              // Enforce shelter capacity — overcrowding degrades protection
+              if (area) {
+                const agentsHereCount = this.world.getAgentsInArea(area.id).length;
+                if (agentsHereCount > bDef.maxCapacity) {
+                  const capacityRatio = bDef.maxCapacity / agentsHereCount;
+                  protection = coldEffect.value * capacityRatio;
+                }
+              }
+              bestColdProtection = Math.max(bestColdProtection, protection);
             }
           } else if (b.effects.includes('shelter')) {
             bestColdProtection = Math.max(bestColdProtection, 0.5);

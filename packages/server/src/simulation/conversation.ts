@@ -157,6 +157,26 @@ export class ConversationManager {
 
       const agenda = active.agendas.get(speakerId);
 
+      // Build trade context — pending trades involving the speaker
+      const speakerTrades = Array.from(this.world.pendingTrades.values())
+        .filter(t => t.status === 'pending' && (t.fromAgentId === speakerId || t.toAgentId === speakerId));
+      let tradeContext: string | undefined;
+      if (speakerTrades.length > 0) {
+        const tradeLines: string[] = [];
+        for (const trade of speakerTrades) {
+          const offerStr = trade.offering.map(i => `${i.qty} ${i.resource}`).join(', ');
+          const requestStr = trade.requesting.map(i => `${i.qty} ${i.resource}`).join(', ');
+          if (trade.fromAgentId === speakerId) {
+            const toName = this.world.getAgent(trade.toAgentId)?.config.name ?? 'someone';
+            tradeLines.push(`- You offered ${toName} ${offerStr} for their ${requestStr}. Waiting for response.`);
+          } else {
+            const fromName = this.world.getAgent(trade.fromAgentId)?.config.name ?? 'someone';
+            tradeLines.push(`- ${fromName} offers you ${offerStr} for your ${requestStr}. Say [ACTION: accept trade] or [ACTION: reject trade].`);
+          }
+        }
+        tradeContext = tradeLines.join('\n');
+      }
+
       // Hint the LLM to wrap up when conversation is getting long
       const turnsLeft = active.maxTurns - active.turnCount;
       if (turnsLeft <= 4 && active.turnCount >= 4) {
@@ -165,7 +185,7 @@ export class ConversationManager {
 
       let response: string;
       try {
-        response = await cognition.talk(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext, agenda);
+        response = await cognition.talk(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext, agenda, tradeContext);
       } catch (err) {
         // No fallback dialogue — end conversation when LLM fails
         console.error(`[Conversation] LLM failed for ${speakerAgent.config.name}:`, err);
@@ -514,8 +534,29 @@ export class ConversationManager {
       this.broadcaster.agentInventory(actorId, actor.inventory);
     }
 
-    // --- Items gained ---
+    // --- Items gained (apply gather_bonus from buildings) ---
     if (outcome.itemsGained) {
+      if (outcome.type === 'gather') {
+        const area = this.world.getAreaAt(actor.position);
+        if (area) {
+          let gatherBonus = 0;
+          for (const b of this.world.getBuildingsAt(area.id)) {
+            if (!b.defId || !BUILDINGS[b.defId]) continue;
+            const bDef = BUILDINGS[b.defId];
+            const gatherEffect = bDef.effects?.find((e: any) => e.type === 'gather_bonus');
+            if (gatherEffect) gatherBonus = Math.max(gatherBonus, gatherEffect.value);
+          }
+          if (gatherBonus > 0) {
+            for (const gained of outcome.itemsGained) {
+              const extra = Math.floor(gained.qty * gatherBonus);
+              if (extra > 0) {
+                gained.qty += extra;
+                console.log(`[Building] gather_bonus +${extra} ${gained.resource} (${gatherBonus} bonus)`);
+              }
+            }
+          }
+        }
+      }
       for (const gained of outcome.itemsGained) {
         const resDef = RESOURCES[gained.resource];
         for (let i = 0; i < gained.qty; i++) {
@@ -553,8 +594,26 @@ export class ConversationManager {
       }
     }
 
-    // --- Skill XP ---
+    // --- Skill XP (apply craft_speed bonus from buildings as extra XP) ---
     if (outcome.skillXpGained) {
+      if (outcome.type === 'craft') {
+        const area = this.world.getAreaAt(actor.position);
+        if (area) {
+          let craftSpeed = 1;
+          for (const b of this.world.getBuildingsAt(area.id)) {
+            if (!b.defId || !BUILDINGS[b.defId]) continue;
+            const bDef = BUILDINGS[b.defId];
+            const craftEffect = bDef.effects?.find((e: any) => e.type === 'craft_speed');
+            if (craftEffect) craftSpeed = Math.min(craftSpeed, craftEffect.value);
+          }
+          if (craftSpeed < 1) {
+            const bonus = 1 - craftSpeed; // e.g. 0.7 → 30% bonus
+            const extraXp = Math.round(outcome.skillXpGained.xp * bonus);
+            outcome.skillXpGained.xp += extraXp;
+            console.log(`[Building] craft_speed bonus +${extraXp} XP (${Math.round(bonus * 100)}% faster)`);
+          }
+        }
+      }
       this.world.addSkillXP(actorId, outcome.skillXpGained.skill, outcome.skillXpGained.xp);
       const updatedSkill = actor.skills.find(s => s.name === outcome.skillXpGained!.skill);
       if (updatedSkill) this.broadcaster.agentSkill(actorId, updatedSkill);

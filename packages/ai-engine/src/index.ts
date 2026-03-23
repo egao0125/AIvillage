@@ -472,7 +472,7 @@ Return a JSON array of strings ONLY:
    * - Agenda param passed from outside (from think() output), not generated internally
    * - Preserves prompt sanitization and action instruction block
    */
-  async talk(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string, agenda?: string): Promise<string> {
+  async talk(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string, agenda?: string, tradeContext?: string): Promise<string> {
     const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
     const memories = await this.memory.retrieve(this.agent.id, memoryQuery, 10);
 
@@ -483,6 +483,9 @@ Return a JSON array of strings ONLY:
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
     const artifactSection = artifactContext ? `\n\nVILLAGE MEDIA (recent publications):\n${artifactContext}` : '';
     const secretsSection = secretsContext ? `\n\nSECRETS YOU KNOW (share strategically, or use as leverage):\n${secretsContext}` : '';
+    const tradeSection = tradeContext
+      ? `\n\nPENDING TRADES:\n${tradeContext}`
+      : '';
 
     // Build "what you need" hint from vitals/inventory
     const needs: string[] = [];
@@ -499,7 +502,7 @@ Return a JSON array of strings ONLY:
 
 ${this.buildIdentityBlock()}
 
-You are in a conversation with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
+You are in a conversation with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}${tradeSection}
 
 ${this.buildContextBlock()}${needsLine}
 
