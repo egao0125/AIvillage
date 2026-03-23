@@ -113,7 +113,7 @@ export function buildStartingWorldViewParts(spawnAreaId: string): {
     ? knownNames.join(' and ')
     : knownNames.slice(0, -1).join(', ') + ', and ' + knownNames[knownNames.length - 1];
 
-  const myExperience = `I just arrived. I can see ${knownList} from here. I don't know what else is out there — I'll have to explore or ask someone.`;
+  const myExperience = `I just arrived. I can see ${knownList} from here. I should explore to find out what else is around.`;
 
   return { knownPlaces, myExperience, knowsPlaza };
 }
