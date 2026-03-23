@@ -5,6 +5,7 @@
 // ============================================================================
 
 import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput } from "@ai-village/shared";
+import { GATHERING } from './world-rules.js';
 
 // --- World Rules + Action Resolver (deterministic physics) ---
 export * from './world-rules.js';
@@ -491,12 +492,59 @@ Return a JSON array of strings ONLY.`;
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-        return parsed;
+        return this.validatePlanIntentions(parsed);
       }
     } catch {}
 
     // Fallback on parse error — let the agent figure it out via think()
     return [];
+  }
+
+  /**
+   * Post-process plan intentions: if an intention mentions gathering a resource
+   * but the agent doesn't know any location where that resource spawns,
+   * rewrite the intention to explore/ask instead.
+   */
+  private validatePlanIntentions(intentions: string[]): string[] {
+    // Build resource → location mapping from GATHERING rules
+    const resourceLocations = new Map<string, string[]>();
+    for (const g of GATHERING) {
+      for (const y of g.yields) {
+        const locs = resourceLocations.get(y.resource) || [];
+        if (!locs.includes(g.location)) locs.push(g.location);
+        resourceLocations.set(y.resource, locs);
+      }
+    }
+
+    const knownAreaKeys = new Set(this.knownPlaces.keys());
+
+    return intentions.map(intention => {
+      const lower = intention.toLowerCase();
+      // Check if this intention involves gathering
+      const gatherMatch = lower.match(/\b(?:gather|harvest|collect|pick|forage|fish|chop|dig)\s+(\w+)/);
+      if (!gatherMatch) return intention;
+
+      const resource = gatherMatch[1];
+      const locations = resourceLocations.get(resource);
+
+      if (!locations) return intention; // unknown resource, let it fail naturally
+
+      // Check if agent knows any location where this resource spawns
+      const knownLocations = locations.filter(loc => knownAreaKeys.has(loc));
+
+      if (knownLocations.length > 0) {
+        // Agent knows where to go — check if the intention already mentions the location
+        const mentionsLocation = knownLocations.some(loc => lower.includes(loc));
+        if (!mentionsLocation) {
+          // Add location hint
+          return `${intention} (at the ${knownLocations[0]})`;
+        }
+        return intention;
+      }
+
+      // Agent doesn't know where this resource is — rewrite
+      return `Find where ${resource} grows — explore new areas or ask someone`;
+    });
   }
 
   /**
