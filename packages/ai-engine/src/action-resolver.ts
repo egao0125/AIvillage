@@ -508,11 +508,25 @@ function executeGather(intent: ParsedIntent, agent: AgentState, world: WorldStat
   }
 
   if (!gatherDef) {
+    let remediation: string;
+    if (intent.resource) {
+      // Find all locations where this specific resource spawns
+      const sources = GATHERING.filter(g => g.yields.some(y => y.resource === intent.resource));
+      if (sources.length > 0) {
+        const locations = [...new Set(sources.map(s => s.location))];
+        remediation = `${intent.resource} can be found at: ${locations.map(l => `the ${l}`).join(', ')}.`;
+      } else {
+        remediation = `${intent.resource} isn't a gatherable resource. Try crafting it instead, or check available resources at: farm (wheat, vegetables), lake (fish, clay, stone), forest (wood, mushrooms), garden (herbs).`;
+      }
+    } else {
+      // Generic - list what's available at nearby locations
+      remediation = 'Try the farm for crops, the lake for fish/clay/stone, the forest for wood/mushrooms, or the garden for herbs.';
+    }
     return {
       ...base, success: false,
       description: `There's nothing to gather ${intent.resource ? `(${intent.resource}) ` : ''}here at ${agent.location}.`,
       reason: 'wrong location',
-      remediation: 'Try the farm for crops, the lake for fish/clay/stone, the forest for wood/mushrooms, or the garden for herbs.',
+      remediation,
       energySpent: 0, durationMinutes: 0,
     } as ActionOutcome;
   }

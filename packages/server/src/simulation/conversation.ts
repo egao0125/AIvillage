@@ -15,6 +15,7 @@ interface ActiveConversation {
 
 export class ConversationManager {
   private activeConversations: Map<string, ActiveConversation> = new Map();
+  private recentFailures: Map<string, { count: number; lastType: string; lastLocation: string }> = new Map();
   private requestConversationFn?: (initiatorId: string, targetId: string) => boolean;
 
   constructor(
@@ -1182,12 +1183,29 @@ export class ConversationManager {
     }
     memoryLines.push(`Current inventory: ${invStr}`);
 
+    // Track consecutive failures for importance escalation
+    let failureImportance = 6; // default failure importance
+    if (!outcome.success) {
+      const existing = this.recentFailures.get(actorId);
+      const area = this.world.getAreaAt(actor.position)?.id ?? 'unknown';
+      if (existing && existing.lastType === outcome.type && existing.lastLocation === area) {
+        existing.count++;
+        failureImportance = existing.count >= 3 ? 8 : 7;
+        const suffix = existing.count === 2 ? 'nd' : existing.count === 3 ? 'rd' : 'th';
+        memoryLines.unshift(`WARNING: This is the ${existing.count}${suffix} time this failed here. Try a different approach or location.`);
+      } else {
+        this.recentFailures.set(actorId, { count: 1, lastType: outcome.type, lastLocation: area });
+      }
+    } else {
+      this.recentFailures.delete(actorId);
+    }
+
     void cognition.addMemory({
       id: crypto.randomUUID(),
       agentId: actorId,
       type: 'action_outcome',
       content: memoryLines.join('\n'),
-      importance: outcome.success ? 4 : 6,
+      importance: outcome.success ? 4 : failureImportance,
       timestamp: Date.now(),
       relatedAgentIds: [],
       actionSuccess: outcome.success,
