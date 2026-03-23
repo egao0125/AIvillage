@@ -1056,6 +1056,8 @@ export class SimulationEngine {
 
   private createActionExecutor() {
     const requestConv = (initiatorId: string, targetId: string): boolean => {
+        // Block self-conversations
+        if (initiatorId === targetId) return false;
         const c1 = this.controllers.get(initiatorId);
         const c2 = this.controllers.get(targetId);
         if (!c1 || !c2) return false;
@@ -1079,6 +1081,8 @@ export class SimulationEngine {
         console.log(`[Engine] Intentional conversation: ${a1.config.name} sought out ${this.world.getAgent(targetId)?.config.name}`);
         return true;
     };
+    // Wire requestConversation so conversation [ACTION:] tags can trigger interactions
+    this.conversationManager.setRequestConversation(requestConv);
     return {
       executeSocialAction: (actorId: string, actorName: string, targetId: string, action: string, cognition: AgentCognition) => {
         void this.conversationManager.executeSocialAction(

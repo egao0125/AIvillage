@@ -177,8 +177,9 @@ export class AgentController {
         this.idleTimer++;
         if (this.idleTimer >= 30) {
           this.idleTimer = 0;
-          if (this.intentions.length === 0 && !this.planningInProgress) {
-            // No plan yet — create one (first tick after spawn or new day)
+          const allIntentionsDone = this.currentIntentionIndex >= this.intentions.length;
+          if ((this.intentions.length === 0 || allIntentionsDone) && !this.planningInProgress) {
+            // No plan or exhausted all intentions — replan
             void this.doPlan(time);
           } else {
             this.followNextIntention();
@@ -384,15 +385,32 @@ export class AgentController {
     // Auto-gather food at gathering locations (MUST run before eating so gathered food can be consumed)
     const gatherLocations = ['farm', 'garden', 'lake', 'forest', 'forest_south'];
     if (gatherLocations.includes(this.currentAreaId ?? '') && isGatherActivity) {
+      // Inventory full — auto-drop lowest-value non-food item to make room
+      if (this.agent.inventory.length >= 30) {
+        const droppable = this.agent.inventory
+          .filter(i => i.type !== 'food')
+          .sort((a, b) => a.value - b.value);
+        if (droppable.length > 0) {
+          const dropped = droppable[0];
+          this.world.removeItem(dropped.id);
+          this.broadcaster.agentAction(this.agent.id, `dropped ${dropped.name} (inventory full)`, '\u{1F5D1}\uFE0F');
+          this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
+          console.log(`[Agent] ${this.agent.config.name} auto-dropped ${dropped.name} — inventory was full`);
+        }
+      }
+
       const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
       if (gathered) {
+        this.world.updateAgentState(this.agent.id, 'active', `gathered ${gathered.name}`);
         this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
+        this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
         actionCompleted = true;
         // Emergency: starving agents eat immediately, others keep for trading
         if (gathered.type === 'food' && this.agent.vitals && this.agent.vitals.hunger >= 60) {
           this.world.removeItem(gathered.id);
           this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 40);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
+          this.world.updateAgentState(this.agent.id, 'active', `eating ${gathered.name}`);
           this.broadcaster.agentAction(this.agent.id, `ate ${gathered.name}`, '🍽️');
           this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
         }
@@ -414,7 +432,9 @@ export class AgentController {
           this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 40);
           this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
         }
+        this.world.updateAgentState(this.agent.id, 'active', `eating ${foodItem.name}`);
         this.broadcaster.agentAction(this.agent.id, `ate ${foodItem.name}`, '🍽️');
+        this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
         console.log(`[Agent] ${this.agent.config.name} ate ${foodItem.name} (hunger: ${this.agent.vitals?.hunger})`);
         actionCompleted = true;
       }

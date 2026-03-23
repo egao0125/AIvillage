@@ -34,15 +34,15 @@ export class World {
     };
 
     this.materialSpawns = [
-      { areaId: 'forest', material: 'wood', respawnMinutes: 30 },
-      { areaId: 'forest', material: 'mushrooms', respawnMinutes: 45 },
-      { areaId: 'forest_south', material: 'wood', respawnMinutes: 30 },
-      { areaId: 'farm', material: 'wheat', respawnMinutes: 40 },
-      { areaId: 'farm', material: 'vegetables', respawnMinutes: 40 },
-      { areaId: 'lake', material: 'fish', respawnMinutes: 25 },
-      { areaId: 'lake', material: 'clay', respawnMinutes: 60 },
-      { areaId: 'garden', material: 'herbs', respawnMinutes: 35 },
-      { areaId: 'garden', material: 'flowers', respawnMinutes: 35 },
+      { areaId: 'forest', material: 'wood', respawnMinutes: 15 },
+      { areaId: 'forest', material: 'mushrooms', respawnMinutes: 20 },
+      { areaId: 'forest_south', material: 'wood', respawnMinutes: 15 },
+      { areaId: 'farm', material: 'wheat', respawnMinutes: 15 },
+      { areaId: 'farm', material: 'vegetables', respawnMinutes: 15 },
+      { areaId: 'lake', material: 'fish', respawnMinutes: 10 },
+      { areaId: 'lake', material: 'clay', respawnMinutes: 30 },
+      { areaId: 'garden', material: 'herbs', respawnMinutes: 15 },
+      { areaId: 'garden', material: 'flowers', respawnMinutes: 20 },
     ];
   }
 
@@ -186,7 +186,7 @@ export class World {
   // --- Items ---
 
   addItem(item: Item): void {
-    const MAX_INVENTORY = 10;
+    const MAX_INVENTORY = 30;
     const owner = this.agents.get(item.ownerId);
     if (owner && owner.inventory.length >= MAX_INVENTORY) return; // inventory full
     this.items.set(item.id, item);
@@ -206,7 +206,7 @@ export class World {
   }
 
   transferItem(itemId: string, fromId: string, toId: string): void {
-    const MAX_INVENTORY = 10;
+    const MAX_INVENTORY = 30;
     const item = this.items.get(itemId);
     if (!item) return;
     const from = this.agents.get(fromId);
@@ -220,9 +220,12 @@ export class World {
   }
 
   gatherMaterial(agentId: string, areaId: string): Item | null {
-    const MAX_INVENTORY = 10;
+    const MAX_INVENTORY = 30;
     const agent = this.agents.get(agentId);
-    if (agent && agent.inventory.length >= MAX_INVENTORY) return null;
+    if (agent && agent.inventory.length >= MAX_INVENTORY) {
+      console.log(`[World] ${agent.config.name} can't gather — inventory full (${agent.inventory.length}/${MAX_INVENTORY})`);
+      return null;
+    }
 
     const now = this.time.totalMinutes;
 
