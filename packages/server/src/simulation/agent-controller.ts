@@ -45,6 +45,7 @@ export class AgentController {
   private lastHungerBand: number = 0;
   private lastEnergyBand: number = 0;
   private lastHealthBand: number = 0;
+  public lastOutcomeDescription: string = '';
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -213,7 +214,7 @@ export class AgentController {
         const v = this.agent.vitals;
         const vitalsNote = v ? `Health: ${Math.round(v.health)}, Hunger: ${Math.round(v.hunger)}, Energy: ${Math.round(v.energy)}.` : '';
         const output = await this.cognition.think(
-          `You just woke up. It's morning on day ${this.world.time.day}.`,
+          `You just woke up at the ${area?.name ?? 'village'}. It's morning on day ${this.world.time.day}. You slept here last night.`,
           `Location: ${area?.name ?? 'unknown'}. ${vitalsNote}`
         );
         this.handleApiSuccess();
@@ -283,7 +284,16 @@ export class AgentController {
         buildingContext += '\nYou have materials — you can BUILD structures or CRAFT items at the workshop.';
       }
 
-      const worldCtx = (institutionContext + buildingContext) || undefined;
+      // Season context — physical observation only, no warnings
+      const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
+      const currentSeason = SEASON_ORDER[seasonIdx];
+      const seasonDef = SEASONS[currentSeason];
+      const daysIntoSeason = ((this.world.time.day - 1) % SEASON_LENGTH);
+      const daysLeft = SEASON_LENGTH - daysIntoSeason;
+      const nextSeason = SEASON_ORDER[(seasonIdx + 1) % SEASON_ORDER.length];
+      const seasonContext = `\nSEASON: ${currentSeason} (day ${daysIntoSeason + 1}/${SEASON_LENGTH}, ${daysLeft} days until ${nextSeason}). ${seasonDef.description}`;
+
+      const worldCtx = (institutionContext + buildingContext + seasonContext) || undefined;
       const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx);
       this.intentions = plan;
       this.currentIntentionIndex = 0;
@@ -393,6 +403,9 @@ export class AgentController {
   }
 
   startPerforming(activity: string, duration: number, areaId?: string): void {
+    // Guard: don't start performing if we entered a conversation during movement
+    if (this.state === 'conversing') return;
+
     // Attempt intentional conversation before doing anything else
     if (this.pendingConversationTarget && this.soloActionExecutor) {
       const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
@@ -444,9 +457,12 @@ export class AgentController {
    * Enter conversing state (called externally by ConversationManager).
    */
   enterConversation(): void {
-    // Stop any movement — agent halts to talk
+    // Stop any movement and cancel pending activity — agent halts to talk
     this.path = [];
     this.pathIndex = 0;
+    this.pendingActivity = null;
+    this.activityTimer = 0;
+    this.currentPerformingActivity = '';
     this.state = 'conversing';
     this.world.updateAgentState(this.agent.id, 'active', 'conversing');
 
@@ -506,11 +522,17 @@ export class AgentController {
         .filter(a => a.id !== this.agent.id && a.alive !== false);
       const nearbyNames = nearby.map(a => a.config.name).join(', ');
 
+      const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
+      const currentSeason = SEASON_ORDER[seasonIdx];
+
       const output = await this.cognition.think(
         `You're about to: ${intention}`,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}`
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}`
       );
       this.handleApiSuccess();
+
+      // Guard: agent may have entered a conversation while we were awaiting the LLM
+      if (this.state === 'conversing') return;
 
       if (output.mood) {
         this.agent.mood = output.mood;
@@ -567,11 +589,36 @@ export class AgentController {
 
     try {
       const area = getAreaAt(this.agent.position);
+
+      // Season for context
+      const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
+      const currentSeason = SEASON_ORDER[seasonIdx];
+
+      // Inventory snapshot
+      const invItems = this.agent.inventory.length > 0
+        ? this.agent.inventory.reduce((acc, item) => {
+            acc[item.name] = (acc[item.name] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>)
+        : {};
+      const invStr = Object.keys(invItems).length > 0
+        ? Object.entries(invItems).map(([name, qty]) => `${name} ×${qty}`).join(', ')
+        : 'nothing';
+
+      // Use direct outcome if available, fall back to generic
+      const trigger = this.lastOutcomeDescription
+        ? `You just tried: ${activity}. Result: ${this.lastOutcomeDescription}`
+        : `You just finished: ${activity}.`;
+      this.lastOutcomeDescription = '';
+
       const output = await this.cognition.think(
-        `You just finished: ${activity}`,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}.`
+        trigger,
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}. Inventory: ${invStr}.`
       );
       this.handleApiSuccess();
+
+      // Guard: agent may have entered a conversation while we were awaiting the LLM
+      if (this.state === 'conversing') return;
 
       if (output.mood) {
         this.agent.mood = output.mood;
@@ -600,11 +647,15 @@ export class AgentController {
    * Used for: witnessing events, vital threshold crossings, conversation endings.
    */
   async thinkOnEvent(trigger: string, context: string): Promise<void> {
-    if (this.apiExhausted || this.state === 'sleeping') return;
+    if (this.apiExhausted || this.state === 'sleeping' || this.state === 'conversing') return;
 
     try {
       const output = await this.cognition.think(trigger, context);
       this.handleApiSuccess();
+
+      // Guard: agent may have entered a conversation while we were awaiting the LLM
+      // (TypeScript narrows state above but can't see that `await` allows state mutation)
+      if ((this.state as ControllerState) === 'conversing') return;
 
       if (output.mood) {
         this.agent.mood = output.mood;
@@ -962,6 +1013,17 @@ export class AgentController {
     const sleepPos = getAreaEntrance(sleepArea);
     this.world.updateAgentPosition(this.agent.id, sleepPos);
     this.agent.position = sleepPos;
+
+    // Explain the transition so agents don't interpret teleportation as existential crisis
+    void this.cognition.addMemory({
+      id: crypto.randomUUID(),
+      agentId: this.agent.id,
+      type: 'observation',
+      content: `I walked to the ${sleepArea} and settled in for the night. Time to rest.`,
+      importance: 3,
+      timestamp: Date.now(),
+      relatedAgentIds: [],
+    });
   }
 
   private nameHash(areas: readonly string[]): string {
