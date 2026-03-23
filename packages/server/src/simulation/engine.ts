@@ -1,8 +1,9 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider } from '@ai-village/ai-engine';
+import type { WorldViewParts } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
-import { buildStartingWorldView } from '../map/starting-knowledge.js';
+import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
 import { World } from './world.js';
 import { EventBroadcaster } from './events.js';
 import { ConversationManager } from './conversation.js';
@@ -152,8 +153,8 @@ export class SimulationEngine {
         // Create cognition with Supabase-backed memory + throttled LLM
         const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
-        const savedWorldView = (ctrlDataForWorldView as any)?.worldView as string | undefined;
-        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedWorldView);
+        const savedParts = (ctrlDataForWorldView as any)?.worldViewParts as WorldViewParts | undefined;
+        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts);
         this.cognitions.set(agent.id, cognition);
 
         // Restore controller
@@ -239,8 +240,8 @@ export class SimulationEngine {
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
-    const startingWorldView = buildStartingWorldView(spawnArea);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingWorldView);
+    const startingParts = buildStartingWorldViewParts(spawnArea);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
     this.cognitions.set(id, cognition);
 
     // Broadcast spawn AFTER cognition is set so getSnapshot() can enrich with worldView
@@ -396,7 +397,9 @@ export class SimulationEngine {
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider);
+    // Preserve worldViewParts from old cognition if available
+    const oldCognition = this.cognitions.get(id);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
     this.cognitions.set(id, cognition);
 
     // Recreate controller with default wake/sleep hours
@@ -478,7 +481,9 @@ export class SimulationEngine {
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider);
+    // Preserve worldViewParts — resurrection keeps knowledge
+    const oldCognition = this.cognitions.get(id);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
     this.cognitions.set(id, cognition);
 
     // Recreate controller
@@ -1126,12 +1131,13 @@ export class SimulationEngine {
     // Update stored key
     this.agentApiKeys.set(agentId, { apiKey: newApiKey, model: newModel });
 
-    // Create new provider and cognition
+    // Create new provider and cognition — preserve worldViewParts
     const llmProvider = this.getThrottledProvider(newApiKey, newModel);
     const memoryStore = this.persistence
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider);
+    const oldCognition = this.cognitions.get(agentId);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
     this.cognitions.set(agentId, cognition);
 
     // Reset controller's API state

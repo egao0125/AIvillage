@@ -10,50 +10,6 @@ import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput }
 export * from './world-rules.js';
 export * from './action-resolver.js';
 
-// --- World Rules (prepended to think/plan/talk/reflect system prompts) ---
-
-/**
- * GLOBAL_PROMPT — physics-only fallback. Geography comes from buildStartingWorldView().
- * This should rarely be used directly — new agents get a customized worldView at spawn.
- */
-export const GLOBAL_PROMPT = `You are a person in a world. Other people may or may not be around.
-
-REALITY:
-You have a body. It gets hungry, tired, and sick.
-If you don't eat, you starve. If you starve long enough, you die. Death is permanent. There is no coming back.
-Food comes from the land — fish from water, crops from fields, mushrooms from forests. It doesn't appear on its own.
-You can cook raw ingredients into meals if you have them and a place to cook.
-You may encounter other people. If you do, they have their own thoughts and feelings.
-Weather changes. Seasons change. Winter is hard.
-You work for what you need.
-
-PLACES:
-You don't know this area yet. Look around, explore, and talk to people to learn what's here.
-
-ANNOUNCEMENTS:
-You've heard there might be a village board somewhere where people can post messages. You haven't found it yet.
-
-WHAT YOU CAN DO:
-Gather — collect resources from the land.
-Craft — turn raw materials into useful things.
-Build — construct shelters and structures.
-Eat — consume food to reduce hunger.
-Rest — recover energy.
-Trade — offer items to someone nearby in exchange for what they have.
-Teach — if you're skilled enough, teach someone what you know.
-Talk — have a conversation with someone nearby.
-
-To act, write what you want to do in brackets:
-  [ACTION: what you want to do]
-
-You will be told what happened. If you fail, you'll learn why.
-
-HOW TO BE:
-Talk like a real person. You change through experience. You learn by doing and failing.
-
-MY EXPERIENCE:
-I just arrived. I don't know where anything is yet.`;
-
 // --- Memory Stream ---
 
 export interface MemoryStore {
@@ -72,18 +28,98 @@ export interface LLMProvider {
   model: string;
 }
 
+// --- Frozen preamble (physics + actions + behavior — never changes) ---
+
+const FROZEN_PREAMBLE = `You are a person in a world. Other people may or may not be around.
+
+REALITY:
+You have a body. It gets hungry, tired, and sick.
+If you don't eat, you starve. If you starve long enough, you die. Death is permanent. There is no coming back.
+Food comes from the land — fish from water, crops from fields, mushrooms from forests. It doesn't appear on its own.
+You can cook raw ingredients into meals if you have them and a place to cook.
+You may encounter other people. If you do, they have their own thoughts and feelings.
+Weather changes. Seasons change. Winter is hard.
+You work for what you need.`;
+
+const FROZEN_ACTIONS = `WHAT YOU CAN DO:
+Gather — collect resources from the land. What you find depends on where you are, the season, your skill, and whether others have already gathered today. You won't always succeed.
+Craft — turn raw materials into useful things. You need the right ingredients, the right location, and enough skill. The village has recipes you can discover by trying or by learning from others.
+Build — construct shelters and structures. This takes multiple work sessions across days, specific materials, and a hammer. You can't do it alone easily.
+Eat — consume food to reduce hunger. Better food helps more.
+Rest — recover energy. Sleeping restores the most.
+Trade — offer items to someone nearby in exchange for what they have. Both of you must agree.
+Teach — if you're skilled enough, you can teach someone what you know. It takes time from both of you.
+Talk — have a conversation with someone nearby.
+Post — write a message on the village board for everyone to read.
+
+To act, write what you want to do in brackets:
+  [ACTION: what you want to do]
+
+You will be told what happened. If you fail, you'll learn why.
+
+HOW TO BE:
+Talk like a real person. You change through experience. You learn by doing and failing.`;
+
 // --- Agent Cognition ---
 
+export interface WorldViewParts {
+  knownPlaces: Record<string, string>;  // areaKey → description
+  myExperience: string;
+  knowsPlaza: boolean;
+}
+
 export class AgentCognition {
-  public worldView: string;
+  /** Additive-only map of discovered places: areaKey → "Name — description" */
+  public knownPlaces: Map<string, string> = new Map();
+  /** Fully rewritten each night by the LLM */
+  public myExperience: string = 'I just arrived. I don\'t know where anything is yet.';
+  /** Whether the agent knows about the plaza/village board */
+  public knowsPlaza: boolean = false;
+
+  /** Compose the full worldView from frozen + places + experience */
+  get worldView(): string {
+    const placesLines = this.knownPlaces.size > 0
+      ? Array.from(this.knownPlaces.values()).join('\n')
+      : 'You don\'t know this area yet. Look around, explore, and talk to people to learn what\'s here.';
+
+    const announcements = this.knowsPlaza
+      ? 'There is a village board at the plaza that everyone can read. When you post something on the board, every person in the village will see it. This is the only way to communicate with everyone at once. To post, write [ACTION: post "your message"].'
+      : 'You\'ve heard there might be a village board somewhere where people can post messages. You haven\'t found it yet.';
+
+    return `${FROZEN_PREAMBLE}
+
+PLACES I KNOW:
+${placesLines}
+
+ANNOUNCEMENTS:
+${announcements}
+
+${FROZEN_ACTIONS}
+
+MY EXPERIENCE:
+${this.myExperience}`;
+  }
+
+  /** Serialize the mutable parts for persistence */
+  get worldViewParts(): WorldViewParts {
+    return {
+      knownPlaces: Object.fromEntries(this.knownPlaces),
+      myExperience: this.myExperience,
+      knowsPlaza: this.knowsPlaza,
+    };
+  }
 
   constructor(
     private agent: Agent,
     private memory: MemoryStore,
     private llm: LLMProvider,
-    worldView?: string,
+    parts?: WorldViewParts,
   ) {
-    this.worldView = worldView ?? GLOBAL_PROMPT;
+    if (parts) {
+      this.knownPlaces = new Map(Object.entries(parts.knownPlaces));
+      this.myExperience = parts.myExperience;
+      this.knowsPlaza = parts.knowsPlaza;
+    }
   }
 
   /**
@@ -452,10 +488,8 @@ Return a JSON array of strings ONLY:
   }
 
   /**
-   * talk() — Conversation turn. Nearly identical to old converse() but:
-   * - Uses GLOBAL_PROMPT + buildIdentityBlock() instead of inline identity
-   * - Agenda param passed from outside (from think() output), not generated internally
-   * - Preserves prompt sanitization and action instruction block
+   * talk() — Conversation turn. Uses worldView + buildIdentityBlock().
+   * Agenda param passed from outside (from think() output), not generated internally.
    */
   async talk(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string, agenda?: string, tradeContext?: string): Promise<string> {
     const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
@@ -540,7 +574,7 @@ Your turn to speak:`;
   }
 
   /**
-   * reflect() — End-of-day synthesis. Uses GLOBAL_PROMPT, calls assess() + compress().
+   * reflect() — End-of-day synthesis. Calls assess() + compress().
    */
   async reflect(): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string }> {
     const recentMemories = await this.memory.getRecent(this.agent.id, 20);
@@ -619,44 +653,43 @@ End with: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
   }
 
   /**
-   * updateWorldView() — Evolve this agent's understanding of the world based on today's experiences.
-   * Called at end of reflect(). One LLM call per agent per night.
-   * Returns updated worldView text, or undefined if update failed validation.
+   * updateWorldView() — Rewrite MY EXPERIENCE based on today's memories.
+   * REALITY, PLACES, ACTIONS are never touched by the LLM.
+   * Places are added programmatically via perceive() discovery.
+   * Only MY EXPERIENCE gets rewritten each night.
    */
   async updateWorldView(recentMemoriesText: string): Promise<string | undefined> {
-    const systemPrompt = `You are ${this.agent.config.name}. Below is your current understanding of the world. Update it based on today's experiences.
+    const placesKnown = Array.from(this.knownPlaces.values()).join('\n') || '(none yet)';
 
-RULES FOR UPDATING:
-- Keep the same section structure (REALITY, PLACES, ANNOUNCEMENTS, WHAT YOU CAN DO, HOW TO BE, MY EXPERIENCE) but you may modify ANY content within them.
-- If you discovered new places today, ADD them to PLACES. If you heard about places from others, add them with a note that you haven't been there yet.
-- Update MY EXPERIENCE with what you've learned, where you've been, and what you now know.
-- Weave your personal experience into the descriptions.
-- Add warnings, tips, or personal notes to places and rules you've learned about.
-- Remove or correct anything you've learned is wrong.
-- Stay concise — under 500 words total. Cut fluff ruthlessly.
-- Write in first person where it makes sense. This is YOUR understanding, not an objective guide.
-- Do NOT add new sections. Do NOT include memories, plans, or to-do lists.
-- You MUST keep all six sections: REALITY, PLACES, ANNOUNCEMENTS, WHAT YOU CAN DO, HOW TO BE, MY EXPERIENCE.
+    const systemPrompt = `You are ${this.agent.config.name}. Rewrite your MY EXPERIENCE section based on today.
 
-YOUR CURRENT WORLD VIEW:
-${this.worldView}
+PLACES I KNOW:
+${placesKnown}
 
-Return the complete updated world view text. Nothing else.`;
+YOUR CURRENT MY EXPERIENCE:
+${this.myExperience}
+
+RULES:
+- Write a new MY EXPERIENCE that replaces the old one entirely.
+- Include: what you've learned, skills you're developing, people you've met, strategies that work, dangers to avoid.
+- Cut anything no longer relevant. Add new lessons from today.
+- Be practical and concise. First person. 3-6 sentences max.
+- Do NOT include section headers — just write the content.
+- Do NOT list places (that's tracked separately). Focus on experience and knowledge.
+
+Return ONLY the new MY EXPERIENCE text. Nothing else.`;
 
     const response = await this.llm.complete(systemPrompt, recentMemoriesText);
 
-    // Sanity check: reject responses missing key sections or too short
-    const missingSections: string[] = [];
-    for (const section of ['REALITY', 'PLACES', 'WHAT YOU CAN DO']) {
-      if (!response.includes(section)) missingSections.push(section);
-    }
-    if (missingSections.length > 0 || response.length < 100) {
-      console.warn(`[WorldView] ${this.agent.config.name} rejected invalid worldView update (missing ${missingSections.join(', ') || 'content'} or too short)`);
+    // Sanity check: reject empty or suspiciously long responses
+    const trimmed = response.trim();
+    if (trimmed.length < 20 || trimmed.length > 1500) {
+      console.warn(`[WorldView] ${this.agent.config.name} rejected MY EXPERIENCE update (${trimmed.length} chars)`);
       return undefined;
     }
 
-    this.worldView = response.trim();
-    console.log(`[WorldView] ${this.agent.config.name} updated worldView`);
+    this.myExperience = trimmed;
+    console.log(`[WorldView] ${this.agent.config.name} updated MY EXPERIENCE`);
     return this.worldView;
   }
 
@@ -779,7 +812,6 @@ Output a JSON array ONLY, no other text:
    * Scans nearby agents, objects, and events within perception radius.
    */
   private lastPerceptionKey: string = '';
-  private knownAreas: Set<string> = new Set();
 
   async perceive(nearbyAgents: Agent[], nearbyAreas: MapArea[]): Promise<string[]> {
     const observations: string[] = [];
@@ -801,35 +833,28 @@ Output a JSON array ONLY, no other text:
     if (perceptionKey === this.lastPerceptionKey) return observations;
     this.lastPerceptionKey = perceptionKey;
 
-    // Discovery check: create high-importance memory for newly discovered areas
+    // Discovery check: add newly discovered areas to knownPlaces (additive-only)
     for (const area of nearbyAreas) {
-      const areaKey = area.name.toLowerCase();
-      if (!this.knownAreas.has(areaKey)) {
-        // Seed known areas from worldView on first encounter
-        if (this.knownAreas.size === 0) {
-          const placesMatch = this.worldView.match(/PLACES:\n([\s\S]*?)(?:\n\n|\nThese are)/);
-          if (placesMatch) {
-            for (const line of placesMatch[1].split('\n')) {
-              const name = line.split('—')[0]?.trim().toLowerCase();
-              if (name) this.knownAreas.add(name);
-            }
-          }
+      const areaKey = area.id;
+      if (!this.knownPlaces.has(areaKey)) {
+        // New discovery — add to knownPlaces with a basic description
+        this.knownPlaces.set(areaKey, `${area.name} — ${area.type} area`);
+
+        // Check if this is the plaza — unlocks announcements
+        if (areaKey === 'plaza') {
+          this.knowsPlaza = true;
         }
-        if (!this.knownAreas.has(areaKey)) {
-          this.knownAreas.add(areaKey);
-          await this.memory.add({
-            id: crypto.randomUUID(),
-            agentId: this.agent.id,
-            type: "observation",
-            content: `I discovered a new place: ${area.name} (${area.type}). I didn't know this was here before.`,
-            importance: 7,
-            timestamp: Date.now(),
-            relatedAgentIds: [],
-          });
-          console.log(`[Discovery] ${this.agent.config.name} discovered ${area.name}`);
-        } else {
-          this.knownAreas.add(areaKey);
-        }
+
+        await this.memory.add({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: "observation",
+          content: `I discovered a new place: ${area.name} (${area.type}). I didn't know this was here before.`,
+          importance: 7,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        });
+        console.log(`[Discovery] ${this.agent.config.name} discovered ${area.name}`);
       }
     }
 
