@@ -239,6 +239,8 @@ export interface Memory {
   emotionalValence?: number; // -1 (painful) to +1 (joyful). High-valence = recalled more.
   isCore?: boolean; // Core identity memories — never pruned, boosted in retrieval
   actionSuccess?: boolean; // for action_outcome memories
+  sourceAgentId?: string;   // who told them (undefined = firsthand)
+  hearsayDepth?: number;    // 0 = direct, 1 = secondhand
 }
 
 // --- Conversation ---

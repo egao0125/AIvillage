@@ -418,6 +418,70 @@ export class ConversationManager {
         }
       }
     }
+
+    // --- Gossip extraction: hearsay memories for third-party mentions ---
+    const participantNameSet = new Set(
+      conversation.participants
+        .map(id => this.world.getAgent(id)?.config.name?.toLowerCase())
+        .filter((n): n is string => !!n)
+    );
+
+    // Build agent name lookup: lowercased name -> {id, fullName}
+    const agentNameMap = new Map<string, { id: string; fullName: string }>();
+    for (const agent of this.world.agents.values()) {
+      if (agent.alive === false) continue;
+      const name = agent.config.name;
+      agentNameMap.set(name.toLowerCase(), { id: agent.id, fullName: name });
+      // Index first name for partial matching (only if 3+ chars to avoid false positives)
+      const firstName = name.split(' ')[0];
+      if (firstName.length >= 3 && firstName.toLowerCase() !== name.toLowerCase()) {
+        agentNameMap.set(firstName.toLowerCase(), { id: agent.id, fullName: name });
+      }
+    }
+
+    for (const msg of messages) {
+      const speakerId = msg.agentId;
+      const speakerName = msg.agentName;
+
+      // Find third-party agent mentions in this message
+      const mentionedAgents: { id: string; fullName: string }[] = [];
+      for (const [nameKey, agentInfo] of agentNameMap) {
+        if (participantNameSet.has(nameKey)) continue; // skip conversation participants
+        if (agentInfo.id === speakerId) continue; // skip self
+        // Word-boundary check to avoid false positives
+        const regex = new RegExp(`\\b${nameKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        if (regex.test(msg.content)) {
+          if (!mentionedAgents.some(m => m.id === agentInfo.id)) {
+            mentionedAgents.push(agentInfo);
+          }
+        }
+      }
+
+      if (mentionedAgents.length === 0) continue;
+
+      // Create hearsay memories for each non-speaker participant
+      for (const participantId of conversation.participants) {
+        if (participantId === speakerId) continue;
+        const listenerCognition = cognitions.get(participantId);
+        if (!listenerCognition) continue;
+
+        for (const mentioned of mentionedAgents) {
+          try {
+            await listenerCognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: participantId,
+              type: 'observation',
+              content: `${speakerName} told me about ${mentioned.fullName}: "${msg.content}"`,
+              importance: 5,
+              timestamp: Date.now(),
+              relatedAgentIds: [speakerId, mentioned.id],
+              sourceAgentId: speakerId,
+              hearsayDepth: 1,
+            });
+          } catch {}
+        }
+      }
+    }
   }
 
   /**
@@ -947,6 +1011,9 @@ export class ConversationManager {
     ];
     if (outcome.skillXpGained) memoryLines.push(`${outcome.skillXpGained.skill} skill improving.`);
     if (outcome.energySpent > 0) memoryLines.push(`Energy spent: ${outcome.energySpent}. Remaining energy: ${actor.vitals?.energy ?? '?'}.`);
+    if (!outcome.success && outcome.remediation) {
+      memoryLines.push(`Hint: ${outcome.remediation}`);
+    }
     memoryLines.push(`Current inventory: ${invStr}`);
 
     void cognition.addMemory({
@@ -959,6 +1026,54 @@ export class ConversationManager {
       relatedAgentIds: [],
       actionSuccess: outcome.success,
     });
+
+    // --- Deferred action (compound action handling) ---
+    if (outcome.deferredAction) {
+      if (outcome.type === 'move') {
+        // For moves: store high-importance thought so agent acts on it after arriving
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: actorId,
+          type: 'thought',
+          content: `After arriving: ${outcome.deferredAction}`,
+          importance: 7,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        });
+      } else {
+        // For non-moves: try to execute the deferred action immediately
+        const deferredAgentState: ResolverAgentState = {
+          id: actorId,
+          name: actorName,
+          location: this.world.getAreaAt(actor.position)?.id ?? 'unknown',
+          energy: actor.vitals?.energy ?? 100,
+          hunger: actor.vitals?.hunger ?? 0,
+          health: actor.vitals?.health ?? 100,
+          inventory: this.buildInventoryForResolver(actor),
+          skills: this.buildSkillsForResolver(actor),
+          nearbyAgents: this.world.getNearbyAgents(actor.position, 8)
+            .filter(a => a.id !== actorId && a.alive !== false)
+            .map(a => ({ id: a.id, name: a.config.name })),
+        };
+        const deferredIntent = parseIntent(outcome.deferredAction, deferredAgentState);
+        if (deferredIntent.type !== 'unknown' && deferredIntent.type !== 'intent') {
+          const deferredOutcome = executeAction(deferredIntent, deferredAgentState, this.buildWorldStateForResolver());
+          deferredOutcome.deferredAction = undefined; // prevent infinite recursion
+          this.applyOutcome(actorId, actorName, deferredOutcome, cognition, cognitions, requestConversation);
+        } else {
+          // Couldn't parse — store as intent thought
+          void cognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: actorId,
+            type: 'thought',
+            content: `I still want to: ${outcome.deferredAction}`,
+            importance: 6,
+            timestamp: Date.now(),
+            relatedAgentIds: [],
+          });
+        }
+      }
+    }
   }
 
   /**

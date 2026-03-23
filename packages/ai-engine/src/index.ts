@@ -492,7 +492,10 @@ You can do things during conversation:
 Talk like a real person. 1-3 sentences. You can negotiate, ask for help, offer to trade, or just talk.`;
 
     const memoryContext = memories.length > 0
-      ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => m.content).join('\n')}`
+      ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => {
+          const tag = m.hearsayDepth ? '[hearsay] ' : '';
+          return `${tag}${m.content}`;
+        }).join('\n')}`
       : '';
 
     // Build mental models section — private assessment of conversation partners
