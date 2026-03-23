@@ -317,7 +317,7 @@ Context: ${context}`;
    */
   async resolveAction(
     action: string,
-    context: { location: string; nearbyAgents: string[]; inventory: string[]; gold: number }
+    context: { location: string; nearbyAgents: string[]; nearbyAgentDetails?: string[]; inventory: string[]; gold: number }
   ): Promise<{ op: string; [key: string]: any }[]> {
     const systemPrompt = `You are the physics engine for a medieval village simulation.
 An agent wants to do something. Break it down into primitive operations.
@@ -325,12 +325,17 @@ An agent wants to do something. Break it down into primitive operations.
 PRIMITIVES:
 - create: add something to the world. Specify "type" and "data".
   types: board_post, item, artifact, building, institution, secret, election
-- remove: delete something. Specify "type" and which one.
+- remove: delete/discard something. Specify "type" and which one. Use to drop unwanted items from inventory.
 - modify: change a value. Specify "target" (agent name or "self"), "field", and "value" or "delta".
   fields: gold, reputation, skill, membership, property, vote
 - transfer: move something between agents. Specify "what", "from", "to", and details.
 - interact: talk to someone. Specify "target" (name or "anyone nearby").
 - observe: notice/learn something. Specify "observation".
+
+CONSTRAINTS:
+- transfer: "from" must be "self" — you can only give YOUR OWN items/gold. To receive items from others, use "interact" to negotiate in a conversation first.
+- To trade, use "interact" to start a conversation where both parties agree, then each gives via separate transfers.
+- Check nearby details — the recipient must actually be nearby.
 
 Compose these freely. Return JSON array ONLY.
 Example — agent gives fish to Mei on credit:
@@ -340,8 +345,12 @@ Example — agent gives fish to Mei on credit:
   {"op":"observe","observation":"Gave fish to Mei, she'll pay me back later"}
 ]`;
 
+    const nearbyDetails = context.nearbyAgentDetails?.length
+      ? `\nNearby details:\n${context.nearbyAgentDetails.join('\n')}`
+      : '';
+
     const userPrompt = `Location: ${context.location}
-Nearby: ${context.nearbyAgents.join(', ') || 'nobody'}
+Nearby: ${context.nearbyAgents.join(', ') || 'nobody'}${nearbyDetails}
 Inventory: ${context.inventory.join(', ') || 'nothing'}
 Gold: ${context.gold}
 
@@ -387,11 +396,19 @@ Today is day ${currentTime.day}.`;
 Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
 
-What do you need to do today? List your intentions in order of priority.
-Most important first. Be honest about what you need vs what you want.
+What do you need to do today? List 4-6 intentions in priority order.
+
+RULES:
+- Every intention MUST name a CONCRETE action + location. "gather food at farm" not "figure out what's happening"
+- Do NOT plan to "investigate", "assess", "understand", "observe", "go about daily routine", or "wander" — those waste time. ACT instead.
+- If hungry: "gather food at farm" or "gather fish at lake" or "eat [food item]"
+- If you want to trade: "talk to [name] about trading [item]"
+- If you want to build: "gather wood at forest" then "build [thing] at [location]"
+- If you already tried something and it FAILED (check memories), plan something DIFFERENT.
+- Locations: farm, garden, lake, forest, plaza, cafe, park, church, bakery, workshop, hospital
 
 Return a JSON array of strings ONLY:
-["intention 1", "intention 2", ...]`;
+["gather food at farm", "talk to Jennie about trading clay", ...]`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
@@ -399,12 +416,22 @@ Return a JSON array of strings ONLY:
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-        return parsed;
+        // Filter out vague non-actionable intentions
+        const vaguePatterns = /\b(daily routine|figure out|find out|wander|investigate|assess|understand what|observe what|explore the village|look around)\b/i;
+        const filtered = parsed.filter((s: string) => !vaguePatterns.test(s));
+        // Ensure minimum 4 intentions — pad with useful defaults if needed
+        const defaults = ['gather food at farm', 'gather wood at forest', 'talk to someone at plaza', 'gather fish at lake', 'gather herbs at garden', 'rest at park'];
+        while (filtered.length < 4) {
+          const next = defaults.find(d => !filtered.includes(d));
+          if (next) { filtered.push(next); defaults.splice(defaults.indexOf(next), 1); }
+          else break;
+        }
+        return filtered;
       }
     } catch {}
 
-    // Fallback on parse error
-    return ['go about daily routine at plaza', 'rest at park'];
+    // Fallback on parse error — concrete actions, not vague
+    return ['gather food at farm', 'gather wood at forest', 'talk to someone at plaza', 'rest at park'];
   }
 
   /**

@@ -14,11 +14,16 @@ interface ActiveConversation {
 
 export class ConversationManager {
   private activeConversations: Map<string, ActiveConversation> = new Map();
+  private requestConversationFn?: (initiatorId: string, targetId: string) => boolean;
 
   constructor(
     private world: World,
     private broadcaster: EventBroadcaster,
   ) {}
+
+  setRequestConversation(fn: (initiatorId: string, targetId: string) => boolean): void {
+    this.requestConversationFn = fn;
+  }
 
   /**
    * Start a new conversation between agents.
@@ -40,7 +45,7 @@ export class ConversationManager {
 
     const id = crypto.randomUUID();
     // Safety valve only — goodbye detection handles natural endings
-    const maxTurns = 20;
+    const maxTurns = 12;
 
     const conversation: Conversation = {
       id,
@@ -152,6 +157,12 @@ export class ConversationManager {
 
       const agenda = active.agendas.get(speakerId);
 
+      // Hint the LLM to wrap up when conversation is getting long
+      const turnsLeft = active.maxTurns - active.turnCount;
+      if (turnsLeft <= 4 && active.turnCount >= 4) {
+        history.push(`[You feel the conversation winding down. Wrap up naturally — say goodbye or make a parting remark.]`);
+      }
+
       let response: string;
       try {
         response = await cognition.talk(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext, agenda);
@@ -168,7 +179,7 @@ export class ConversationManager {
       const actionMatches = response.matchAll(/\[ACTION:\s*(.+?)\]/gi);
       for (const match of actionMatches) {
         const actionIntent = match[1].trim();
-        this.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition, cognitions);
+        this.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition, cognitions, this.requestConversationFn);
       }
 
       // Strip the ACTION tag from the displayed message
@@ -207,7 +218,18 @@ export class ConversationManager {
           lower.includes('see you') ||
           lower.includes('gotta go') ||
           lower.includes('take care') ||
-          lower.includes('bye'))
+          lower.includes('bye') ||
+          lower.includes('farewell') ||
+          lower.includes('until next time') ||
+          lower.includes('i must go') ||
+          lower.includes('i should go') ||
+          lower.includes('walk away') ||
+          lower.includes('walks away') ||
+          lower.includes('turns to leave') ||
+          lower.includes('heads off') ||
+          lower.includes('wanders off') ||
+          lower.includes('good day') ||
+          lower.includes('be well'))
       ) {
         this.endConversation(conversationId, cognitions);
         return false;
@@ -354,6 +376,23 @@ export class ConversationManager {
             relatedAgentIds: conversation.participants.filter(id => id !== participantId),
           });
           console.log(`[Memory] ${participant.config.name} stored commitment to ${otherNames.join(', ')}`);
+
+          // Bidirectional: store the promise for the OTHER participants too
+          for (const otherId of conversation.participants.filter(id => id !== participantId)) {
+            const otherCognition = cognitions.get(otherId);
+            if (!otherCognition) continue;
+            try {
+              await otherCognition.addMemory({
+                id: crypto.randomUUID(),
+                agentId: otherId,
+                type: 'plan',
+                content: `PROMISE from ${participant.config.name}: ${commitmentLines.join(' ')}`,
+                importance: 7,
+                timestamp: Date.now(),
+                relatedAgentIds: [participantId],
+              });
+            } catch {}
+          }
         } catch (err) {
           console.error(`[Memory] Failed to store commitment for ${participant.config.name}:`, err);
         }
@@ -379,15 +418,20 @@ export class ConversationManager {
     if (!actor) return;
 
     const area = this.world.getAreaAt(actor.position);
-    const nearby = this.world.getNearbyAgents(actor.position, 8)
-      .filter(a => a.id !== actorId && a.alive !== false)
-      .map(a => a.config.name);
+    const nearbyFull = this.world.getNearbyAgents(actor.position, 8)
+      .filter(a => a.id !== actorId && a.alive !== false);
+    const nearby = nearbyFull.map(a => a.config.name);
+    const nearbyAgentDetails = nearbyFull.map(a => {
+      const items = a.inventory.map(i => i.name).join(', ') || 'nothing';
+      return `- ${a.config.name}: carrying [${items}], ${a.currency}g`;
+    });
 
     let ops: { op: string; [key: string]: any }[];
     try {
       ops = await cognition.resolveAction(rawAction, {
         location: area?.id ?? 'unknown',
         nearbyAgents: nearby,
+        nearbyAgentDetails,
         inventory: actor.inventory.map(i => `${i.name} (${i.type})`),
         gold: actor.currency,
       });
@@ -422,6 +466,26 @@ export class ConversationManager {
         const data = op.data || op;
 
         if (type === 'board_post') {
+          // Dedup: skip if agent posted similar content in last 2 game days
+          const newContent = (data.content || '').toLowerCase();
+          const recentPosts = this.world.board.filter(p =>
+            p.authorId === actorId && !p.revoked && (this.world.time.day - p.day) <= 2
+          );
+          const newWords = new Set(newContent.split(/\s+/).filter((w: string) => w.length > 3));
+          const isDuplicate = newWords.size > 0 && recentPosts.some(p => {
+            const existingWords = p.content.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3);
+            const overlap = existingWords.filter((w: string) => newWords.has(w)).length;
+            return overlap / Math.max(newWords.size, 1) > 0.6;
+          });
+          if (isDuplicate) {
+            void cognition.addMemory({
+              id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+              content: 'I already posted about this on the village board recently.',
+              importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+            });
+            break;
+          }
+
           const post = {
             id: crypto.randomUUID(),
             authorId: actorId, authorName: actorName,
@@ -546,8 +610,9 @@ export class ConversationManager {
           this.broadcaster.agentCurrency(target.id, newBal, op.delta, reason);
         }
         else if (field === 'reputation' && op.delta) {
+          if (target.id === actorId) break; // Can't modify your own reputation
           const aboutAgent = op.about ? this.findAgentByName(op.about) : target;
-          if (aboutAgent) {
+          if (aboutAgent && aboutAgent.id !== actorId) { // Also block rating yourself via "about"
             this.world.updateReputation(target.id, aboutAgent.id, op.delta, op.reason || '');
             this.broadcaster.reputationChange(target.id, aboutAgent.id, this.world.getReputation(target.id, aboutAgent.id));
           }
@@ -576,8 +641,11 @@ export class ConversationManager {
           }
         }
         else if (field === 'property') {
-          const prop = this.world.claimProperty(op.area, target.id, this.world.time.day);
-          if (prop) this.broadcaster.propertyChange(prop);
+          const areaId = op.area || this.world.getAreaAt(actor.position)?.id;
+          if (areaId) {
+            const prop = this.world.claimProperty(areaId, target.id, this.world.time.day);
+            if (prop) this.broadcaster.propertyChange(prop);
+          }
         }
         else if (field === 'vote') {
           const candidate = this.findAgentByName(op.candidate);
@@ -603,8 +671,18 @@ export class ConversationManager {
         if (!fromAgent || !toAgent) {
           void cognition.addMemory({
             id: crypto.randomUUID(), agentId: actorId, type: 'observation',
-            content: `Couldn't find ${!fromAgent ? fromName : toName} to complete the transfer.`,
-            importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+            content: `FAILED: Couldn't find ${!fromAgent ? fromName : toName} nearby to transfer ${op.item || 'gold'}.`,
+            importance: 7, timestamp: Date.now(), relatedAgentIds: [],
+          });
+          break;
+        }
+
+        // Block unilateral taking — you can give, but you can't take from others
+        if (fromAgent.id !== actorId && toAgent.id === actorId) {
+          void cognition.addMemory({
+            id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+            content: `FAILED: I can't just take things from ${fromAgent.config.name} — I need to negotiate with them in a conversation.`,
+            importance: 7, timestamp: Date.now(), relatedAgentIds: [fromAgent.id],
           });
           break;
         }
@@ -624,19 +702,29 @@ export class ConversationManager {
           const item = fromAgent.inventory.find(i => i.name.toLowerCase().includes(itemName));
           if (item) {
             this.world.transferItem(item.id, fromAgent.id, toAgent.id);
+            // Check if transfer silently failed (receiver inventory full)
+            const stillHasItem = fromAgent.inventory.some(i => i.id === item.id);
+            if (stillHasItem) {
+              void cognition.addMemory({
+                id: crypto.randomUUID(), agentId: actorId, type: 'observation',
+                content: `FAILED: I tried to give ${item.name} to ${toAgent.config.name} but they can't carry any more items.`,
+                importance: 7, timestamp: Date.now(), relatedAgentIds: [toAgent.id],
+              });
+              break;
+            }
             this.broadcaster.agentInventory(fromAgent.id, fromAgent.inventory);
             this.broadcaster.agentInventory(toAgent.id, toAgent.inventory);
             this.broadcaster.agentAction(actorId, `transferred ${item.name} to ${toAgent.config.name}`, '\u{1F4E6}');
           } else {
             void cognition.addMemory({
               id: crypto.randomUUID(), agentId: actorId, type: 'observation',
-              content: `I tried to transfer ${op.item} but couldn't find it.`,
-              importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+              content: `FAILED: I don't have ${op.item || 'that item'} in my inventory.`,
+              importance: 7, timestamp: Date.now(), relatedAgentIds: [],
             });
           }
         }
 
-        // Store memory for recipient
+        // Store memory for recipient (only on successful transfer)
         const recipientCog = cognitions?.get(toAgent.id);
         if (recipientCog) {
           void recipientCog.addMemory({
@@ -664,15 +752,15 @@ export class ConversationManager {
           if (!started) {
             void cognition.addMemory({
               id: crypto.randomUUID(), agentId: actorId, type: 'observation',
-              content: `I tried to talk to ${target.config.name} but they were busy.`,
-              importance: 5, timestamp: Date.now(), relatedAgentIds: [target.id],
+              content: `FAILED: I tried to talk to ${target.config.name} but they were busy or unavailable.`,
+              importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id],
             });
           }
         } else {
           void cognition.addMemory({
             id: crypto.randomUUID(), agentId: actorId, type: 'observation',
-            content: 'I wanted to talk to someone but nobody was around.',
-            importance: 4, timestamp: Date.now(), relatedAgentIds: [],
+            content: 'FAILED: I wanted to talk to someone but nobody was around.',
+            importance: 6, timestamp: Date.now(), relatedAgentIds: [],
           });
         }
         break;
