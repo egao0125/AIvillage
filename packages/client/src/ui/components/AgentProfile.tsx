@@ -269,8 +269,8 @@ const WorldViewSection: React.FC<{ worldView: string }> = ({ worldView }) => {
           fontSize: '11px',
           color: COLORS.textDim,
           lineHeight: 1.5,
-          maxHeight: expanded ? '400px' : '60px',
-          overflow: expanded ? 'auto' : 'hidden',
+          maxHeight: expanded ? 'none' : '60px',
+          overflow: expanded ? 'visible' : 'hidden',
           whiteSpace: expanded ? 'pre-wrap' : 'normal',
           transition: 'max-height 0.3s',
         }}
