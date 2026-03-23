@@ -524,8 +524,8 @@ export class ConversationManager {
             description: `${resDef?.name ?? gained.resource} obtained by ${actorName}`,
             ownerId: actorId,
             createdBy: actorId,
-            value: resDef?.tradeValue ?? 5,
-            type: resDef?.type === 'food' ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
+            value: resDef?.baseTradeValue ?? 5,
+            type: (resDef?.type === 'food' || (resDef?.type === 'raw' && (resDef?.nutritionValue ?? 0) > 0)) ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
           };
           this.world.addItem(item);
         }
@@ -691,8 +691,8 @@ export class ConversationManager {
                 description: `${resDef?.name ?? consumed.resource} received from ${actorName}`,
                 ownerId: target.id,
                 createdBy: actorId,
-                value: resDef?.tradeValue ?? 5,
-                type: resDef?.type === 'food' ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
+                value: resDef?.baseTradeValue ?? 5,
+                type: (resDef?.type === 'food' || (resDef?.type === 'raw' && (resDef?.nutritionValue ?? 0) > 0)) ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
               };
               this.world.addItem(item);
             }
