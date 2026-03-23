@@ -13,6 +13,7 @@ export interface ControllerData {
   sleepHour: number;
   homeArea: string;
   worldView?: string;
+  worldViewParts?: { knownPlaces: Record<string, string>; myExperience: string; knowsPlaza: boolean };
   apiKey?: string;
   model?: string;
 }
@@ -101,6 +102,7 @@ export class SupabasePersistence {
           sleepHour: ctrl.sleepHour,
           homeArea: ctrl.homeArea,
           worldView: ctrl.cognition.worldView,
+          worldViewParts: ctrl.cognition.worldViewParts,
           apiKey: keyData?.apiKey,
           model: keyData?.model,
         } satisfies ControllerData,

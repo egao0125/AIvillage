@@ -28,7 +28,7 @@ export const AREA_ADJACENCY: Record<string, string[]> = {
 };
 
 /**
- * One-line description for each area (matches the GLOBAL_PROMPT PLACES entries).
+ * One-line description for each area (used by buildStartingWorldViewParts).
  */
 export const AREA_DESCRIPTIONS: Record<string, string> = {
   bakery:       'Bakery — a building with a bread oven.',
@@ -83,9 +83,46 @@ function buildActionExamples(knownAreas: string[]): string {
 }
 
 /**
+ * Build structured WorldViewParts for a newly spawned agent.
+ * The agent knows only their spawn area + adjacent areas.
+ * Returns the mutable pieces — frozen REALITY/ACTIONS are composed by AgentCognition.
+ */
+export function buildStartingWorldViewParts(spawnAreaId: string): {
+  knownPlaces: Record<string, string>;
+  myExperience: string;
+  knowsPlaza: boolean;
+} {
+  const adjacent = AREA_ADJACENCY[spawnAreaId] ?? [];
+  const knownAreaIds = [spawnAreaId, ...adjacent];
+
+  // Build knownPlaces map: areaId → description line
+  const knownPlaces: Record<string, string> = {};
+  for (const id of knownAreaIds) {
+    if (AREA_DESCRIPTIONS[id]) {
+      knownPlaces[id] = AREA_DESCRIPTIONS[id];
+    }
+  }
+
+  const knowsPlaza = knownAreaIds.includes('plaza');
+
+  // Build initial MY EXPERIENCE
+  const knownNames = knownAreaIds
+    .filter(id => AREA_DESCRIPTIONS[id])
+    .map(areaDisplayName);
+  const knownList = knownNames.length <= 2
+    ? knownNames.join(' and ')
+    : knownNames.slice(0, -1).join(', ') + ', and ' + knownNames[knownNames.length - 1];
+
+  const myExperience = `I just arrived. I can see ${knownList} from here. I don't know what else is out there — I'll have to explore or ask someone.`;
+
+  return { knownPlaces, myExperience, knowsPlaza };
+}
+
+/**
  * Build a customized starting worldView for a newly spawned agent.
  * The agent knows only their spawn area + adjacent areas.
  * Physics (REALITY) are universal; geography (PLACES) is local.
+ * @deprecated Use buildStartingWorldViewParts() + AgentCognition compositional worldView instead.
  */
 export function buildStartingWorldView(spawnAreaId: string): string {
   const adjacent = AREA_ADJACENCY[spawnAreaId] ?? [];
