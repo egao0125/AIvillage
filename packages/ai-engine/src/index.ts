@@ -639,13 +639,16 @@ End with: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
     const systemPrompt = `You are ${this.agent.config.name}. Below is your current understanding of the world. Update it based on today's experiences.
 
 RULES FOR UPDATING:
-- Keep the same section structure (REALITY, PLACES, ANNOUNCEMENTS, WHAT YOU CAN DO, HOW TO BE) but you may modify ANY content within them.
+- Keep the same section structure (REALITY, PLACES, ANNOUNCEMENTS, WHAT YOU CAN DO, HOW TO BE, MY EXPERIENCE) but you may modify ANY content within them.
+- If you discovered new places today, ADD them to PLACES. If you heard about places from others, add them with a note that you haven't been there yet.
+- Update MY EXPERIENCE with what you've learned, where you've been, and what you now know.
 - Weave your personal experience into the descriptions.
 - Add warnings, tips, or personal notes to places and rules you've learned about.
 - Remove or correct anything you've learned is wrong.
-- Stay concise — under 400 words total. Cut fluff ruthlessly.
+- Stay concise — under 500 words total. Cut fluff ruthlessly.
 - Write in first person where it makes sense. This is YOUR understanding, not an objective guide.
 - Do NOT add new sections. Do NOT include memories, plans, or to-do lists.
+- You MUST keep all six sections: REALITY, PLACES, ANNOUNCEMENTS, WHAT YOU CAN DO, HOW TO BE, MY EXPERIENCE.
 
 YOUR CURRENT WORLD VIEW:
 ${this.worldView}
@@ -655,8 +658,12 @@ Return the complete updated world view text. Nothing else.`;
     const response = await this.llm.complete(systemPrompt, recentMemoriesText);
 
     // Sanity check: reject responses missing key sections or too short
-    if (!response.includes('REALITY') || !response.includes('PLACES') || response.length < 100) {
-      console.warn(`[WorldView] ${this.agent.config.name} rejected invalid worldView update (missing REALITY/PLACES or too short)`);
+    const missingSections: string[] = [];
+    for (const section of ['REALITY', 'PLACES', 'WHAT YOU CAN DO']) {
+      if (!response.includes(section)) missingSections.push(section);
+    }
+    if (missingSections.length > 0 || response.length < 100) {
+      console.warn(`[WorldView] ${this.agent.config.name} rejected invalid worldView update (missing ${missingSections.join(', ') || 'content'} or too short)`);
       return undefined;
     }
 
@@ -784,6 +791,7 @@ Output a JSON array ONLY, no other text:
    * Scans nearby agents, objects, and events within perception radius.
    */
   private lastPerceptionKey: string = '';
+  private knownAreas: Set<string> = new Set();
 
   async perceive(nearbyAgents: Agent[], nearbyAreas: MapArea[]): Promise<string[]> {
     const observations: string[] = [];
@@ -804,6 +812,38 @@ Output a JSON array ONLY, no other text:
     const perceptionKey = observations.sort().join('|');
     if (perceptionKey === this.lastPerceptionKey) return observations;
     this.lastPerceptionKey = perceptionKey;
+
+    // Discovery check: create high-importance memory for newly discovered areas
+    for (const area of nearbyAreas) {
+      const areaKey = area.name.toLowerCase();
+      if (!this.knownAreas.has(areaKey)) {
+        // Seed known areas from worldView on first encounter
+        if (this.knownAreas.size === 0) {
+          const placesMatch = this.worldView.match(/PLACES:\n([\s\S]*?)(?:\n\n|\nThese are)/);
+          if (placesMatch) {
+            for (const line of placesMatch[1].split('\n')) {
+              const name = line.split('—')[0]?.trim().toLowerCase();
+              if (name) this.knownAreas.add(name);
+            }
+          }
+        }
+        if (!this.knownAreas.has(areaKey)) {
+          this.knownAreas.add(areaKey);
+          await this.memory.add({
+            id: crypto.randomUUID(),
+            agentId: this.agent.id,
+            type: "observation",
+            content: `I discovered a new place: ${area.name} (${area.type}). I didn't know this was here before.`,
+            importance: 7,
+            timestamp: Date.now(),
+            relatedAgentIds: [],
+          });
+          console.log(`[Discovery] ${this.agent.config.name} discovered ${area.name}`);
+        } else {
+          this.knownAreas.add(areaKey);
+        }
+      }
+    }
 
     // Combine all observations into a single memory instead of one per observation
     const combined = observations.join(' ');
