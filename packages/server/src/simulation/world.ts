@@ -1,5 +1,6 @@
 import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldSnapshot } from '@ai-village/shared';
 import type { TradeProposal } from '@ai-village/ai-engine';
+import { RESOURCES } from '@ai-village/ai-engine';
 import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
 
 export class World {
@@ -135,6 +136,38 @@ export class World {
     console.log(`[World] Daily counters reset (day ${this.time.day})`);
   }
 
+  spoilFood(): void {
+    const nameToDef = new Map<string, { spoilDays: number }>();
+    for (const [id, def] of Object.entries(RESOURCES)) {
+      nameToDef.set(def.name, def);
+      nameToDef.set(id, def);
+    }
+
+    const MINUTES_PER_DAY = 24 * 60;
+    const spoiled: Item[] = [];
+
+    for (const [_itemId, item] of this.items) {
+      if (!item.createdAt) continue;
+      const def = nameToDef.get(item.name) ?? nameToDef.get(item.name.replace(/ /g, '_'));
+      if (!def || def.spoilDays <= 0) continue;
+
+      const ageMinutes = this.time.totalMinutes - item.createdAt;
+      const ageDays = ageMinutes / MINUTES_PER_DAY;
+      if (ageDays >= def.spoilDays) {
+        spoiled.push(item);
+      }
+    }
+
+    for (const item of spoiled) {
+      this.removeItem(item.id);
+      const owner = this.agents.get(item.ownerId);
+      console.log(`[World] ${item.name} owned by ${owner?.config.name ?? item.ownerId} has spoiled`);
+    }
+    if (spoiled.length > 0) {
+      console.log(`[World] ${spoiled.length} items spoiled at midnight`);
+    }
+  }
+
   addBoardPost(post: BoardPost): void {
     this.board.push(post);
     // Keep board manageable — max 50 active posts
@@ -208,6 +241,7 @@ export class World {
     const MAX_INVENTORY = 30;
     const owner = this.agents.get(item.ownerId);
     if (owner && owner.inventory.length >= MAX_INVENTORY) return; // inventory full
+    if (!item.createdAt) item.createdAt = this.time.totalMinutes;
     this.items.set(item.id, item);
     if (owner) {
       owner.inventory.push(item);
@@ -402,6 +436,29 @@ export class World {
       agent.skills.push({ ...skill });
     }
     console.log(`[World] ${agent.config.name} skill update: ${skill.name} (level ${existing?.level ?? skill.level})`);
+  }
+
+  addSkillXP(agentId: string, skillName: string, xpGained: number, learnedFrom?: string): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+
+    let skill = agent.skills.find(s => s.name === skillName);
+    if (!skill) {
+      skill = { name: skillName, level: 1, xp: 0, learnedFrom };
+      agent.skills.push(skill);
+    }
+
+    const XP_PER_LEVEL = 50;
+    const MAX_LEVEL = 10;
+    skill.xp = (skill.xp ?? 0) + xpGained;
+
+    while (skill.xp >= XP_PER_LEVEL && skill.level < MAX_LEVEL) {
+      skill.xp -= XP_PER_LEVEL;
+      skill.level++;
+      console.log(`[World] ${agent.config.name} leveled up ${skillName} to ${skill.level}!`);
+    }
+    if (learnedFrom) skill.learnedFrom = learnedFrom;
+    console.log(`[World] ${agent.config.name} ${skillName} +${xpGained} XP (level ${skill.level}, ${skill.xp}/${XP_PER_LEVEL} XP)`);
   }
 
   // --- Agent Death (Phase 3) ---

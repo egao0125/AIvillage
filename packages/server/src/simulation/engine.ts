@@ -567,6 +567,7 @@ export class SimulationEngine {
     // 1b. Reset daily counters at midnight
     if (time.hour === 0 && time.minute === 0) {
       this.world.resetDailyCounters();
+      this.world.spoilFood();
     }
 
     // 2. Broadcast time every 15 game minutes
