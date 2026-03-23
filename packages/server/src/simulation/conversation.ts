@@ -688,8 +688,24 @@ export class ConversationManager {
     // Build world state for resolver
     const worldState = this.buildWorldStateForResolver();
 
-    // Deterministic resolution — no LLM
-    const intent = parseIntent(rawAction, agentState);
+    // Deterministic resolution first — fast, no LLM
+    let intent = parseIntent(rawAction, agentState);
+
+    // If parseIntent couldn't classify, use LLM to normalize the freeform text
+    if (intent.type === 'unknown' || intent.type === 'social' || intent.type === 'intent') {
+      try {
+        const inventoryNames = actor.inventory.map(i => i.name);
+        const cleanAction = await cognition.classifyAction(rawAction, area?.name ?? 'unknown', inventoryNames);
+        console.log(`[Social] ${actorName} LLM classified "${rawAction.slice(0, 60)}..." → "${cleanAction}"`);
+        const reclassified = parseIntent(cleanAction, agentState);
+        if (reclassified.type !== 'unknown' && reclassified.type !== 'social' && reclassified.type !== 'intent') {
+          intent = reclassified;
+        }
+      } catch (err) {
+        console.error(`[Social] ${actorName} LLM classify failed:`, (err as Error).message);
+      }
+    }
+
     const outcome = executeAction(intent, agentState, worldState);
 
     console.log(`[Social] ${actorName} → ${outcome.type}: ${outcome.success ? 'SUCCESS' : 'FAILED'} — ${outcome.description}`);

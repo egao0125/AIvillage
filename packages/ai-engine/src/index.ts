@@ -472,6 +472,36 @@ Action: "${action}"`;
   }
 
   /**
+   * classifyAction() — LLM fallback for when parseIntent can't classify a freeform action string.
+   * Returns a clean, machine-parseable action command like "gather wheat" or "eat bread".
+   */
+  async classifyAction(rawAction: string, location: string, inventory: string[]): Promise<string> {
+    const systemPrompt = `You translate freeform action descriptions into simple game commands.
+
+Available commands:
+- gather [resource] (e.g. "gather wheat", "gather fish", "gather herbs", "gather wood", "gather stone")
+- eat [food] (e.g. "eat bread", "eat fish", "eat stew")
+- craft [item] (e.g. "craft bread", "craft plank", "craft poultice")
+- build [structure] (e.g. "build shelter", "build workshop")
+- rest
+- sleep
+- use medicine
+- give [item] to [name]
+- trade [item] for [item] with [name]
+- talk to [name]
+- go to [location]
+
+Reply with ONLY the command. One line. No explanation.`;
+
+    const userPrompt = `Location: ${location}
+Inventory: ${inventory.join(', ') || 'nothing'}
+Action: "${rawAction}"`;
+
+    const response = await this.llm.complete(systemPrompt, userPrompt);
+    return response.trim().replace(/^["']|["']$/g, '');
+  }
+
+  /**
    * plan() — Morning intention-setting. Returns a JSON array of intention strings.
    * Each intention names what the agent wants to do and where.
    * Replaces planDay() — no timed schedule, just prioritized intentions.
