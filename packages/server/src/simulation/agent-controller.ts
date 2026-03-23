@@ -1072,7 +1072,7 @@ export class AgentController {
 
       // Mechanical fallback — go to nearest gathering location (no LLM needed)
       const target = this.nearestFoodLocation();
-      this.intentions = [`gathering food at ${target}`];
+      this.intentions = [`gather food at ${target}`];
       this.currentIntentionIndex = 0;
       this.followNextIntention();
     } finally {
@@ -1109,7 +1109,7 @@ export class AgentController {
       }
 
       // Mechanical fallback — go to hospital (no LLM needed)
-      this.intentions = ['seeking medical treatment at hospital'];
+      this.intentions = ['use medicine at hospital'];
       this.currentIntentionIndex = 0;
       this.followNextIntention();
     } finally {
