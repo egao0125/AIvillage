@@ -124,12 +124,12 @@ const STEAL_PATTERNS = [
 ];
 
 const DESTROY_PATTERNS = [
-  /destroy\s+(?:the\s+)?(.+)/i,
-  /break\s+(?:the\s+)?(.+)/i,
-  /smash\s+(?:the\s+)?(.+)/i,
-  /burn\s+(?:the\s+)?(.+)/i,
-  /tear\s+down\s+(?:the\s+)?(.+)/i,
-  /demolish\s+(?:the\s+)?(.+)/i,
+  /^destroy\s+(?:the\s+)?(.+)/i,
+  /^break\s+(?:the\s+)?(?!me\b|my\b|it\b|you\b|him\b|her\b|us\b|them\b|free\b|even\b|down\b|through\b|away\b|out\b|off\b|up\b|into\b)(.+)/i,
+  /^smash\s+(?:the\s+)?(.+)/i,
+  /^burn\s+(?:the\s+)?(.+)/i,
+  /^tear\s+down\s+(?:the\s+)?(.+)/i,
+  /^demolish\s+(?:the\s+)?(.+)/i,
 ];
 
 const FIGHT_PATTERNS = [

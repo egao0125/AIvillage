@@ -195,6 +195,25 @@ export class ConversationManager {
         return false;
       }
 
+      // Detect and handle Claude safety refusal (breaks character)
+      const REFUSAL_PATTERNS = [
+        /I can't continue this/i,
+        /I('d| would) be creating/i,
+        /as an AI/i,
+        /language model/i,
+        /this crosses into/i,
+        /breaks? character/i,
+        /roleplay content/i,
+        /psychological distress/i,
+        /I('m| am) not (?:able|going) to/i,
+        /this (?:scenario|setup|situation) (?:appears|seems)/i,
+      ];
+      const isRefusal = REFUSAL_PATTERNS.some(p => p.test(response));
+      if (isRefusal) {
+        console.log(`[Conversation] ${speakerAgent.config.name} safety refusal detected — ending conversation`);
+        response = "I think I've said everything I can say tonight. Let's pick this up tomorrow when we've both rested.";
+      }
+
       // Extract [ACTION: ...] tags and execute social actions
       // Use the first other participant as default target for actions
       const defaultTargetId = otherIds[0];
@@ -667,10 +686,10 @@ export class ConversationManager {
     cognition: AgentCognition,
     cognitions?: Map<string, AgentCognition>,
     requestConversation?: (initiatorId: string, targetId: string) => boolean,
-  ): Promise<void> {
+  ): Promise<string> {
     console.log(`[Social] ${actorName} action: ${rawAction}`);
     const actor = this.world.getAgent(actorId);
-    if (!actor) return;
+    if (!actor) return '';
 
     const area = this.world.getAreaAt(actor.position);
     const nearbyFull = this.world.getNearbyAgents(actor.position, 8)
@@ -716,6 +735,14 @@ export class ConversationManager {
 
     // Apply outcome to actual world + store memory
     this.applyOutcome(actorId, actorName, outcome, cognition, cognitions, requestConversation);
+
+    // Return formatted outcome for direct feedback to thinkAfterOutcome()
+    if (!outcome.success) {
+      let desc = `FAILED: ${outcome.description}`;
+      if (outcome.remediation) desc += ` NEXT STEP: ${outcome.remediation}`;
+      return desc;
+    }
+    return `SUCCESS: ${outcome.description}`;
   }
 
   /**
@@ -1199,7 +1226,7 @@ export class ConversationManager {
     if (outcome.skillXpGained) memoryLines.push(`${outcome.skillXpGained.skill} skill improving.`);
     if (outcome.energySpent > 0) memoryLines.push(`Energy spent: ${outcome.energySpent}. Remaining energy: ${actor.vitals?.energy ?? '?'}.`);
     if (!outcome.success && outcome.remediation) {
-      memoryLines.push(`Hint: ${outcome.remediation}`);
+      memoryLines.push(`NEXT STEP: ${outcome.remediation}`);
     }
     memoryLines.push(`Current inventory: ${invStr}`);
 

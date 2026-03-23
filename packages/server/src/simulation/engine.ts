@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, SEASONS } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
@@ -527,6 +527,34 @@ export class SimulationEngine {
 
     this.broadcaster.agentAction(id, 'has been resurrected', '\u2728');
 
+    // Remove stale death notices from board so agents don't obsess over "iterations of death"
+    const agentName = agent.config.name;
+    const deathPostIndices: number[] = [];
+    for (let i = 0; i < this.world.board.length; i++) {
+      const post = this.world.board[i];
+      if (post.authorId === 'system' && post.content.includes(agentName) && post.content.includes('died')) {
+        deathPostIndices.push(i);
+      }
+    }
+    // Remove in reverse order to preserve indices
+    for (let i = deathPostIndices.length - 1; i >= 0; i--) {
+      this.world.board.splice(deathPostIndices[i], 1);
+    }
+    if (deathPostIndices.length > 0) {
+      // Post recovery notice
+      this.world.addBoardPost({
+        id: crypto.randomUUID(),
+        authorId: 'system',
+        authorName: 'Village Notice',
+        type: 'announcement' as BoardPostType,
+        content: `${agentName} has recovered and returned to the village.`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      });
+      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+      console.log(`[Engine] Removed ${deathPostIndices.length} death notice(s) for ${agentName}`);
+    }
+
     console.log(`[Engine] Agent resurrected: ${agent.config.name}`);
 
     this.refreshNameMaps();
@@ -895,6 +923,36 @@ export class SimulationEngine {
       this.world.advanceSeason();
       this.broadcaster.weatherChange(this.world.weather);
       console.log(`[Engine] Season changed to ${this.world.weather.season}`);
+
+      const season = this.world.weather.season;
+      const seasonDef = SEASONS[season];
+
+      // Board post — agents see this in plan context
+      this.world.addBoardPost({
+        id: crypto.randomUUID(),
+        authorId: 'system',
+        authorName: 'Village Notice',
+        type: 'announcement' as BoardPostType,
+        content: `The season has changed to ${season}. ${seasonDef.description}`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      });
+      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+
+      // Inject memory into all living agents
+      for (const [id, cognition] of this.cognitions) {
+        const agent = this.world.getAgent(id);
+        if (!agent || agent.alive === false) continue;
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: id,
+          type: 'observation',
+          content: `The season changed to ${season}. ${seasonDef.description}`,
+          importance: 8,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        });
+      }
     }
   }
 
@@ -1139,7 +1197,10 @@ export class SimulationEngine {
           actorId, actorName, targetId, action, cognition,
           this.cognitions,
           requestConv,
-        );
+        ).then((outcomeDesc) => {
+          const controller = this.controllers.get(actorId);
+          if (controller) controller.lastOutcomeDescription = outcomeDesc;
+        });
       },
       requestConversation: requestConv,
     };

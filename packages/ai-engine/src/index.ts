@@ -339,13 +339,18 @@ If nothing notable was exchanged, return []`;
     }
 
     // Known people constraint — prevents LLM from inventing fictional characters
+    const allAgentNames = Array.from(this.nameMap.values());
     const knownPeople = (this.agent.mentalModels || []).map(m => this.resolveName(m.targetId));
-    if (knownPeople.length > 0) {
-      parts.push(`\nPeople you know in this village: ${knownPeople.join(', ')}`);
-    } else {
-      parts.push(`\nYou haven't met anyone in this village yet.`);
+
+    if (allAgentNames.length > 0) {
+      parts.push(`\nThere are EXACTLY ${allAgentNames.length} people in this entire village: ${allAgentNames.join(', ')}. Nobody else exists.`);
     }
-    parts.push('Only reference people from this list or people you can physically see nearby. Do not invent or imagine people who are not here.');
+    if (knownPeople.length > 0) {
+      parts.push(`You personally know: ${knownPeople.join(', ')}`);
+    } else {
+      parts.push(`You haven't met anyone yet.`);
+    }
+    parts.push('RULE: Do NOT invent, imagine, or reference anyone not in the list above. There are no shopkeepers, bartenders, bakers, or background NPCs. If a location seems empty, it IS empty.');
 
     return parts.join('\n');
   }
@@ -364,6 +369,7 @@ ${this.buildIdentityBlock()}
 
 This is your inner voice. Think honestly. You can also act.
 IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events. If you're alone, you're alone.
+There are no NPCs, shopkeepers, or background characters. Every person in this village is named in your context. Locations may be empty.
 
 Think about your situation. 1-3 sentences, first person, private and honest.
 
@@ -532,7 +538,14 @@ Today is day ${currentTime.day}.`;
 Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
 
-What do you want to do today? Write 4-6 lines, each one completely different, in your own voice.
+IMPORTANT: Only plan interactions with real people listed above. There are no shopkeepers, bartenders, or unnamed villagers.
+
+What do you want to do today? Write 3-5 intentions. Each intention is a physical action — something your body does in a specific place. Not something you think about, feel, or discuss.
+
+Good: "gather wood at the forest", "talk to Mei at the plaza", "craft bread at the bakery", "build shelter at the park"
+Bad: "reflect on my relationship with trust", "figure out what I need", "consider my place in the village"
+
+Be practical. Be boring if necessary. Survival first, meaning later.
 
 Return a JSON array of strings ONLY.`;
 
@@ -568,7 +581,7 @@ Return a JSON array of strings ONLY.`;
 
     const knownAreaKeys = new Set(this.knownPlaces.keys());
 
-    return intentions.map(intention => {
+    const validated = intentions.map(intention => {
       const lower = intention.toLowerCase();
       // Check if this intention involves gathering
       const gatherMatch = lower.match(/\b(?:gather|harvest|collect|pick|forage|fish|chop|dig)\s+(\w+)/);
@@ -594,6 +607,28 @@ Return a JSON array of strings ONLY.`;
 
       // Agent doesn't know where this resource is — rewrite
       return `Find where ${resource} grows — explore new areas or ask someone`;
+    });
+
+    // Filter vague/reflective intentions — replace with practical defaults
+    const vaguePatterns = [
+      /\breflect\b/i,
+      /\bconsider\b/i,
+      /\bfigure out\b/i,
+      /\bthink about\b/i,
+      /\bunderstand why\b/i,
+    ];
+    const practicalDefaults = [
+      'gather wood at the forest',
+      'gather food at the farm',
+      'fish at the lake',
+      'forage mushrooms in the forest',
+      'explore the village',
+    ];
+    return validated.map(intention => {
+      if (vaguePatterns.some(p => p.test(intention))) {
+        return practicalDefaults[Math.floor(Math.random() * practicalDefaults.length)];
+      }
+      return intention;
     });
   }
 
@@ -642,7 +677,9 @@ You can do things during conversation:
   [ACTION: teach ${otherAgents[0]?.config.name || 'them'} fishing]
   [ACTION: give bread to ${otherAgents[0]?.config.name || 'them'}]
 
-Talk like a real person. 1-3 sentences.`;
+Talk like a real person. 1-3 sentences.
+NEVER mention people who aren't in this conversation or listed in your known people. There are no background NPCs.
+CRITICAL: NEVER break character. Never say "I can't continue" or "as an AI" or reference being a language model. If the conversation feels too heavy, steer it lighter IN CHARACTER — change the subject, suggest doing something physical, crack a joke, or say goodbye. Stay in character at all times.`;
 
     const memoryContext = memories.length > 0
       ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => {
