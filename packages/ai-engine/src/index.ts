@@ -72,6 +72,8 @@ export class AgentCognition {
   public myExperience: string = 'I just arrived. I don\'t know where anything is yet.';
   /** Whether the agent knows about the plaza/village board */
   public knowsPlaza: boolean = false;
+  /** Agent ID → name mapping for resolving mental model targets */
+  public nameMap: Map<string, string> = new Map();
 
   /** Compose the full worldView from exactly 3 sections */
   get worldView(): string {
@@ -108,6 +110,11 @@ ${this.myExperience}`;
       this.myExperience = parts.myExperience;
       this.knowsPlaza = parts.knowsPlaza;
     }
+  }
+
+  /** Resolve agent ID to display name, falling back to truncated ID */
+  private resolveName(id: string): string {
+    return this.nameMap.get(id) || id.slice(0, 8);
   }
 
   /**
@@ -326,12 +333,13 @@ If nothing notable was exchanged, return []`;
     if (this.agent.mentalModels?.length) {
       parts.push('\nYOUR READ ON PEOPLE:');
       for (const m of this.agent.mentalModels) {
-        parts.push(`- ${m.targetId}: trust ${m.trust}, you think they want "${m.predictedGoal}". You feel ${m.emotionalStance}.`);
+        const name = this.resolveName(m.targetId);
+        parts.push(`- ${name}: trust ${m.trust}, you think they want "${m.predictedGoal}". You feel ${m.emotionalStance}.`);
       }
     }
 
     // Known people constraint — prevents LLM from inventing fictional characters
-    const knownPeople = (this.agent.mentalModels || []).map(m => m.targetId);
+    const knownPeople = (this.agent.mentalModels || []).map(m => this.resolveName(m.targetId));
     if (knownPeople.length > 0) {
       parts.push(`\nPeople you know in this village: ${knownPeople.join(', ')}`);
     } else {
