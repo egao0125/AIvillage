@@ -1,4 +1,5 @@
 import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldSnapshot } from '@ai-village/shared';
+import type { TradeProposal } from '@ai-village/ai-engine';
 import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
 
 export class World {
@@ -17,6 +18,11 @@ export class World {
   buildings: Map<string, Building> = new Map();
   technologies: Technology[] = [];
   weather: Weather;
+
+  // --- Deterministic action resolver state ---
+  dailyGatherCounts: Map<string, number> = new Map();
+  activeBuildProjects: Map<string, { buildingDefId: string; sessionsComplete: number; ownerId: string; location: string }> = new Map();
+  pendingTrades: Map<string, TradeProposal> = new Map();
 
   constructor() {
     this.time = {
@@ -114,6 +120,19 @@ export class World {
       }
     }
     return { ...this.time };
+  }
+
+  /**
+   * Reset daily counters at midnight. Called by engine when day transitions.
+   */
+  resetDailyCounters(): void {
+    this.dailyGatherCounts.clear();
+    // Expire old or resolved trade proposals
+    const now = Date.now();
+    for (const [id, t] of this.pendingTrades) {
+      if (t.expiresAt < now || t.status !== 'pending') this.pendingTrades.delete(id);
+    }
+    console.log(`[World] Daily counters reset (day ${this.time.day})`);
   }
 
   addBoardPost(post: BoardPost): void {

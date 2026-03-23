@@ -564,6 +564,11 @@ export class SimulationEngine {
     // 1. Advance game time
     const time = this.world.advanceTime();
 
+    // 1b. Reset daily counters at midnight
+    if (time.hour === 0 && time.minute === 0) {
+      this.world.resetDailyCounters();
+    }
+
     // 2. Broadcast time every 15 game minutes
     if (time.minute % 15 === 0) {
       this.broadcaster.worldTime(time);
@@ -963,6 +968,13 @@ export class SimulationEngine {
 
   getSnapshot(): WorldSnapshot {
     const snapshot = this.world.getSnapshot();
+    // Enrich agents with worldView from cognition
+    for (const agent of snapshot.agents) {
+      const cognition = this.cognitions.get(agent.id);
+      if (cognition) {
+        agent.worldView = cognition.worldView;
+      }
+    }
     snapshot.narratives = this.narrator.getRecentNarratives();
     snapshot.storylines = this.storylineDetector.getStorylines();
     snapshot.weeklySummary = this.cachedWeeklySummary;

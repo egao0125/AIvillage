@@ -66,6 +66,9 @@ export interface Agent {
   // Consequence: collective identity. Betray your guild? Lose everything.
   institutionIds?: string[];
 
+  // --- WorldView ---
+  worldView?: string;
+
   // --- Phase 5b: Family ---
   familyId?: string;
   partnerId?: string;

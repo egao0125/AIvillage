@@ -251,6 +251,36 @@ const ActionLog: React.FC<{ agentId: string }> = ({ agentId }) => {
   );
 };
 
+const WorldViewSection: React.FC<{ worldView: string }> = ({ worldView }) => {
+  const [expanded, setExpanded] = useState(false);
+  const preview = worldView.slice(0, 150).replace(/\n/g, ' ') + (worldView.length > 150 ? '...' : '');
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={sectionLabel}>WORLDVIEW</div>
+      <div
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          padding: '8px 12px',
+          background: COLORS.bgCard,
+          borderRadius: 4,
+          border: `1px solid ${COLORS.border}`,
+          cursor: 'pointer',
+          fontSize: '11px',
+          color: COLORS.textDim,
+          lineHeight: 1.5,
+          maxHeight: expanded ? '400px' : '60px',
+          overflow: expanded ? 'auto' : 'hidden',
+          whiteSpace: expanded ? 'pre-wrap' : 'normal',
+          transition: 'max-height 0.3s',
+        }}
+      >
+        {expanded ? worldView : preview}
+      </div>
+    </div>
+  );
+};
+
 interface AgentProfileProps {
   agent: Agent;
   onClose: () => void;
@@ -531,6 +561,8 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
           </div>
         );
       })()}
+
+      {agent.worldView && <WorldViewSection worldView={agent.worldView} />}
 
       {/* Owner controls: Leave/Return + Update API Key */}
       {agent.ownerId === getUserId() && agent.alive !== false && (

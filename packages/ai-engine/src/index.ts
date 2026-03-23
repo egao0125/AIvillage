@@ -6,6 +6,10 @@
 
 import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput } from "@ai-village/shared";
 
+// --- World Rules + Action Resolver (deterministic physics) ---
+export * from './world-rules.js';
+export * from './action-resolver.js';
+
 // --- World Rules (prepended to think/plan/talk/reflect system prompts) ---
 
 export const GLOBAL_PROMPT = `You are a person in a world. Other people may or may not be around.
@@ -42,11 +46,28 @@ These are places, not services. Nobody works anywhere unless they choose to. Not
 ANNOUNCEMENTS:
 There is a village board at the plaza that everyone can read. When you post something on the board, every person in the village will see it. This is the only way to communicate with everyone at once. To post, write [ACTION: post "your message"].
 
-ACTIONS:
-Say anything. Do anything a person could physically do. When you take a physical action, write [ACTION: what you do]. There are no special commands. Just describe what you do.
+WHAT YOU CAN DO:
+Gather — collect resources from the land. What you find depends on where you are, the season, your skill, and whether others have already gathered today. You won't always succeed.
+Craft — turn raw materials into useful things. You need the right ingredients, the right location, and enough skill. The village has recipes you can discover by trying or by learning from others.
+Build — construct shelters and structures. This takes multiple work sessions across days, specific materials, and a hammer. You can't do it alone easily.
+Eat — consume food to reduce hunger. Better food helps more.
+Rest — recover energy. Sleeping restores the most.
+Trade — offer items to someone nearby in exchange for what they have. Both of you must agree.
+Teach — if you're skilled enough, you can teach someone what you know. It takes time from both of you.
+Talk — have a conversation with someone nearby.
+Post — write a message on the village board for everyone to read.
+
+To act, write what you want to do:
+  [ACTION: gather wheat at the farm]
+  [ACTION: cook stew at the café]
+  [ACTION: trade 3 wheat for 2 fish with Mei]
+  [ACTION: teach fishing to Koji]
+  [ACTION: build wooden shelter at the lake]
+
+You will be told what happened. If you fail, you'll learn why.
 
 HOW TO BE:
-Talk like a real person. You change through experience. You are free to do anything in this new society.`;
+Talk like a real person. You change through experience. You learn by doing and failing.`;
 
 // --- Memory Stream ---
 
@@ -264,8 +285,12 @@ This is your inner voice. Think honestly. You can also act.
 
 Think about your situation. 1-3 sentences, first person, private and honest.
 
-If you want to DO something, add: [ACTION: describe what you do]
-The system will interpret and execute your action automatically.
+If you want to DO something, add an action:
+  [ACTION: gather wheat at the farm]
+  [ACTION: cook stew at the café]
+  [ACTION: trade 3 wheat for 2 fish with Mei]
+You will be told what happened — you might fail.
+
 If your mood changed, add: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
 
     const memories = await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
@@ -396,19 +421,26 @@ Today is day ${currentTime.day}.`;
 Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
 
-What do you need to do today? List 4-6 intentions in priority order.
+What do you need to do today? List 4-6 concrete actions.
 
-RULES:
-- Every intention MUST name a CONCRETE action + location. "gather food at farm" not "figure out what's happening"
-- Do NOT plan to "investigate", "assess", "understand", "observe", "go about daily routine", or "wander" — those waste time. ACT instead.
-- If hungry: "gather food at farm" or "gather fish at lake" or "eat [food item]"
-- If you want to trade: "talk to [name] about trading [item]"
-- If you want to build: "gather wood at forest" then "build [thing] at [location]"
-- If you already tried something and it FAILED (check memories), plan something DIFFERENT.
-- Locations: farm, garden, lake, forest, plaza, cafe, park, church, bakery, workshop, hospital
+Before planning, consider:
+- How hungry are you? Do you have food, or do you need to gather/trade for some?
+- How is your energy? Can you do hard work today, or do you need to rest?
+- What resources do you have? What could you make from them?
+- What failed yesterday? Don't repeat the same mistake.
+- What did you promise someone? Will you keep that promise?
+- Winter is coming (or here). Are you prepared?
+
+Every intention must be a physical action at a specific place:
+  "gather wheat at farm"
+  "cook bread at bakery"
+  "trade fish with Mei at market"
+  "build shelter at lake"
+  "teach Koji fishing at lake"
+NOT: "think about my situation" or "explore possibilities"
 
 Return a JSON array of strings ONLY:
-["gather food at farm", "talk to Jennie about trading clay", ...]`;
+["gather wheat at farm", "cook bread at bakery", ...]`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
@@ -452,18 +484,31 @@ Return a JSON array of strings ONLY:
     const artifactSection = artifactContext ? `\n\nVILLAGE MEDIA (recent publications):\n${artifactContext}` : '';
     const secretsSection = secretsContext ? `\n\nSECRETS YOU KNOW (share strategically, or use as leverage):\n${secretsContext}` : '';
 
+    // Build "what you need" hint from vitals/inventory
+    const needs: string[] = [];
+    const v = this.agent.vitals;
+    if (v) {
+      if (v.hunger >= 60) needs.push('food');
+      if (v.energy <= 30) needs.push('rest');
+      if (v.health <= 30) needs.push('medicine');
+    }
+    if (!this.agent.inventory?.length) needs.push('supplies');
+    const needsLine = needs.length > 0 ? `\n- You need: ${needs.join(', ')}` : '';
+
     const systemPrompt = `${this.worldView}
 
 ${this.buildIdentityBlock()}
 
-You are in a conversation. Talk like a real person.
+You are in a conversation with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
 
-You are talking with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}
+${this.buildContextBlock()}${needsLine}
 
-${this.buildContextBlock()}
+You can do things during conversation:
+  [ACTION: offer 2 wheat to ${otherAgents[0]?.config.name || 'them'} for their fish]
+  [ACTION: teach ${otherAgents[0]?.config.name || 'them'} fishing]
+  [ACTION: give bread to ${otherAgents[0]?.config.name || 'them'}]
 
-You can do anything. Describe physical actions in [ACTION: ...] tags.
-1-3 sentences MAX. No monologues.`;
+Talk like a real person. 1-3 sentences. You can negotiate, ask for help, offer to trade, or just talk.`;
 
     const memoryContext = memories.length > 0
       ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => m.content).join('\n')}`
@@ -518,16 +563,19 @@ Your turn to speak:`;
 
 ${this.buildIdentityBlock()}
 
-The day is ending. Be honest with yourself.
+The day is ending. Think honestly about today.
 ${this.getSituationalObservations()}
 
-Reflect:
-- Who do you trust now? Who don't you?
-- What are you afraid of? What are you planning?
-- How are you different from yesterday?
-- What do you need to do tomorrow?
+${this.buildContextBlock()}
 
-2-3 sentences. First person. Raw and honest.
+Reflect:
+- What worked? What failed? Why?
+- Are you prepared for tomorrow? For winter?
+- Who helped you? Who do you owe? Who owes you?
+- What skill should you develop next?
+- What do you need that you can't get alone?
+
+2-3 sentences. First person. Be practical and honest.
 
 End with: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
 
@@ -588,7 +636,7 @@ End with: MOOD: <neutral|happy|angry|sad|anxious|excited|scheming|afraid>`;
     const systemPrompt = `You are ${this.agent.config.name}. Below is your current understanding of the world. Update it based on today's experiences.
 
 RULES FOR UPDATING:
-- Keep the same section structure (REALITY, PLACES, ANNOUNCEMENTS, ACTIONS, HOW TO BE) but you may modify ANY content within them.
+- Keep the same section structure (REALITY, PLACES, ANNOUNCEMENTS, WHAT YOU CAN DO, HOW TO BE) but you may modify ANY content within them.
 - Weave your personal experience into the descriptions.
 - Add warnings, tips, or personal notes to places and rules you've learned about.
 - Remove or correct anything you've learned is wrong.

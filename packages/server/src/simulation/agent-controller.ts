@@ -382,80 +382,50 @@ export class AgentController {
     const lowerActivity = activity.toLowerCase();
     const isGatherActivity = lowerActivity.includes('gather') || lowerActivity.includes('forage') || lowerActivity.includes('harvest') || lowerActivity.includes('fish') || lowerActivity.includes('pick') || lowerActivity.includes('find food') || lowerActivity.includes('get food') || lowerActivity.includes('look for food') || lowerActivity.includes('mushroom') || lowerActivity.includes('wheat') || lowerActivity.includes('wood') || lowerActivity.includes('herb') || lowerActivity.includes('crop') || lowerActivity.includes('vegetable');
 
-    // Auto-gather food at gathering locations (MUST run before eating so gathered food can be consumed)
-    const gatherLocations = ['farm', 'garden', 'lake', 'forest', 'forest_south'];
-    if (gatherLocations.includes(this.currentAreaId ?? '') && isGatherActivity) {
-      // Inventory full — auto-drop lowest-value non-food item to make room
-      if (this.agent.inventory.length >= 30) {
-        const droppable = this.agent.inventory
-          .filter(i => i.type !== 'food')
-          .sort((a, b) => a.value - b.value);
-        if (droppable.length > 0) {
-          const dropped = droppable[0];
-          this.world.removeItem(dropped.id);
-          this.broadcaster.agentAction(this.agent.id, `dropped ${dropped.name} (inventory full)`, '\u{1F5D1}\uFE0F');
-          this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
-          console.log(`[Agent] ${this.agent.config.name} auto-dropped ${dropped.name} — inventory was full`);
-        }
-      }
-
-      const gathered = this.world.gatherMaterial(this.agent.id, this.currentAreaId!);
-      if (gathered) {
-        this.world.updateAgentState(this.agent.id, 'active', `gathered ${gathered.name}`);
-        this.broadcaster.agentAction(this.agent.id, `gathered ${gathered.name}`, '\u{1FA93}');
+    // Auto-drop lowest-value non-food item when inventory is full
+    if (this.agent.inventory.length >= 30) {
+      const droppable = this.agent.inventory
+        .filter(i => i.type !== 'food')
+        .sort((a, b) => a.value - b.value);
+      if (droppable.length > 0) {
+        const dropped = droppable[0];
+        this.world.removeItem(dropped.id);
+        this.broadcaster.agentAction(this.agent.id, `dropped ${dropped.name} (inventory full)`, '\u{1F5D1}\uFE0F');
         this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
-        actionCompleted = true;
-        // Emergency: starving agents eat immediately, others keep for trading
-        if (gathered.type === 'food' && this.agent.vitals && this.agent.vitals.hunger >= 60) {
-          this.world.removeItem(gathered.id);
-          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 40);
-          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
-          this.world.updateAgentState(this.agent.id, 'active', `eating ${gathered.name}`);
-          this.broadcaster.agentAction(this.agent.id, `ate ${gathered.name}`, '🍽️');
-          this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
-        }
+        console.log(`[Agent] ${this.agent.config.name} auto-dropped ${dropped.name} — inventory was full`);
       }
     }
 
-    // Eating reduces hunger (runs after gathering so freshly gathered food is available)
-    const isFoodActivity = lowerActivity.includes('eat') || lowerActivity.includes('food') || lowerActivity.includes('meal') || lowerActivity.includes('lunch') || lowerActivity.includes('dinner') || lowerActivity.includes('breakfast') || lowerActivity.includes('coffee') || lowerActivity.includes('drink');
-    const foodLocations = ['cafe', 'bakery', 'tavern'];
-    const atFoodLocation = foodLocations.includes(this.currentAreaId ?? '');
-
-    const wantsToEat = isFoodActivity || atFoodLocation || (isGatherActivity && this.agent.vitals && this.agent.vitals.hunger >= 40);
-    if (wantsToEat) {
-      const foodItem = this.agent.inventory.find(i => i.type === 'food');
-      if (foodItem) {
-        // Consume food from inventory
-        this.world.removeItem(foodItem.id);
-        if (this.agent.vitals) {
-          this.agent.vitals.hunger = Math.max(0, this.agent.vitals.hunger - 40);
-          this.agent.vitals.energy = Math.min(100, this.agent.vitals.energy + 10);
-        }
-        this.world.updateAgentState(this.agent.id, 'active', `eating ${foodItem.name}`);
-        this.broadcaster.agentAction(this.agent.id, `ate ${foodItem.name}`, '🍽️');
-        this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
-        console.log(`[Agent] ${this.agent.config.name} ate ${foodItem.name} (hunger: ${this.agent.vitals?.hunger})`);
-        actionCompleted = true;
-      }
-    }
-
-    // Healing at hospital — requires consuming a medicine/herb item
-    const isHealingActivity = lowerActivity.includes('heal') || lowerActivity.includes('medicine') || lowerActivity.includes('treat') || lowerActivity.includes('doctor') || lowerActivity.includes('clinic');
-    if ((this.currentAreaId === 'hospital' || isHealingActivity) && this.agent.vitals) {
-      const medicineItem = this.agent.inventory.find(i =>
-        i.type === 'food' && (i.name.toLowerCase().includes('herb') || i.name.toLowerCase().includes('medicine') || i.name.toLowerCase().includes('potion'))
+    // Gathering/crafting/building is now handled by the deterministic action resolver
+    // via [ACTION: ...] tags from think(). The agent will attempt the action and
+    // receive structured feedback (success/fail, items gained, XP, etc.)
+    if (isGatherActivity && this.soloActionExecutor) {
+      // Execute the activity text as a deterministic action immediately
+      void this.soloActionExecutor.executeSocialAction(
+        this.agent.id, this.agent.config.name, '', activity, this.cognition
       );
-      if (medicineItem) {
-        this.world.removeItem(medicineItem.id);
-        this.agent.vitals.health = Math.min(100, this.agent.vitals.health + 20);
-        console.log(`[Agent] ${this.agent.config.name} used ${medicineItem.name} to heal (health: ${this.agent.vitals.health})`);
-        actionCompleted = true;
-      }
+      actionCompleted = true;
     }
 
-    // Rest/relax activities need longer to be meaningful
+    // Eating and healing now also route through the deterministic action resolver
+    const isFoodActivity = lowerActivity.includes('eat') || lowerActivity.includes('food') || lowerActivity.includes('meal') || lowerActivity.includes('lunch') || lowerActivity.includes('dinner') || lowerActivity.includes('breakfast') || lowerActivity.includes('coffee') || lowerActivity.includes('drink');
+    const isHealingActivity = lowerActivity.includes('heal') || lowerActivity.includes('medicine') || lowerActivity.includes('treat') || lowerActivity.includes('doctor') || lowerActivity.includes('clinic');
+
+    if ((isFoodActivity || isHealingActivity) && this.soloActionExecutor && !actionCompleted) {
+      void this.soloActionExecutor.executeSocialAction(
+        this.agent.id, this.agent.config.name, '', activity, this.cognition
+      );
+      actionCompleted = true;
+    }
+
+    // Rest/relax activities — also route through resolver for energy gain
     const isRestActivity = lowerActivity.includes('rest') || lowerActivity.includes('relax') || lowerActivity.includes('nap') || lowerActivity.includes('sit') || lowerActivity.includes('meditat');
+    if (isRestActivity && this.soloActionExecutor && !actionCompleted) {
+      void this.soloActionExecutor.executeSocialAction(
+        this.agent.id, this.agent.config.name, '', 'rest', this.cognition
+      );
+      actionCompleted = true;
+    }
 
     // Set timer based on what happened:
     // - Action completed instantly (gather/eat/heal): brief pause then move on

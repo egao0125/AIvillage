@@ -1,5 +1,5 @@
 import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
-import type { AgentCognition } from '@ai-village/ai-engine';
+import { type AgentCognition, parseIntent, executeAction, RESOURCES, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
 
@@ -402,7 +402,7 @@ export class ConversationManager {
 
   /**
    * Parse and execute a social action from an agent's conversation or think() output.
-   * Uses LLM resolver to break freeform actions into 6 world primitives.
+   * Uses deterministic action resolver — no LLM involved.
    */
   async executeSocialAction(
     actorId: string,
@@ -420,29 +420,359 @@ export class ConversationManager {
     const area = this.world.getAreaAt(actor.position);
     const nearbyFull = this.world.getNearbyAgents(actor.position, 8)
       .filter(a => a.id !== actorId && a.alive !== false);
-    const nearby = nearbyFull.map(a => a.config.name);
-    const nearbyAgentDetails = nearbyFull.map(a => {
-      const items = a.inventory.map(i => i.name).join(', ') || 'nothing';
-      return `- ${a.config.name}: carrying [${items}], ${a.currency}g`;
-    });
 
-    let ops: { op: string; [key: string]: any }[];
-    try {
-      ops = await cognition.resolveAction(rawAction, {
-        location: area?.id ?? 'unknown',
-        nearbyAgents: nearby,
-        nearbyAgentDetails,
-        inventory: actor.inventory.map(i => `${i.name} (${i.type})`),
-        gold: actor.currency,
+    // Build resolver-compatible agent state
+    const agentState: ResolverAgentState = {
+      id: actorId,
+      name: actorName,
+      location: area?.id ?? 'unknown',
+      energy: actor.vitals?.energy ?? 100,
+      hunger: actor.vitals?.hunger ?? 0,
+      health: actor.vitals?.health ?? 100,
+      inventory: this.buildInventoryForResolver(actor),
+      skills: this.buildSkillsForResolver(actor),
+      nearbyAgents: nearbyFull.map(a => ({ id: a.id, name: a.config.name })),
+    };
+
+    // Build world state for resolver
+    const worldState = this.buildWorldStateForResolver();
+
+    // Deterministic resolution — no LLM
+    const intent = parseIntent(rawAction, agentState);
+    const outcome = executeAction(intent, agentState, worldState);
+
+    console.log(`[Social] ${actorName} → ${outcome.type}: ${outcome.success ? 'SUCCESS' : 'FAILED'} — ${outcome.description}`);
+
+    // Apply outcome to actual world + store memory
+    this.applyOutcome(actorId, actorName, outcome, cognition, cognitions, requestConversation);
+  }
+
+  /**
+   * Map Actor's Item[] inventory to resolver's {resource, qty}[] format.
+   */
+  private buildInventoryForResolver(actor: Agent): { resource: string; qty: number }[] {
+    const counts = new Map<string, number>();
+    for (const item of actor.inventory) {
+      const key = item.name.toLowerCase().replace(/\s+/g, '_');
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).map(([resource, qty]) => ({ resource, qty }));
+  }
+
+  /**
+   * Map Actor's Skill[] to resolver's Record<string, {level, xp}> format.
+   */
+  private buildSkillsForResolver(actor: Agent): Record<string, { level: number; xp: number }> {
+    const skills: Record<string, { level: number; xp: number }> = {};
+    for (const s of actor.skills) {
+      skills[s.name.toLowerCase()] = { level: s.level, xp: 0 };
+    }
+    return skills;
+  }
+
+  /**
+   * Build world state for the deterministic resolver.
+   */
+  private buildWorldStateForResolver(): ResolverWorldState {
+    return {
+      season: this.world.weather.season,
+      dailyGatherCounts: this.world.dailyGatherCounts,
+      activeBuildProjects: this.world.activeBuildProjects,
+      pendingTrades: this.world.pendingTrades,
+      getAgentInventory: (agentId: string) => {
+        const agent = this.world.getAgent(agentId);
+        if (!agent) return [];
+        return this.buildInventoryForResolver(agent);
+      },
+    };
+  }
+
+  /**
+   * Apply a deterministic ActionOutcome to the world state.
+   * Handles item creation/removal, skill XP, vitals, trades, builds, and memory feedback.
+   */
+  private applyOutcome(
+    actorId: string,
+    actorName: string,
+    outcome: ActionOutcome,
+    cognition: AgentCognition,
+    cognitions?: Map<string, AgentCognition>,
+    requestConversation?: (initiatorId: string, targetId: string) => boolean,
+  ): void {
+    const actor = this.world.getAgent(actorId);
+    if (!actor) return;
+
+    // --- Items consumed ---
+    if (outcome.itemsConsumed) {
+      for (const consumed of outcome.itemsConsumed) {
+        for (let i = 0; i < consumed.qty; i++) {
+          const item = actor.inventory.find(it => it.name.toLowerCase().replace(/\s+/g, '_') === consumed.resource);
+          if (item) this.world.removeItem(item.id);
+        }
+      }
+      this.broadcaster.agentInventory(actorId, actor.inventory);
+    }
+
+    // --- Items gained ---
+    if (outcome.itemsGained) {
+      for (const gained of outcome.itemsGained) {
+        const resDef = RESOURCES[gained.resource];
+        for (let i = 0; i < gained.qty; i++) {
+          const item: Item = {
+            id: crypto.randomUUID(),
+            name: resDef?.name ?? gained.resource,
+            description: `${resDef?.name ?? gained.resource} obtained by ${actorName}`,
+            ownerId: actorId,
+            createdBy: actorId,
+            value: resDef?.tradeValue ?? 5,
+            type: resDef?.type === 'food' ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
+          };
+          this.world.addItem(item);
+        }
+      }
+      this.broadcaster.agentInventory(actorId, actor.inventory);
+
+      // Update daily gather count
+      if (outcome.type === 'gather') {
+        // Find which gather def was used by matching resource + location
+        const area = this.world.getAreaAt(actor.position);
+        const areaId = area?.id ?? 'unknown';
+        const resource = outcome.itemsGained[0]?.resource;
+        // Build a key from gathered resource info for daily tracking
+        const gatherKey = `${areaId}_${resource}`;
+        // Try to match exact gather def IDs
+        const options = getGatherOptions(areaId);
+        for (const gDef of options) {
+          if (gDef.yields.some((y: any) => y.resource === resource)) {
+            const current = this.world.dailyGatherCounts.get(gDef.id) ?? 0;
+            this.world.dailyGatherCounts.set(gDef.id, current + 1);
+            break;
+          }
+        }
+      }
+    }
+
+    // --- Skill XP ---
+    if (outcome.skillXpGained) {
+      this.world.addSkill(actorId, {
+        name: outcome.skillXpGained.skill,
+        level: 1,
       });
-    } catch (err) {
-      console.error(`[Social] Resolve failed for ${actorName}:`, err);
-      ops = [{ op: 'observe', observation: rawAction }];
+      const updatedSkill = actor.skills.find(s => s.name === outcome.skillXpGained!.skill);
+      if (updatedSkill) this.broadcaster.agentSkill(actorId, updatedSkill);
     }
 
-    for (const op of ops) {
-      this.executeOp(actorId, actorName, op, cognition, cognitions, requestConversation);
+    // --- Vitals ---
+    if (actor.vitals) {
+      if (outcome.energySpent !== 0) {
+        actor.vitals.energy = Math.max(0, Math.min(100, actor.vitals.energy - outcome.energySpent));
+      }
+      if (outcome.hungerChange !== 0) {
+        actor.vitals.hunger = Math.max(0, Math.min(100, actor.vitals.hunger + outcome.hungerChange));
+      }
+      if (outcome.healthChange !== 0) {
+        actor.vitals.health = Math.max(0, Math.min(100, actor.vitals.health + outcome.healthChange));
+      }
     }
+
+    // --- Trade proposals ---
+    if (outcome.tradeProposal) {
+      if (outcome.type === 'trade_offer') {
+        this.world.pendingTrades.set(outcome.tradeProposal.id, outcome.tradeProposal);
+      } else if (outcome.type === 'trade_accept' && outcome.tradeProposal.status === 'accepted') {
+        // Execute the actual item transfers for accepted trade
+        const trade = outcome.tradeProposal;
+        this.world.pendingTrades.delete(trade.id);
+
+        // Transfer items from proposer to acceptor (offering)
+        for (const item of trade.offering) {
+          const fromAgent = this.world.getAgent(trade.fromAgentId);
+          if (fromAgent) {
+            for (let i = 0; i < item.qty; i++) {
+              const invItem = fromAgent.inventory.find(it => it.name.toLowerCase().replace(/\s+/g, '_') === item.resource);
+              if (invItem) this.world.transferItem(invItem.id, trade.fromAgentId, actorId);
+            }
+          }
+        }
+        // Transfer items from acceptor to proposer (requesting)
+        for (const item of trade.requesting) {
+          for (let i = 0; i < item.qty; i++) {
+            const invItem = actor.inventory.find(it => it.name.toLowerCase().replace(/\s+/g, '_') === item.resource);
+            if (invItem) this.world.transferItem(invItem.id, actorId, trade.fromAgentId);
+          }
+        }
+
+        this.broadcaster.agentInventory(actorId, actor.inventory);
+        const fromAgent = this.world.getAgent(trade.fromAgentId);
+        if (fromAgent) this.broadcaster.agentInventory(trade.fromAgentId, fromAgent.inventory);
+
+        // Store memory for the other trader
+        const proposerCog = cognitions?.get(trade.fromAgentId);
+        if (proposerCog) {
+          void proposerCog.addMemory({
+            id: crypto.randomUUID(), agentId: trade.fromAgentId, type: 'observation',
+            content: `${actorName} accepted my trade. I gave ${trade.offering.map(i => `${i.qty} ${i.resource}`).join(', ')} and received ${trade.requesting.map(i => `${i.qty} ${i.resource}`).join(', ')}.`,
+            importance: 7, timestamp: Date.now(), relatedAgentIds: [actorId],
+          }).catch(() => {});
+        }
+      } else if (outcome.type === 'trade_reject' && outcome.tradeProposal) {
+        this.world.pendingTrades.delete(outcome.tradeProposal.id);
+      }
+    }
+
+    // --- Build progress ---
+    if (outcome.buildProgress) {
+      const bp = outcome.buildProgress;
+      if (bp.buildingId.startsWith('new_')) {
+        // New build project
+        const defId = bp.buildingId.replace('new_', '');
+        const area = this.world.getAreaAt(actor.position);
+        const projectId = crypto.randomUUID();
+        this.world.activeBuildProjects.set(projectId, {
+          buildingDefId: defId,
+          sessionsComplete: bp.session,
+          ownerId: actorId,
+          location: area?.id ?? 'unknown',
+        });
+      } else {
+        // Existing project
+        const project = this.world.activeBuildProjects.get(bp.buildingId);
+        if (project) {
+          project.sessionsComplete = bp.session;
+          if (bp.complete) {
+            this.world.activeBuildProjects.delete(bp.buildingId);
+            this.broadcaster.agentAction(actorId, `finished building!`, '🏗️');
+          }
+        }
+      }
+    }
+
+    // --- Teach result ---
+    if (outcome.teachResult) {
+      // Find the target agent and update their skill
+      const targetName = outcome.description.match(/Taught (\w+)/)?.[1];
+      if (targetName) {
+        const target = this.findAgentByName(targetName);
+        if (target) {
+          this.world.addSkill(target.id, {
+            name: outcome.teachResult.skill,
+            level: outcome.teachResult.studentNewLevel,
+            learnedFrom: actorId,
+          });
+          const updatedSkill = target.skills.find(s => s.name === outcome.teachResult!.skill);
+          if (updatedSkill) this.broadcaster.agentSkill(target.id, updatedSkill);
+
+          // Memory for student
+          const studentCog = cognitions?.get(target.id);
+          if (studentCog) {
+            void studentCog.addMemory({
+              id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+              content: `${actorName} taught me ${outcome.teachResult.skill}. I'm now level ${outcome.teachResult.studentNewLevel}.`,
+              importance: 7, timestamp: Date.now(), relatedAgentIds: [actorId],
+            }).catch(() => {});
+          }
+        }
+      }
+    }
+
+    // --- Give (transfer items to target) ---
+    if (outcome.type === 'give' && outcome.success) {
+      const targetName = outcome.description.match(/to (\w+)/)?.[1];
+      if (targetName) {
+        const target = this.findAgentByName(targetName);
+        if (target && outcome.itemsConsumed) {
+          for (const consumed of outcome.itemsConsumed) {
+            // Items already removed from actor above — now create for target
+            const resDef = RESOURCES[consumed.resource];
+            for (let i = 0; i < consumed.qty; i++) {
+              const item: Item = {
+                id: crypto.randomUUID(),
+                name: resDef?.name ?? consumed.resource,
+                description: `${resDef?.name ?? consumed.resource} received from ${actorName}`,
+                ownerId: target.id,
+                createdBy: actorId,
+                value: resDef?.tradeValue ?? 5,
+                type: resDef?.type === 'food' ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
+              };
+              this.world.addItem(item);
+            }
+          }
+          this.broadcaster.agentInventory(target.id, target.inventory);
+
+          // Memory for recipient
+          const recipientCog = cognitions?.get(target.id);
+          if (recipientCog) {
+            void recipientCog.addMemory({
+              id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+              content: `${actorName} gave me ${outcome.itemsConsumed.map(i => `${i.qty} ${i.resource}`).join(', ')}.`,
+              importance: 7, timestamp: Date.now(), relatedAgentIds: [actorId],
+            }).catch(() => {});
+          }
+        }
+      }
+    }
+
+    // --- Post on board ---
+    if (outcome.type === 'post' && outcome.success) {
+      const messageMatch = outcome.description.match(/"(.+)"/);
+      if (messageMatch) {
+        this.world.addBoardPost({
+          id: crypto.randomUUID(),
+          authorId: actorId,
+          authorName: actorName,
+          type: 'announcement' as BoardPostType,
+          content: messageMatch[1],
+          timestamp: Date.now(),
+          day: this.world.time.day,
+        });
+        this.broadcaster.agentAction(actorId, `posted: "${messageMatch[1].slice(0, 60)}"`, '📋');
+      }
+    }
+
+    // --- Talk (request conversation) ---
+    if (outcome.type === 'talk' && outcome.success && requestConversation) {
+      const targetName = outcome.description.match(/talk to (\w+)/)?.[1];
+      if (targetName) {
+        const target = this.findAgentByName(targetName);
+        if (target) {
+          requestConversation(actorId, target.id);
+        }
+      }
+    }
+
+    // --- Broadcast action ---
+    const emoji = outcome.success
+      ? (outcome.type === 'gather' ? '🌾' : outcome.type === 'craft' ? '🔨' : outcome.type === 'build' ? '🏗️' : outcome.type === 'eat' ? '🍽️' : outcome.type === 'rest' ? '💤' : outcome.type === 'trade_offer' || outcome.type === 'trade_accept' ? '🤝' : outcome.type === 'teach' ? '📚' : outcome.type === 'give' ? '🎁' : '✅')
+      : '❌';
+    this.broadcaster.agentAction(actorId, outcome.description.slice(0, 80), emoji);
+
+    // --- Store structured feedback as memory ---
+    const inventorySummary = actor.inventory.length > 0
+      ? actor.inventory.reduce((acc, item) => {
+          const key = item.name;
+          acc[key] = (acc[key] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>)
+      : {};
+    const invStr = Object.entries(inventorySummary).map(([name, qty]) => `${name} ×${qty}`).join(', ') || 'nothing';
+
+    const memoryLines = [
+      `You tried: ${outcome.description.split('.')[0] || outcome.type}`,
+      `Result: ${outcome.success ? 'SUCCESS' : 'FAILED'}${outcome.reason ? ` — ${outcome.reason}` : ''} — ${outcome.description}`,
+    ];
+    if (outcome.skillXpGained) memoryLines.push(`${outcome.skillXpGained.skill} skill improving.`);
+    if (outcome.energySpent > 0) memoryLines.push(`Energy spent: ${outcome.energySpent}. Remaining energy: ${actor.vitals?.energy ?? '?'}.`);
+    memoryLines.push(`Current inventory: ${invStr}`);
+
+    void cognition.addMemory({
+      id: crypto.randomUUID(),
+      agentId: actorId,
+      type: 'observation',
+      content: memoryLines.join('\n'),
+      importance: outcome.success ? 6 : 7,
+      timestamp: Date.now(),
+      relatedAgentIds: [],
+    });
   }
 
   /**
