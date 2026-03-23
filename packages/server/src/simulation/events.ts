@@ -6,8 +6,17 @@ import type { CharacterTimeline } from './character-timeline.js';
 export class EventBroadcaster {
   private narrator?: VillageNarrator;
   private timeline?: CharacterTimeline;
+  private dayGetter?: () => number;
 
   constructor(private io: Server) {}
+
+  setDayGetter(getter: () => number): void {
+    this.dayGetter = getter;
+  }
+
+  private get currentDay(): number {
+    return this.dayGetter?.() ?? 0;
+  }
 
   setNarrator(narrator: VillageNarrator): void {
     this.narrator = narrator;
@@ -36,13 +45,13 @@ export class EventBroadcaster {
   agentSpeak(agentId: string, name: string, message: string, conversationId: string): void {
     this.io.emit('agent:speak', { agentId, name, message, conversationId });
     this.narrator?.logEvent(`${name} said: "${message.substring(0, 80)}"`);
-    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'conversation', description: `Said: "${message.substring(0, 100)}"`, relatedAgentIds: [], timestamp: Date.now(), day: 0 });
+    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'conversation', description: `Said: "${message.substring(0, 100)}"`, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
   }
 
   agentAction(agentId: string, action: string, emoji?: string): void {
     this.io.emit('agent:action', { agentId, action, emoji });
     this.narrator?.logEvent(`An agent performed action: ${action}`);
-    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'action', description: action, relatedAgentIds: [], timestamp: Date.now(), day: 0 });
+    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'action', description: action, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
   }
 
   agentSpawn(agent: Agent): void {
@@ -87,7 +96,7 @@ export class EventBroadcaster {
   agentMood(agentId: string, mood: string): void {
     this.io.emit('agent:mood', { agentId, mood });
     this.narrator?.logEvent(`An agent's mood changed to ${mood}`);
-    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'mood_change', description: `Mood changed to ${mood}`, relatedAgentIds: [], timestamp: Date.now(), day: 0 });
+    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'mood_change', description: `Mood changed to ${mood}`, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
   }
 
   agentInventory(agentId: string, inventory: Item[]): void {
@@ -122,7 +131,7 @@ export class EventBroadcaster {
   agentDeath(agentId: string, cause: string): void {
     this.io.emit('agent:death', { agentId, cause });
     this.narrator?.logEvent(`An agent has died: ${cause}`);
-    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'death', description: `Died: ${cause}`, relatedAgentIds: [], timestamp: Date.now(), day: 0 });
+    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'death', description: `Died: ${cause}`, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
   }
 
   agentDrives(agentId: string, drives: DriveState): void {
