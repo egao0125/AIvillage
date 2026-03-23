@@ -820,9 +820,114 @@ export class ConversationManager {
       }
     }
 
+    // --- Intent (internal thought, not broadcast) ---
+    if (outcome.type === 'intent') {
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: actorId,
+        type: 'thought',
+        content: outcome.description,
+        importance: 6,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      });
+      // Not broadcast — feeds the next plan/think cycle
+      return;
+    }
+
+    // --- Social act (declaration, promise, threat, etc.) ---
+    if (outcome.type === 'social') {
+      const rawText = (outcome.description.replace(/^You declared: "?|"$/g, '') || outcome.description).trim();
+
+      // Determine who hears this:
+      // 1. If in a conversation → conversation participants hear it directly
+      // 2. If not → only agents within 3 tiles (overhearing distance)
+      let hearers: Agent[] = [];
+      const conversationId = this.getAgentConversation(actorId);
+      if (conversationId) {
+        const active = this.activeConversations.get(conversationId);
+        if (active) {
+          hearers = active.conversation.participants
+            .filter(id => id !== actorId)
+            .map(id => this.world.getAgent(id))
+            .filter((a): a is Agent => !!a && a.alive !== false);
+        }
+      } else {
+        // Not in conversation — overhearing radius of 3 tiles
+        hearers = this.world.getNearbyAgents(actor.position, 3)
+          .filter(a => a.id !== actorId && a.alive !== false);
+      }
+
+      const hearerNames = hearers.map(a => a.config.name);
+      const whoHeard = hearerNames.length > 0
+        ? `Heard by: ${hearerNames.join(', ')}.`
+        : 'Nobody was around to hear you.';
+      const meaning = hearerNames.length > 0
+        ? 'This is a claim, not a fact. Whether anyone respects it depends on whether they agree.'
+        : 'A declaration with no audience is just words to yourself.';
+
+      // Store memory for the acting agent
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: actorId,
+        type: 'action_outcome',
+        content: `${outcome.description}\n${whoHeard}\n${meaning}`,
+        importance: 5,
+        timestamp: Date.now(),
+        relatedAgentIds: hearers.map(a => a.id),
+        actionSuccess: true,
+      });
+
+      // Broadcast the action (UI shows it, but only nearby agents actually "heard" it)
+      this.broadcaster.agentAction(actorId, outcome.description.slice(0, 80), '💬');
+
+      // Store observation memory + trigger think() for each hearer
+      if (cognitions) {
+        for (const witness of hearers) {
+          const witnessCognition = cognitions.get(witness.id);
+          if (!witnessCognition) continue;
+
+          // Store what the witness observed
+          void witnessCognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: witness.id,
+            type: 'observation',
+            content: `${actorName} said: "${rawText}"`,
+            importance: 5,
+            timestamp: Date.now(),
+            relatedAgentIds: [actorId],
+          });
+
+          // Trigger immediate think() — witness reacts in real-time
+          void witnessCognition.think(
+            `${actorName} just said: "${rawText}"`,
+            `You are at ${this.world.getAreaAt(witness.position)?.id ?? 'somewhere'}. ${actorName} is nearby.`,
+          ).then(output => {
+            if (output.actions) {
+              for (const action of output.actions) {
+                void this.executeSocialAction(
+                  witness.id, witness.config.name, '', action, witnessCognition, cognitions, requestConversation,
+                );
+              }
+            }
+            if (output.mood) {
+              witness.mood = output.mood;
+              this.broadcaster.agentMood(witness.id, output.mood);
+            }
+          }).catch(() => {});
+        }
+      }
+
+      // Apply vitals (energy cost)
+      if (actor.vitals && outcome.energySpent !== 0) {
+        actor.vitals.energy = Math.max(0, Math.min(100, actor.vitals.energy - outcome.energySpent));
+      }
+      return;
+    }
+
     // --- Broadcast action ---
     const emoji = outcome.success
-      ? (outcome.type === 'gather' ? '🌾' : outcome.type === 'craft' ? '🔨' : outcome.type === 'build' ? '🏗️' : outcome.type === 'eat' ? '🍽️' : outcome.type === 'rest' ? '💤' : outcome.type === 'trade_offer' || outcome.type === 'trade_accept' ? '🤝' : outcome.type === 'teach' ? '📚' : outcome.type === 'give' ? '🎁' : '✅')
+      ? (outcome.type === 'gather' ? '🌾' : outcome.type === 'craft' ? '🔨' : outcome.type === 'build' ? '🏗️' : outcome.type === 'eat' ? '🍽️' : outcome.type === 'rest' ? '💤' : outcome.type === 'sleep' ? '😴' : outcome.type === 'trade_offer' || outcome.type === 'trade_accept' ? '🤝' : outcome.type === 'teach' ? '📚' : outcome.type === 'give' ? '🎁' : outcome.type === 'steal' ? '🫣' : outcome.type === 'fight' ? '⚔️' : outcome.type === 'destroy' ? '💥' : outcome.type === 'repair' ? '🔧' : '✅')
       : '❌';
     this.broadcaster.agentAction(actorId, outcome.description.slice(0, 80), emoji);
 

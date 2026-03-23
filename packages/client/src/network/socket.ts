@@ -146,6 +146,10 @@ export function connectSocket(): Socket {
 
   // --- New event listeners ---
 
+  socket.on('agent:worldView', (data: { agentId: string; worldView: string }) => {
+    gameStore.updateAgentWorldView(data.agentId, data.worldView);
+  });
+
   socket.on('agent:mood', (data: { agentId: string; mood: string }) => {
     gameStore.updateAgentMood(data.agentId, data.mood);
   });

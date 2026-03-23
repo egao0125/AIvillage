@@ -80,6 +80,10 @@ export class EventBroadcaster {
     this.io.emit('world:snapshot', snapshot);
   }
 
+  agentWorldView(agentId: string, worldView: string): void {
+    this.io.emit('agent:worldView', { agentId, worldView });
+  }
+
   agentMood(agentId: string, mood: string): void {
     this.io.emit('agent:mood', { agentId, mood });
     this.narrator?.logEvent(`An agent's mood changed to ${mood}`);
