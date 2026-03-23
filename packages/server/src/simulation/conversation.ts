@@ -135,7 +135,7 @@ export class ConversationManager {
       );
 
       // Generate response via LLM, with fallback on failure
-      const boardContext = this.world.getBoardSummary();
+      const boardContext = cognition.knownPlaces.has('plaza') ? this.world.getBoardSummary() : undefined;
       const publicArtifacts = this.world.getPublicArtifacts().slice(-5);
       const artifactContext = publicArtifacts.length > 0
         ? publicArtifacts.map(a => `- [${a.type.toUpperCase()}] "${a.title}" by ${a.creatorName}: ${a.content.slice(0, 80)}`).join('\n')
