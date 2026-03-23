@@ -2,6 +2,7 @@ import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
+import { buildStartingWorldView } from '../map/starting-knowledge.js';
 import { World } from './world.js';
 import { EventBroadcaster } from './events.js';
 import { ConversationManager } from './conversation.js';
@@ -239,7 +240,8 @@ export class SimulationEngine {
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider);
+    const startingWorldView = buildStartingWorldView(spawnArea);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingWorldView);
     this.cognitions.set(id, cognition);
 
     // Seed core identity memories — these survive pruning and get boosted in retrieval
@@ -255,6 +257,12 @@ export class SimulationEngine {
         importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
       });
     }
+    // Seed discovery memory — reinforces that the agent doesn't know the full map
+    void cognition.addMemory({
+      id: crypto.randomUUID(), agentId: id, type: 'observation',
+      content: `I just arrived at the ${spawnArea}. I should explore to discover what else is in this village, or ask someone who's been here longer.`,
+      importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+    });
 
     // Create controller (homeArea defaults to 'plaza' — just a fallback sleeping spot)
     const controller = new AgentController(

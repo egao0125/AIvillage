@@ -588,7 +588,7 @@ export class AgentController {
 
     // Hunger increases every game hour
     if (this.world.time.minute === 0) {
-      v.hunger = Math.min(100, v.hunger + 0.25);
+      v.hunger = Math.min(100, v.hunger + 0.15);
     }
 
     // Energy depletes during activity, restores during sleep/rest
@@ -598,7 +598,7 @@ export class AgentController {
       if (isResting) {
         v.energy = Math.min(100, v.energy + 0.1);
       } else {
-        v.energy = Math.max(0, v.energy - 0.05);
+        v.energy = Math.max(0, v.energy - 0.03);
       }
     } else if (this.state === 'idle') {
       v.energy = Math.min(100, v.energy + 0.02);
@@ -607,14 +607,16 @@ export class AgentController {
     }
 
     // Vitals affect health — starvation and exhaustion can kill
-    if (v.hunger >= 80) {
+    if (v.hunger >= 90) {
       v.health = Math.max(0, v.health - 0.05);
+    } else if (v.hunger >= 80) {
+      v.health = Math.max(0, v.health - 0.02);
     }
     if (v.energy <= 5) {
       v.health = Math.max(0, v.health - 0.03);
     }
     // Passive health regen when not starving/exhausted
-    if (v.hunger < 60 && v.energy > 20) {
+    if (v.hunger < 70 && v.energy > 20) {
       v.health = Math.min(100, v.health + 0.02);
     }
 
@@ -975,13 +977,13 @@ export class AgentController {
     // Hospital can't fix hunger. Don't send a starving agent to a cardiologist.
 
     // Emergency hunger: force food-seeking
-    if (d.survival > 60 || v.hunger >= 80) {
+    if (d.survival > 75 || v.hunger >= 90) {
       void this.forceFoodPlan();
       return true;
     }
 
     // Urgent hunger: insert food if next plan item isn't food-related
-    if (d.survival > 40 || v.hunger >= 60) {
+    if (d.survival > 55 || v.hunger >= 75) {
       if (this.currentIntentionIndex < this.intentions.length) {
         const nextItem = this.intentions[this.currentIntentionIndex];
         if (!this.isFoodActivity(nextItem)) {
@@ -994,9 +996,9 @@ export class AgentController {
       }
     }
 
-    // Health crisis: hospital ONLY if not starving (hunger < 60).
+    // Health crisis: hospital ONLY if not starving (hunger < 75).
     // If they're starving, food fixes health. Hospital without medicine doesn't.
-    if (v.health <= 30 && v.hunger < 60) {
+    if (v.health <= 40 && v.hunger < 75) {
       void this.forceHospitalPlan();
       return true;
     }
