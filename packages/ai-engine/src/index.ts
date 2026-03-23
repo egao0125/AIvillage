@@ -602,8 +602,18 @@ You can do things during conversation:
   [ACTION: teach ${otherAgents[0]?.config.name || 'them'} fishing]
   [ACTION: give bread to ${otherAgents[0]?.config.name || 'them'}]
 
-Talk like a real person. 1-3 sentences.
-Write ONLY what you say out loud. No internal thoughts, no action narration, no italics, no stage directions. Just dialogue.`;
+CRITICAL RULE: You are writing dialogue ONLY. Output ONLY the words your character speaks aloud.
+
+NEVER write:
+- Internal thoughts ("I notice she looks tired")
+- Actions or body language ("I hand them the bread", "*reaches into bag*")
+- Narration ("They stand at the edge of the forest")
+- Stage directions or italics of any kind
+
+WRONG: "I pull out the bread and hand it over. 'Here, take this.' I watch them carefully."
+RIGHT: "Here, take this."
+
+1-3 sentences of dialogue only. Nothing else.`;
 
     const memoryContext = memories.length > 0
       ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => {
