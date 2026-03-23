@@ -193,8 +193,20 @@ export class SimulationEngine {
       }
 
       console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
+      this.refreshNameMaps();
     } catch (err) {
       console.error('[Engine] Failed to load from Supabase:', err);
+    }
+  }
+
+  /** Push agent ID→name mapping to all cognitions so prompts show names, not UUIDs */
+  private refreshNameMaps(): void {
+    const nameMap = new Map<string, string>();
+    for (const agent of this.world.agents.values()) {
+      nameMap.set(agent.id, agent.config.name);
+    }
+    for (const cognition of this.cognitions.values()) {
+      cognition.nameMap = nameMap;
     }
   }
 
@@ -298,6 +310,7 @@ export class SimulationEngine {
       seedMemories();
     }
 
+    this.refreshNameMaps();
     return agent;
   }
 
@@ -515,6 +528,8 @@ export class SimulationEngine {
     this.broadcaster.agentAction(id, 'has been resurrected', '\u2728');
 
     console.log(`[Engine] Agent resurrected: ${agent.config.name}`);
+
+    this.refreshNameMaps();
 
     if (this.persistence) {
       void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
