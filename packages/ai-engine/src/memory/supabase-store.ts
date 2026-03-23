@@ -66,7 +66,7 @@ export class SupabaseMemoryStore implements MemoryStore {
         related_agent_ids: memory.relatedAgentIds ?? [],
         visibility: memory.visibility ?? 'private',
         emotional_valence: memory.emotionalValence ?? 0,
-        is_core: memory.isCore ?? false,
+        // Note: is_core is tracked in-memory via importance >= 9, not persisted
       });
       if (error) {
         console.error(`[SupabaseMemoryStore] add() error for ${memory.agentId}: ${error.message}`);
@@ -200,7 +200,7 @@ export class SupabaseMemoryStore implements MemoryStore {
       relatedAgentIds: (row.related_agent_ids as string[]) ?? [],
       visibility: (row.visibility as Memory['visibility']) ?? 'private',
       emotionalValence: (row.emotional_valence as number) ?? 0,
-      isCore: (row.is_core as boolean) ?? false,
+      isCore: (row.importance as number) >= 9,  // core memories are high-importance
     };
   }
 }
