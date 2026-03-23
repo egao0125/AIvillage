@@ -79,6 +79,7 @@ export class SimulationEngine {
 
     this.characterTimeline = new CharacterTimeline();
     this.broadcaster.setTimeline(this.characterTimeline);
+    this.broadcaster.setDayGetter(() => this.world.time.day);
 
     // Create conversation manager
     this.conversationManager = new ConversationManager(this.world, this.broadcaster);
