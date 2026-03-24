@@ -704,7 +704,7 @@ Your turn to speak (dialogue ONLY — no narration, no actions, no "I look at", 
   /**
    * reflect() — End-of-day synthesis. Calls assess() + compress().
    */
-  async reflect(socialContext?: string): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string }> {
+  async reflect(socialContext?: string): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string; commitmentUpdates?: { description: string; status: 'fulfilled' | 'broken' | 'pending' }[] }> {
     const recentMemories = await this.memory.getRecent(this.agent.id, 20);
 
     if (recentMemories.length < 3) {
@@ -731,7 +731,14 @@ Reflect:
 - What do you need that you can't get alone?
 
 2-3 sentences. First person. Be practical and honest.
+${socialContext ? `
+For each commitment listed above, evaluate its status based on what actually happened today.
+Reply with one COMMITMENT line per entry:
+COMMITMENT: [description] → [fulfilled/broken/pending]
 
+Only mark "fulfilled" if you genuinely completed it. "broken" if you failed or chose not to.
+"pending" if it hasn't come due yet.
+` : ''}
 End with: MOOD: how you feel (in your own words)`;
 
     const userPrompt = `Recent experiences:\n${recentMemories.map(m => m.content).join('\n')}`;
@@ -742,8 +749,19 @@ End with: MOOD: how you feel (in your own words)`;
     const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
     const mood: Mood = moodMatch ? moodMatch[1].trim() : "neutral";
 
-    // Strip the MOOD line from the reflection text
-    const reflection = response.replace(/^\s*MOOD:\s*.+$/mi, '').trim();
+    // Parse commitment updates from response
+    const commitmentUpdates: { description: string; status: 'fulfilled' | 'broken' | 'pending' }[] = [];
+    const commitmentRegex = /^COMMITMENT:\s*(.+?)\s*→\s*(fulfilled|broken|pending)\s*$/gmi;
+    let cMatch;
+    while ((cMatch = commitmentRegex.exec(response)) !== null) {
+      commitmentUpdates.push({ description: cMatch[1].trim(), status: cMatch[2].trim() as 'fulfilled' | 'broken' | 'pending' });
+    }
+
+    // Strip the MOOD and COMMITMENT lines from the reflection text
+    const reflection = response
+      .replace(/^\s*MOOD:\s*.+$/mi, '')
+      .replace(/^\s*COMMITMENT:\s*.+$/gmi, '')
+      .trim();
 
     // Score importance dynamically
     const importance = await this.scoreImportance(reflection, 'reflection');
@@ -779,7 +797,7 @@ End with: MOOD: how you feel (in your own words)`;
     // compress() — summarize old memories to prevent unbounded growth
     await this.compress();
 
-    return { reflection, mood, mentalModels, updatedWorldView };
+    return { reflection, mood, mentalModels, updatedWorldView, commitmentUpdates: commitmentUpdates.length > 0 ? commitmentUpdates : undefined };
   }
 
   /**

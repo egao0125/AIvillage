@@ -701,29 +701,6 @@ export class ConversationManager {
             if (!participant.socialLedger) participant.socialLedger = [];
             participant.socialLedger.push(thisEntry);
 
-            // Entry for each other participant (their own perspective)
-            for (const otherId of otherIds) {
-              const otherAgent = this.world.getAgent(otherId);
-              if (!otherAgent) continue;
-              const otherEntry: SocialLedgerEntry = {
-                id: crypto.randomUUID(),
-                type: entryType,
-                status: 'accepted',
-                proposerId: participantId,
-                targetIds: [participantId, ...otherIds.filter(id => id !== otherId)],
-                description: `Agreement with ${participant.config.name}: ${fact.content}`,
-                agreedBy: conversation.participants,
-                rejectedBy: [],
-                createdAt: now,
-                expiresAt,
-                day,
-                sourceConversationId: sharedConversationId,
-                source: 'direct',
-              };
-              if (!otherAgent.socialLedger) otherAgent.socialLedger = [];
-              otherAgent.socialLedger.push(otherEntry);
-            }
-
             // Secondhand gossip: if fact.about names someone NOT in the conversation,
             // listeners get a secondhand ledger entry about that external agreement
             if (fact.about) {

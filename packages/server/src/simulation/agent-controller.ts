@@ -20,6 +20,17 @@ export type ControllerState =
   | 'reflecting'
   | 'idle';
 
+/** Count overlapping words (>3 chars) between two strings */
+export function keywordOverlap(a: string, b: string): number {
+  const wordsA = new Set(a.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3));
+  const wordsB = b.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+  let overlap = 0;
+  for (const w of wordsB) {
+    if (wordsA.has(w)) overlap++;
+  }
+  return overlap;
+}
+
 export class AgentController {
   state: ControllerState = 'idle';
   agent: Agent;
@@ -717,9 +728,6 @@ export class AgentController {
         : `You just finished: ${activity}.`;
       this.lastOutcomeDescription = '';
 
-      // Check if this activity fulfills any social commitments
-      this.checkLedgerFulfillment(activity);
-
       const ledgerCtx = this.buildLedgerContext();
       const output = await this.cognition.think(
         trigger,
@@ -852,6 +860,21 @@ export class AgentController {
       // Update mental models from reflection
       if (result.mentalModels) {
         this.agent.mentalModels = result.mentalModels;
+      }
+
+      // Apply agent's commitment evaluations to their own ledger
+      if (result.commitmentUpdates) {
+        const ledger = this.agent.socialLedger ?? [];
+        for (const update of result.commitmentUpdates) {
+          const entry = ledger.find(e =>
+            e.status === 'accepted' &&
+            keywordOverlap(e.description, update.description) >= 3
+          );
+          if (entry && (update.status === 'fulfilled' || update.status === 'broken')) {
+            entry.status = update.status;
+            entry.resolvedAt = this.world.time.totalMinutes;
+          }
+        }
       }
 
       // WorldView is updated internally by cognition.reflect() → updateWorldView()
@@ -1194,28 +1217,6 @@ export class AgentController {
     for (const entry of ledger) {
       if (entry.expiresAt && now >= entry.expiresAt && entry.status === 'accepted') {
         entry.status = 'expired';
-        entry.resolvedAt = now;
-      }
-    }
-  }
-
-  /** Check if a completed activity fulfills any accepted commitments (keyword overlap heuristic) */
-  private checkLedgerFulfillment(activity: string): void {
-    const ledger = this.agent.socialLedger;
-    if (!ledger) return;
-    const activityWords = new Set(
-      activity.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3)
-    );
-    const now = this.world.time.totalMinutes;
-    for (const entry of ledger) {
-      if (entry.status !== 'accepted') continue;
-      const descWords = entry.description.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3);
-      let overlap = 0;
-      for (const w of descWords) {
-        if (activityWords.has(w)) overlap++;
-      }
-      if (overlap >= 2) {
-        entry.status = 'fulfilled';
         entry.resolvedAt = now;
       }
     }
