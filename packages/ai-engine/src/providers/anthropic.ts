@@ -15,7 +15,7 @@ export class AnthropicProvider {
       max_tokens: 1024,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
-    });
+    }, { timeout: 30_000 });
     const block = response.content[0];
     return block.type === 'text' ? block.text : '';
   }

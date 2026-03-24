@@ -17,7 +17,7 @@ export class OpenAIProvider {
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-    });
+    }, { timeout: 30_000 });
     return response.choices[0]?.message?.content ?? '';
   }
 }

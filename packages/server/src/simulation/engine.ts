@@ -27,7 +27,7 @@ export class SimulationEngine {
   private cognitions: Map<string, AgentCognition> = new Map();
   private agentApiKeys: Map<string, { apiKey: string; model: string }> = new Map();
   // Shared throttle per API key — limits concurrent LLM calls to prevent OOM
-  private static readonly MAX_CONCURRENT_LLM = 5;
+  private static readonly MAX_CONCURRENT_LLM = 10;
   private throttles: Map<string, ThrottledProvider> = new Map();
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;

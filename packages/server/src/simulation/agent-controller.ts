@@ -38,6 +38,8 @@ export class AgentController {
   pendingConversationTarget: string | null = null;
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
+  private apiRecoveryTimer: number = 0;
+  private apiAuthDead: boolean = false; // true = 401/403, don't auto-recover
   private lastReplanTick: number = 0;
   private currentPerformingActivity: string = '';
   onDeath?: (agentId: string, cause: string) => void;
@@ -84,10 +86,19 @@ export class AgentController {
 
   private handleApiFailure(err: unknown): void {
     this.consecutiveApiFailures++;
+
+    // Detect auth errors (401/403) — don't auto-recover from bad keys
+    const status = (err as any)?.status ?? (err as any)?.response?.status;
+    if (status === 401 || status === 403) {
+      this.apiAuthDead = true;
+    }
+
     if (this.consecutiveApiFailures >= 3 && !this.apiExhausted) {
       this.apiExhausted = true;
-      console.log(`[Agent] ${this.agent.config.name} API EXHAUSTED after ${this.consecutiveApiFailures} consecutive failures — agent stopped`);
-      this.broadcaster.agentAction(this.agent.id, 'API exhausted — update key to resume', '\u26A0\uFE0F');
+      this.apiRecoveryTimer = 0;
+      const recoveryNote = this.apiAuthDead ? 'bad API key — update key to resume' : 'will auto-retry in ~5 min';
+      console.log(`[Agent] ${this.agent.config.name} API EXHAUSTED after ${this.consecutiveApiFailures} consecutive failures — ${recoveryNote}`);
+      this.broadcaster.agentAction(this.agent.id, `API exhausted — ${recoveryNote}`, '\u26A0\uFE0F');
       this.world.updateAgentState(this.agent.id, 'idle', 'API exhausted');
     }
   }
@@ -165,6 +176,20 @@ export class AgentController {
   tick(time: GameTime): void {
     // Dead agents don't tick
     if (this.agent.alive === false) return;
+
+    // Auto-recover from transient API failures (skip if auth is dead)
+    if (this.apiExhausted && !this.apiAuthDead) {
+      this.apiRecoveryTimer++;
+      if (this.apiRecoveryTimer >= 300) {
+        this.apiExhausted = false;
+        this.consecutiveApiFailures = 0;
+        this.apiRecoveryTimer = 0;
+        this.state = 'idle';
+        this.idleTimer = 0;
+        console.log(`[Agent] ${this.agent.config.name} API auto-recovery — retrying`);
+        this.broadcaster.agentAction(this.agent.id, 'API recovered — resuming', '\u2705');
+      }
+    }
 
     // Vitals decay every tick (1 game minute)
     this.tickVitals();
