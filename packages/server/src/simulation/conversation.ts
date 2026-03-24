@@ -1,8 +1,19 @@
-import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
+import type { BoardPostType, Conversation, Item, Memory, Position, Secret, Artifact, Building, Institution, Agent, SocialLedgerEntry, SocialPrimitiveType } from '@ai-village/shared';
 import { AgentCognition, parseIntent, executeAction, RESOURCES, BUILDINGS, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
 import { AREA_DESCRIPTIONS } from '../map/starting-knowledge.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
+
+/** Classify agreement text into a social primitive type via keyword matching */
+function classifyAgreementType(content: string): SocialPrimitiveType {
+  const lower = content.toLowerCase();
+  if (/\b(trade|exchange|swap|barter|buy|sell)\b/.test(lower)) return 'trade';
+  if (/\b(meet|gather at|come to|rendezvous|dawn|dusk|morning|evening|tomorrow)\b/.test(lower)) return 'meeting';
+  if (/\b(teach|learn|show|train|mentor)\b/.test(lower)) return 'task';
+  if (/\b(rule|law|decree|ban|forbid|must|shall)\b/.test(lower)) return 'rule';
+  if (/\b(ally|alliance|pact|unite|together against|side with)\b/.test(lower)) return 'alliance';
+  return 'promise';
+}
 
 interface ActiveConversation {
   conversation: Conversation;
@@ -179,6 +190,27 @@ export class ConversationManager {
         tradeContext = tradeLines.join('\n');
       }
 
+      // Build pairwise social ledger context — what this agent remembers about agreements with conversation partners
+      const myLedger = speakerAgent.socialLedger ?? [];
+      const otherIdSet = new Set(otherIds);
+      const sharedEntries = myLedger.filter(e =>
+        e.targetIds.some(id => otherIdSet.has(id))
+      );
+      let ledgerContext: string | undefined;
+      if (sharedEntries.length > 0) {
+        const ledgerLines = sharedEntries.map(e => {
+          const tag = e.source === 'secondhand' ? ' (secondhand)' : '';
+          return `- [${e.status}] ${e.description}${tag}`;
+        });
+        ledgerContext = `OUR HISTORY:\n${ledgerLines.join('\n')}`;
+      }
+
+      // Combine institution + ledger into world context for talk()
+      let combinedWorldContext = institutionContext || '';
+      if (ledgerContext) {
+        combinedWorldContext += (combinedWorldContext ? '\n\n' : '') + ledgerContext;
+      }
+
       // Hint the LLM to wrap up when conversation is getting long
       const turnsLeft = active.maxTurns - active.turnCount;
       if (turnsLeft <= 4 && active.turnCount >= 4) {
@@ -187,7 +219,7 @@ export class ConversationManager {
 
       let response: string;
       try {
-        response = await cognition.talk(otherAgents, history, boardContext, institutionContext || undefined, artifactContext, secretsContext, agenda, tradeContext);
+        response = await cognition.talk(otherAgents, history, boardContext, combinedWorldContext || undefined, artifactContext, secretsContext, agenda, tradeContext);
       } catch (err) {
         // No fallback dialogue — end conversation when LLM fails
         console.error(`[Conversation] LLM failed for ${speakerAgent.config.name}:`, err);
@@ -615,7 +647,7 @@ export class ConversationManager {
           }
 
           case 'agreement': {
-            // Store for this participant
+            // Store memory for this participant
             await cognition.addMemory({
               id: crypto.randomUUID(),
               agentId: participantId,
@@ -625,7 +657,7 @@ export class ConversationManager {
               timestamp: Date.now(),
               relatedAgentIds: otherIds,
             });
-            // Store for other participants too
+            // Store memory for other participants too
             for (const otherId of otherIds) {
               const otherCognition = cognitions.get(otherId);
               if (!otherCognition) continue;
@@ -640,6 +672,86 @@ export class ConversationManager {
                   relatedAgentIds: [participantId],
                 });
               } catch {}
+            }
+
+            // --- Social Ledger: create per-agent entries ---
+            const entryType = classifyAgreementType(fact.content);
+            const sharedConversationId = conversation.id;
+            const now = this.world.time.totalMinutes;
+            const day = this.world.time.day;
+            // Default expiry: 8 game hours (480 minutes) for meetings, 24 hours for others
+            const expiresAt = entryType === 'meeting' ? now + 480 : now + 1440;
+
+            // Entry for this participant
+            const thisEntry: SocialLedgerEntry = {
+              id: crypto.randomUUID(),
+              type: entryType,
+              status: 'accepted',
+              proposerId: participantId,
+              targetIds: otherIds,
+              description: `Agreement with ${otherNames.join(', ')}: ${fact.content}`,
+              agreedBy: conversation.participants,
+              rejectedBy: [],
+              createdAt: now,
+              expiresAt,
+              day,
+              sourceConversationId: sharedConversationId,
+              source: 'direct',
+            };
+            if (!participant.socialLedger) participant.socialLedger = [];
+            participant.socialLedger.push(thisEntry);
+
+            // Entry for each other participant (their own perspective)
+            for (const otherId of otherIds) {
+              const otherAgent = this.world.getAgent(otherId);
+              if (!otherAgent) continue;
+              const otherEntry: SocialLedgerEntry = {
+                id: crypto.randomUUID(),
+                type: entryType,
+                status: 'accepted',
+                proposerId: participantId,
+                targetIds: [participantId, ...otherIds.filter(id => id !== otherId)],
+                description: `Agreement with ${participant.config.name}: ${fact.content}`,
+                agreedBy: conversation.participants,
+                rejectedBy: [],
+                createdAt: now,
+                expiresAt,
+                day,
+                sourceConversationId: sharedConversationId,
+                source: 'direct',
+              };
+              if (!otherAgent.socialLedger) otherAgent.socialLedger = [];
+              otherAgent.socialLedger.push(otherEntry);
+            }
+
+            // Secondhand gossip: if fact.about names someone NOT in the conversation,
+            // listeners get a secondhand ledger entry about that external agreement
+            if (fact.about) {
+              const mentionedAgent = this.findAgentByName(fact.about);
+              if (mentionedAgent && !conversation.participants.includes(mentionedAgent.id)) {
+                // Each listener (non-speaker) gets a secondhand entry
+                for (const listenerId of otherIds) {
+                  const listener = this.world.getAgent(listenerId);
+                  if (!listener) continue;
+                  const secondhandEntry: SocialLedgerEntry = {
+                    id: crypto.randomUUID(),
+                    type: entryType,
+                    status: 'accepted',
+                    proposerId: participantId,
+                    targetIds: [mentionedAgent.id],
+                    description: `${participant.config.name} told me: ${fact.content} (involving ${mentionedAgent.config.name})`,
+                    agreedBy: [participantId, mentionedAgent.id],
+                    rejectedBy: [],
+                    createdAt: now,
+                    expiresAt,
+                    day,
+                    sourceConversationId: sharedConversationId,
+                    source: 'secondhand',
+                  };
+                  if (!listener.socialLedger) listener.socialLedger = [];
+                  listener.socialLedger.push(secondhandEntry);
+                }
+              }
             }
             break;
           }

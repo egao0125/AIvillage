@@ -58,6 +58,10 @@ export interface Agent {
   alive?: boolean;           // defaults true; false = permanent death
   causeOfDeath?: string;
 
+  // --- Social Ledger ---
+  // Consequence: subjective agreements, promises, obligations. Each agent's own version.
+  socialLedger?: SocialLedgerEntry[];
+
   // --- Phase 4: Theory of Mind ---
   // Consequence: agents model each other. Deception, paranoia, strategic alliances.
   mentalModels?: MentalModel[];
@@ -107,6 +111,30 @@ export interface VitalState {
   health: number;      // 0-100: damage, disease, injury. 0 = death
   hunger: number;      // 0-100: 100 = starving. >80 drains health
   energy: number;      // 0-100: 0 = collapse. Restored by sleep/food
+}
+
+// --- Social Ledger ---
+// Consequence: subjective social reality. Each agent tracks their own version of agreements.
+// No global truth — disagreements become grounds for conversation and social friction.
+
+export type SocialPrimitiveType = 'trade' | 'promise' | 'meeting' | 'task' | 'rule' | 'alliance';
+export type SocialEntryStatus = 'proposed' | 'accepted' | 'rejected' | 'expired' | 'fulfilled' | 'broken';
+
+export interface SocialLedgerEntry {
+  id: string;
+  type: SocialPrimitiveType;
+  status: SocialEntryStatus;
+  proposerId: string;
+  targetIds: string[];
+  description: string;          // this agent's perspective
+  agreedBy: string[];
+  rejectedBy: string[];
+  createdAt: number;            // game totalMinutes
+  resolvedAt?: number;
+  expiresAt?: number;           // game totalMinutes
+  day: number;                  // game day created
+  sourceConversationId?: string;
+  source?: 'direct' | 'secondhand';
 }
 
 // --- Phase 4: Mental Models ---

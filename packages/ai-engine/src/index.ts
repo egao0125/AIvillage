@@ -704,13 +704,15 @@ Your turn to speak (dialogue ONLY — no narration, no actions, no "I look at", 
   /**
    * reflect() — End-of-day synthesis. Calls assess() + compress().
    */
-  async reflect(): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string }> {
+  async reflect(socialContext?: string): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string }> {
     const recentMemories = await this.memory.getRecent(this.agent.id, 20);
 
     if (recentMemories.length < 3) {
       console.log(`[Reflect] ${this.agent.config.name} skipped — only ${recentMemories.length} memories`);
       return { reflection: "", mood: "neutral" };
     }
+
+    const socialSection = socialContext ? `\n${socialContext}` : '';
 
     const systemPrompt = `${this.worldView}
 
@@ -719,7 +721,7 @@ ${this.buildIdentityBlock()}
 The day is ending. Think honestly about today.
 ${this.getSituationalObservations()}
 
-${this.buildContextBlock()}
+${this.buildContextBlock()}${socialSection}
 
 Reflect:
 - What worked? What failed? Why?
