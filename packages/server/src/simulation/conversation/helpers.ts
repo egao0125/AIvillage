@@ -1,0 +1,95 @@
+import type { Agent, Institution, SocialPrimitiveType } from '@ai-village/shared';
+import type { WorldState as ResolverWorldState } from '@ai-village/ai-engine';
+import type { World } from '../world.js';
+
+/** Classify agreement text into a social primitive type via keyword matching */
+export function classifyAgreementType(content: string): SocialPrimitiveType {
+  const lower = content.toLowerCase();
+  if (/\b(trade|exchange|swap|barter|buy|sell)\b/.test(lower)) return 'trade';
+  if (/\b(meet|gather at|come to|rendezvous|dawn|dusk|morning|evening|tomorrow)\b/.test(lower)) return 'meeting';
+  if (/\b(teach|learn|show|train|mentor)\b/.test(lower)) return 'task';
+  if (/\b(rule|law|decree|ban|forbid|must|shall)\b/.test(lower)) return 'rule';
+  if (/\b(ally|alliance|pact|unite|together against|side with)\b/.test(lower)) return 'alliance';
+  return 'promise';
+}
+
+export function findAgentByName(world: World, name: string): Agent | undefined {
+  const lower = name.toLowerCase().trim();
+  for (const agent of world.agents.values()) {
+    const agentName = agent.config.name.toLowerCase();
+    if (
+      agentName === lower ||
+      agentName.includes(lower) ||
+      lower.includes(agentName.split(' ')[0].toLowerCase())
+    ) {
+      return agent;
+    }
+  }
+  return undefined;
+}
+
+export function findInstitutionByName(world: World, name: string): Institution | undefined {
+  const lower = name.toLowerCase().trim();
+  for (const inst of world.institutions.values()) {
+    const instName = inst.name.toLowerCase();
+    if (
+      instName === lower ||
+      instName.includes(lower) ||
+      lower.includes(instName)
+    ) {
+      return inst;
+    }
+  }
+  return undefined;
+}
+
+export function buildInventoryForResolver(actor: Agent): { resource: string; qty: number }[] {
+  const counts = new Map<string, number>();
+  for (const item of actor.inventory) {
+    const key = item.name.toLowerCase().replace(/\s+/g, '_');
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([resource, qty]) => ({ resource, qty }));
+}
+
+export function buildSkillsForResolver(actor: Agent): Record<string, { level: number; xp: number }> {
+  const skills: Record<string, { level: number; xp: number }> = {};
+  for (const s of actor.skills) {
+    if (!s.name) continue;
+    skills[s.name.toLowerCase()] = { level: s.level, xp: s.xp ?? 0 };
+  }
+  return skills;
+}
+
+export function buildWorldStateForResolver(world: World): ResolverWorldState {
+  return {
+    season: world.weather.season,
+    dailyGatherCounts: world.dailyGatherCounts,
+    activeBuildProjects: world.activeBuildProjects,
+    pendingTrades: world.pendingTrades,
+    getAgentInventory: (agentId: string) => {
+      const agent = world.getAgent(agentId);
+      if (!agent) return [];
+      return buildInventoryForResolver(agent);
+    },
+  };
+}
+
+export function buildInstitutionContext(world: World, agentId: string): string {
+  const institutions = Array.from(world.institutions.values()).filter(i => !i.dissolved);
+  if (institutions.length === 0) return '';
+
+  const lines: string[] = ['VILLAGE INSTITUTIONS:'];
+  for (const inst of institutions) {
+    const myMembership = inst.members.find(m => m.agentId === agentId);
+    const memberNames = inst.members
+      .map(m => world.getAgent(m.agentId)?.config.name ?? m.agentId.slice(0, 6))
+      .join(', ');
+    let line = `- ${inst.name} (${inst.type}): ${inst.description || 'no description'}. ${inst.members.length} members [${memberNames}]. Treasury: ${inst.treasury}g.`;
+    if (myMembership) {
+      line += ` YOU are a ${myMembership.role}.`;
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
+}

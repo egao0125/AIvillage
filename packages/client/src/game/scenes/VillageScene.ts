@@ -11,6 +11,7 @@ import {
 import { AgentSprite } from '../entities/AgentSprite';
 import { eventBus } from '../../core/EventBus';
 import { gameStore } from '../../core/GameStore';
+import { sendViewportUpdate } from '../../network/socket';
 import { generateAgentTexture, agentColorsFromName } from './BootScene';
 import type { Agent, GameTime } from '@ai-village/shared';
 
@@ -33,6 +34,9 @@ export class VillageScene extends Phaser.Scene {
   private dayNightOverlay!: Phaser.GameObjects.Rectangle;
   private conversationGraphics!: Phaser.GameObjects.Graphics;
   private cleanupFns: (() => void)[] = [];
+  // Infra 6: Viewport tracking — throttled to avoid spamming server
+  private lastViewportKey: string = '';
+  private viewportThrottleTime: number = 0;
 
   constructor() {
     super({ key: 'VillageScene' });
@@ -72,6 +76,23 @@ export class VillageScene extends Phaser.Scene {
       sprite.update(time, delta);
     }
     this.drawConversationLines();
+    this.emitViewportUpdate(time);
+  }
+
+  /** Infra 6: Emit viewport rectangle to server, throttled to max once per 500ms and only on change */
+  private emitViewportUpdate(time: number): void {
+    if (time - this.viewportThrottleTime < 500) return;
+    const cam = this.cameras.main;
+    // Convert pixel viewport to tile coordinates
+    const x = Math.floor(cam.scrollX / TILE_SIZE);
+    const y = Math.floor(cam.scrollY / TILE_SIZE);
+    const width = Math.ceil(cam.width / (TILE_SIZE * cam.zoom));
+    const height = Math.ceil(cam.height / (TILE_SIZE * cam.zoom));
+    const key = `${x},${y},${width},${height}`;
+    if (key === this.lastViewportKey) return;
+    this.lastViewportKey = key;
+    this.viewportThrottleTime = time;
+    sendViewportUpdate(x, y, width, height);
   }
 
   private drawConversationLines(): void {
