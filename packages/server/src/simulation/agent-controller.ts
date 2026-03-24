@@ -51,6 +51,7 @@ export class AgentController {
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
   private lastSoloActionTick: number = 0;
   pendingConversationTarget: string | null = null;
+  pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
   private apiRecoveryTimer: number = 0;
@@ -585,6 +586,7 @@ export class AgentController {
         if (agent.id !== this.agent.id &&
             agent.config.name.toLowerCase().includes(targetName.toLowerCase())) {
           this.pendingConversationTarget = agent.id;
+          this.pendingConversationPurpose = intention; // original prose intention as purpose
           talkTargetAgent = agent;
           break;
         }
@@ -673,11 +675,13 @@ export class AgentController {
       const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
       if (started) {
         this.pendingConversationTarget = null;
+        this.pendingConversationPurpose = null;
         return; // Controller is now in 'conversing' state
       }
       // Target not available — proceed with activity, try again later
     }
     this.pendingConversationTarget = null;
+    this.pendingConversationPurpose = null;
 
     this.state = 'performing';
     this.currentPerformingActivity = activity;
