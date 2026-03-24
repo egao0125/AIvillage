@@ -645,6 +645,43 @@ Action: "${rawAction}"`;
   }
 
   /**
+   * intentionToSteps() — Translate a narrative intention into 1-3 executable action steps.
+   * Used when parseIntent can't handle prose like "I walk toward the Farm, looking for anything edible".
+   */
+  async intentionToSteps(intention: string, location: string): Promise<string[]> {
+    const systemPrompt = `You translate narrative intentions into 1-3 short action steps.
+
+Each step must be a short command: "go to [place]", "gather [resource]", "eat [food]", "craft [item]", "build [structure]", "talk to [name]", "trade [item] with [name]", "rest", "sleep", "explore [place]", "give [item] to [name]", "post [message]", "teach [name] [skill]".
+
+If the intention requires going somewhere AND doing something there, output TWO steps: the movement first, then the action.
+
+Current location: ${location}
+If the action can be done at the current location, skip the movement step.
+
+Return a JSON array of strings ONLY. No explanation.
+
+Examples:
+"I walk toward the Farm, looking for anything edible" → ["go to farm", "gather wheat"]
+"I search the bakery carefully for bread or flour" → ["go to bakery", "gather wheat"]
+"Check if Mei Lin is at the plaza and talk to her" → ["go to plaza", "talk to Mei Lin"]
+"Rest at the tavern before heading out" → ["go to tavern", "rest"]
+"I need to eat something, anything" → ["eat food"]
+"gather wheat at the farm" → ["go to farm", "gather wheat"]
+"talk to Tomas" → ["talk to Tomas"]`;
+
+    const response = await this.llm.complete(systemPrompt, `Intention: "${intention}"`);
+    try {
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((s: unknown) => typeof s === 'string')) {
+        return parsed;
+      }
+    } catch {}
+    // Fallback: return original intention unchanged
+    return [intention];
+  }
+
+  /**
    * plan() — Morning intention-setting. Returns a JSON array of intention strings.
    * Each intention names what the agent wants to do and where.
    * Replaces planDay() — no timed schedule, just prioritized intentions.
@@ -818,6 +855,7 @@ You can do things during conversation:
 Talk like a real person. 1-3 sentences.
 NEVER mention people who aren't in this conversation or listed in your known people. There are no background NPCs.
 CRITICAL: NEVER break character. Never say "I can't continue" or "as an AI" or reference being a language model. If the conversation feels too heavy, steer it lighter IN CHARACTER — change the subject, suggest doing something physical, crack a joke, or say goodbye. Stay in character at all times.
+NEVER reference prompts, logs, instructions, context windows, or conversation history. You are a person, not a program reading text. If something confuses you, react as a confused person — don't analyze the prompt.
 
 INTERNAL STRATEGY (use to guide your response but NEVER output any of this):
 - What do you want from this conversation?

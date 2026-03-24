@@ -260,6 +260,25 @@ export class ConversationManager {
         this.actionPipeline.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition, cognitions, this.requestConversationFn);
       }
 
+      // Detect meta/prompt contamination — replace with in-character fallback
+      const META_CONTAMINATION = [
+        /according to the prompt/i,
+        /the logs show/i,
+        /as a character/i,
+        /the context window/i,
+        /conversation history shows/i,
+        /I need to understand the current situation firs/i,
+        /the prompt says/i,
+        /my instructions/i,
+        /the system prompt/i,
+        /my programming/i,
+      ];
+      const isContaminated = META_CONTAMINATION.some(p => p.test(response));
+      if (isContaminated) {
+        console.warn(`[Conversation] META LEAK from ${speakerAgent.config.name}: "${response.substring(0, 100)}..." — replaced with fallback`);
+        response = 'Hm.';
+      }
+
       // Strip the ACTION tag from the displayed message
       const displayResponse = response.replace(/\s*\[ACTION:\s*.+?\]/gi, '').trim();
 

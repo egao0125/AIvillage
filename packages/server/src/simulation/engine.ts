@@ -836,7 +836,11 @@ export class SimulationEngine {
 
   private tick(): void {
     this.tickCount++;
-    const time = this.world.advanceTime();
+    // Advance game clock every 2 ticks (2x slower days)
+    if (this.tickCount % 2 === 0) {
+      this.world.advanceTime();
+    }
+    const time = this.world.time;
 
     // --- Emit clock events (subscribers handle the rest) ---
 
