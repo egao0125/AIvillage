@@ -77,6 +77,9 @@ export class AgentController {
     if (this.agent.alive === undefined) {
       this.agent.alive = true;
     }
+    if (!this.agent.socialLedger) {
+      this.agent.socialLedger = [];
+    }
   }
 
   private handleApiFailure(err: unknown): void {
@@ -169,6 +172,7 @@ export class AgentController {
     // Recalculate drives every 60 ticks (~1 game hour)
     if (this.world.time.minute === 0) {
       this.recalculateDrives();
+      this.checkLedgerExpiry();
     }
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
@@ -337,7 +341,8 @@ export class AgentController {
       const nextSeason = SEASON_ORDER[(seasonIdx + 1) % SEASON_ORDER.length];
       const seasonContext = `\nSEASON: ${currentSeason} (day ${daysIntoSeason + 1}/${SEASON_LENGTH}, ${daysLeft} days until ${nextSeason}). ${seasonDef.description}`;
 
-      const worldCtx = (institutionContext + buildingContext + seasonContext) || undefined;
+      const ledgerCtx = this.buildLedgerContext();
+      const worldCtx = (institutionContext + buildingContext + seasonContext + ledgerCtx) || undefined;
       const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx);
       this.intentions = plan;
       this.currentIntentionIndex = 0;
@@ -566,9 +571,10 @@ export class AgentController {
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
       const currentSeason = SEASON_ORDER[seasonIdx];
 
+      const ledgerCtx = this.buildLedgerContext();
       const output = await this.cognition.think(
         `You're about to: ${intention}`,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}`
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}${ledgerCtx}`
       );
       this.handleApiSuccess();
 
@@ -686,9 +692,13 @@ export class AgentController {
         : `You just finished: ${activity}.`;
       this.lastOutcomeDescription = '';
 
+      // Check if this activity fulfills any social commitments
+      this.checkLedgerFulfillment(activity);
+
+      const ledgerCtx = this.buildLedgerContext();
       const output = await this.cognition.think(
         trigger,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}. Inventory: ${invStr}.`
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}. Inventory: ${invStr}.${ledgerCtx}`
       );
       this.handleApiSuccess();
 
@@ -810,7 +820,8 @@ export class AgentController {
     this.world.updateAgentState(this.agent.id, 'active', '');
 
     try {
-      const result = await this.cognition.reflect();
+      const socialCtx = this.buildLedgerReflectionContext();
+      const result = await this.cognition.reflect(socialCtx || undefined);
       this.handleApiSuccess();
 
       // Update mental models from reflection
@@ -1121,6 +1132,68 @@ export class AgentController {
       return time.hour >= this.sleepHour || time.hour < this.wakeHour;
     }
     return time.hour >= this.sleepHour;
+  }
+
+  // --- Social Ledger Helpers ---
+
+  /** Build context string of active commitments for think() and plan() */
+  private buildLedgerContext(): string {
+    const ledger = this.agent.socialLedger ?? [];
+    const active = ledger.filter(e => e.status === 'proposed' || e.status === 'accepted');
+    if (active.length === 0) return '';
+    const lines = active.map(e => {
+      const others = e.targetIds.map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
+      const tag = e.source === 'secondhand' ? ' (secondhand)' : '';
+      return `- [${e.status}] ${e.description}${tag}`;
+    });
+    return `\nMY COMMITMENTS:\n${lines.join('\n')}`;
+  }
+
+  /** Build reflection context of all ledger entries from today + active entries */
+  private buildLedgerReflectionContext(): string {
+    const ledger = this.agent.socialLedger ?? [];
+    const today = ledger.filter(e => e.day === this.world.time.day || e.status === 'accepted');
+    if (today.length === 0) return '';
+    const lines = today.map(e => {
+      const others = e.targetIds.map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
+      return `- [${e.status}] ${e.description} (with ${others})`;
+    });
+    return `\nSOCIAL COMMITMENTS TODAY:\n${lines.join('\n')}`;
+  }
+
+  /** Mark expired ledger entries — no penalties, just status change */
+  private checkLedgerExpiry(): void {
+    const ledger = this.agent.socialLedger;
+    if (!ledger) return;
+    const now = this.world.time.totalMinutes;
+    for (const entry of ledger) {
+      if (entry.expiresAt && now >= entry.expiresAt && entry.status === 'accepted') {
+        entry.status = 'expired';
+        entry.resolvedAt = now;
+      }
+    }
+  }
+
+  /** Check if a completed activity fulfills any accepted commitments (keyword overlap heuristic) */
+  private checkLedgerFulfillment(activity: string): void {
+    const ledger = this.agent.socialLedger;
+    if (!ledger) return;
+    const activityWords = new Set(
+      activity.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3)
+    );
+    const now = this.world.time.totalMinutes;
+    for (const entry of ledger) {
+      if (entry.status !== 'accepted') continue;
+      const descWords = entry.description.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+      let overlap = 0;
+      for (const w of descWords) {
+        if (activityWords.has(w)) overlap++;
+      }
+      if (overlap >= 2) {
+        entry.status = 'fulfilled';
+        entry.resolvedAt = now;
+      }
+    }
   }
 
   /**
