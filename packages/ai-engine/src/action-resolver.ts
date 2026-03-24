@@ -578,7 +578,7 @@ function executeGather(intent: ParsedIntent, agent: AgentState, world: WorldStat
     }
     return {
       ...base, success: false,
-      description: `There's nothing to gather ${intent.resource ? `(${intent.resource}) ` : ''}here at ${agent.location}.`,
+      description: `There's nothing to gather ${intent.resource ? `(${intent.resource}) ` : ''}here at ${agent.location}. Go to: [ACTION: go to farm] for wheat, [ACTION: go to lake] for fish, [ACTION: go to forest] for wood, [ACTION: go to garden] for herbs.`,
       reason: 'wrong location',
       remediation,
       energySpent: 0, durationMinutes: 0,
