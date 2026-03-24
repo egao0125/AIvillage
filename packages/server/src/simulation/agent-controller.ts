@@ -214,6 +214,9 @@ export class AgentController {
     // Dead agents don't tick
     if (this.agent.alive === false) return;
 
+    // Sync current time so LLM prompts are time-aware
+    this.cognition.currentTime = { day: time.day, hour: time.hour };
+
     // Auto-recover from transient API failures (skip if auth is dead)
     if (this.apiExhausted && !this.apiAuthDead) {
       this.apiRecoveryTimer++;
