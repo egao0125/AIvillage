@@ -512,12 +512,12 @@ export function resolveGather(
   const roll = Math.random();
 
   if (roll > successChance) {
-    // Failed attempt — still costs time and energy, still gives a little XP
+    // Failed attempt — no energy cost so agents can retry without death-spiralling
     return {
       success: false, reason: 'found nothing this time',
       itemsGained: [],
       skillXpGained: Math.floor(SKILLS[gatherDef.skill]?.xpPerSuccess * 0.3) || 1,
-      energySpent: gatherDef.energyCost,
+      energySpent: 0,
       durationMinutes: gatherDef.baseDuration,
     };
   }
