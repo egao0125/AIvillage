@@ -42,6 +42,7 @@ export class AgentController {
   currentIntentionIndex: number = 0;
   path: Position[] = [];
   pathIndex: number = 0;
+  private moveTick: number = 0;
   activityTimer: number = 0;
   idleTimer: number = 0;
   private planningInProgress: boolean = false;
@@ -242,23 +243,31 @@ export class AgentController {
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
 
-    // Universal sleep check — fires regardless of current state
+    // Universal sleep check — fires once at exact sleep hour, then winds down gracefully
     if (this.state !== 'sleeping' && this.state !== 'reflecting' && this.state !== 'waking' && this.state !== 'deciding') {
-      if (this.shouldSleep(time)) {
-        if (this.decisionQueue) {
-          this.decisionQueue.enqueue({
-            id: crypto.randomUUID(),
-            agentId: this.agent.id,
-            type: 'reflect',
-            priority: 1, // highest priority — nightly reflection
-            context: { trigger: 'bedtime', details: `day ${time.day}` },
-            enqueuedAt: Date.now(),
-            expiresAt: Date.now() + 120000, // 2 min — must complete before next day
-          });
-          this.state = 'deciding';
+      if (!this.sleepTriggered && this.shouldSleep(time)) {
+        this.sleepTriggered = true;
+        // Record pre-sleep context for narrative bridge
+        const area = getAreaAt(this.agent.position);
+        this.preSleepArea = area?.name ?? 'the village';
+        this.preSleepActivity = this.state === 'conversing' ? 'having a conversation'
+          : this.state === 'performing' ? this.currentPerformingActivity || 'an activity'
+          : this.state === 'moving' ? 'walking' : 'resting';
+
+        if (this.state === 'idle' || this.state === 'planning') {
+          // Not busy — proceed to reflection immediately
+          this.beginSleepSequence(time);
         } else {
-          void this.doReflect();
+          // Busy — set winding down flag, let current activity finish first
+          this.windingDown = true;
+          console.log(`[Agent] ${this.agent.config.name} is winding down (was ${this.state})`);
         }
+        return;
+      }
+      // If winding down and current activity finished (back to idle), proceed to sleep
+      if (this.windingDown && (this.state === 'idle')) {
+        this.windingDown = false;
+        this.beginSleepSequence(time);
         return;
       }
     }
@@ -288,7 +297,12 @@ export class AgentController {
       }
 
       case 'moving': {
-        this.advanceMovement();
+        // Move every 3 ticks so agents walk visibly instead of teleporting
+        this.moveTick++;
+        if (this.moveTick >= 3) {
+          this.moveTick = 0;
+          this.advanceMovement();
+        }
         break;
       }
 
@@ -372,16 +386,20 @@ export class AgentController {
     this.state = 'planning';
     this.world.updateAgentState(this.agent.id, 'active', '');
     this.broadcaster.agentAction(this.agent.id, 'waking up', '\u{1F31E}');
+    this.sleepTriggered = false; // reset for next night
     console.log(`[Agent] ${this.agent.config.name} wakes up`);
 
-    // Think on waking — assess situation before planning
+    // Think on waking — include pre-sleep context for narrative continuity
     if (!this.apiExhausted) {
       try {
         const area = getAreaAt(this.agent.position);
         const v = this.agent.vitals;
         const vitalsNote = v ? `Health: ${Math.round(v.health)}, Hunger: ${Math.round(v.hunger)}, Energy: ${Math.round(v.energy)}.` : '';
+        const preSleepNote = this.preSleepArea
+          ? ` Last night you were ${this.preSleepActivity ?? 'busy'} at ${this.preSleepArea} before heading to bed.`
+          : '';
         const output = await this.cognition.think(
-          `You just woke up at the ${area?.name ?? 'village'}. It's morning on day ${this.world.time.day}. You slept here last night.`,
+          `You just woke up at the ${area?.name ?? 'village'}. It's morning on day ${this.world.time.day}.${preSleepNote}`,
           `Location: ${area?.name ?? 'unknown'}. ${vitalsNote}`
         );
         this.handleApiSuccess();
@@ -394,6 +412,9 @@ export class AgentController {
         this.handleApiFailure(err);
       }
     }
+    // Clear pre-sleep context after use
+    this.preSleepArea = null;
+    this.preSleepActivity = null;
 
     // Start planning the day
     void this.doPlan({
@@ -477,7 +498,7 @@ export class AgentController {
         `[Agent] ${this.agent.config.name} planned ${plan.length} intentions`,
       );
       this.handleApiSuccess();
-      this.followNextIntention();
+      await this.followNextIntention();
     } catch (err) {
       console.error(`[Agent] ${this.agent.config.name} failed to plan day:`, (err as Error).message || err);
       this.handleApiFailure(err);
@@ -487,7 +508,23 @@ export class AgentController {
     }
   }
 
-  followNextIntention(): void {
+  private static readonly VERB_PREFIX = /^(gather|craft|build|eat|trade|talk|go|rest|sleep|explore|give|post|fish|bake|cook|repair|teach|steal|head|walk|move)\b/i;
+
+  /** Regex-based fast path: decompose simple "[verb] [object] at [location]" patterns */
+  private decomposeIntoSteps(intention: string): string[] {
+    const trimmed = intention.trim();
+    // "go to [location] and/then [action]"
+    const goAndMatch = trimmed.match(/^go\s+to\s+(?:the\s+)?(\w+)\s+(?:and|then)\s+(.+)$/i);
+    if (goAndMatch) return [`go to ${goAndMatch[1]}`, goAndMatch[2].trim()];
+    // "[verb] [object] at/in/from the [location]"
+    const atMatch = trimmed.match(/^(\w+\s+\w+(?:\s+\w+)?)\s+(?:at|in|from)\s+(?:the\s+)?(\w+)$/i);
+    if (atMatch) return [`go to ${atMatch[2]}`, atMatch[1].trim()];
+    // Already a clean command — return as-is
+    return [trimmed];
+  }
+
+  async followNextIntention(): Promise<void> {
+    if (this.followingIntention) return;
     if (this.currentIntentionIndex >= this.intentions.length) {
       this.state = 'idle';
       this.world.updateAgentState(this.agent.id, 'idle', '');
@@ -510,9 +547,38 @@ export class AgentController {
       relatedAgentIds: [],
     });
 
-    // Check if intention mentions talking to a specific agent
+    // Translate narrative intention into executable steps
+    let steps: string[];
+    if (AgentController.VERB_PREFIX.test(intention.trim())) {
+      // Fast path: already starts with action verb — regex decompose
+      steps = this.decomposeIntoSteps(intention);
+    } else {
+      // Slow path: narrative prose — LLM translation
+      this.followingIntention = true;
+      try {
+        const area = getAreaAt(this.agent.position);
+        steps = await this.cognition.intentionToSteps(intention, area?.id ?? 'unknown');
+        this.handleApiSuccess();
+      } catch (err) {
+        this.handleApiFailure(err);
+        steps = [intention]; // fallback to original
+      } finally {
+        this.followingIntention = false;
+      }
+      // Guard: agent may have entered a conversation while we were awaiting the LLM
+      if (this.state === 'conversing') return;
+    }
+
+    // Queue extra steps after current position
+    if (steps.length > 1) {
+      this.intentions.splice(this.currentIntentionIndex, 0, ...steps.slice(1));
+    }
+
+    const currentStep = steps[0];
+
+    // Check if step mentions talking to a specific agent
     let talkTargetAgent: Agent | null = null;
-    const talkMatch = intention.match(/(?:talk|speak|meet|find|converse|visit|see)\s+(?:to|with)?\s*(\w+)/i);
+    const talkMatch = currentStep.match(/(?:talk|speak|meet|find|converse|visit|see)\s+(?:to|with)?\s*(\w+)/i);
     if (talkMatch) {
       const targetName = talkMatch[1];
       for (const agent of this.world.agents.values()) {
@@ -526,19 +592,19 @@ export class AgentController {
     }
 
     // Path toward target agent's actual position for talk intentions,
-    // otherwise infer location from intention text
-    const areaId = this.resolveLocation(intention);
+    // otherwise infer location from step text
+    const areaId = this.resolveLocation(currentStep);
     const targetPos = talkTargetAgent
       ? { ...talkTargetAgent.position }
       : getRandomPositionInArea(areaId);
 
-    console.log(`[Agent] ${this.agent.config.name} → ${intention}`);
+    console.log(`[Agent] ${this.agent.config.name} → ${currentStep}${steps.length > 1 ? ` (${steps.length} steps from: "${intention}")` : ''}`);
 
     const dist = Math.abs(this.agent.position.x - targetPos.x) + Math.abs(this.agent.position.y - targetPos.y);
     if (dist <= 1) {
-      this.startPerforming(intention, 60, areaId);
+      this.startPerforming(currentStep, 60, areaId);
     } else {
-      this.pendingActivity = { activity: intention, duration: 60, areaId };
+      this.pendingActivity = { activity: currentStep, duration: 60, areaId };
       this.startMoveTo(targetPos);
     }
 
@@ -547,6 +613,11 @@ export class AgentController {
 
   private pendingActivity: { activity: string; duration: number; areaId: string } | null = null;
   private pendingSleep: string | null = null; // sleep area name, set when walking to bed
+  private sleepTriggered: boolean = false; // prevent re-triggering sleep check
+  private windingDown: boolean = false; // waiting for current activity to finish before sleep
+  private preSleepArea: string | null = null; // where the agent was before going to bed
+  private preSleepActivity: string | null = null; // what the agent was doing before bed
+  private followingIntention: boolean = false; // guard against re-entry during async followNextIntention
 
   startMoveTo(target: Position): void {
     const path = findPath(this.agent.position, target, getWalkable, MAP_WIDTH, MAP_HEIGHT);
@@ -694,7 +765,7 @@ export class AgentController {
 
     const intention = this.intentions[this.currentIntentionIndex];
     if (!intention) {
-      this.followNextIntention();
+      await this.followNextIntention();
       return;
     }
 
@@ -737,14 +808,14 @@ export class AgentController {
         // followNextIntention so the agent properly moves to the right location.
         this.intentions.splice(this.currentIntentionIndex, 1, ...output.actions);
         console.log(`[Agent] ${this.agent.config.name} thinkThenAct replaced intention with: ${output.actions.join(', ')}`);
-        this.followNextIntention();
+        await this.followNextIntention();
       } else {
         // No specific action from think — follow intention as planned
-        this.followNextIntention();
+        await this.followNextIntention();
       }
     } catch (err) {
       this.handleApiFailure(err);
-      this.followNextIntention();
+      await this.followNextIntention();
     } finally {
       this.thinkInProgress = false;
     }
@@ -1039,7 +1110,7 @@ export class AgentController {
 
     // Hunger increases every game hour
     if (this.world.time.minute === 0) {
-      v.hunger = Math.min(100, v.hunger + 0.15);
+      v.hunger = Math.min(100, v.hunger + 1.0);
     }
 
     // Energy depletes during activity, restores during sleep/rest
@@ -1058,9 +1129,9 @@ export class AgentController {
     }
 
     // Vitals affect health — starvation and exhaustion can kill
-    if (v.hunger >= 90) {
+    if (v.hunger >= 85) {
       v.health = Math.max(0, v.health - 0.05);
-    } else if (v.hunger >= 80) {
+    } else if (v.hunger >= 70) {
       v.health = Math.max(0, v.health - 0.02);
     }
     if (v.energy <= 5) {
@@ -1333,7 +1404,7 @@ export class AgentController {
       id: crypto.randomUUID(),
       agentId: this.agent.id,
       type: 'observation',
-      content: `I walked to the ${sleepArea} and settled in for the night. Time to rest.`,
+      content: `I arrived at the ${sleepArea} and settled in for the night.`,
       importance: 3,
       timestamp: Date.now(),
       relatedAgentIds: [],
@@ -1354,12 +1425,38 @@ export class AgentController {
   }
 
   private shouldSleep(time: GameTime): boolean {
-    // Use range check instead of exact-tick match so agents don't miss the window
-    if (this.sleepHour < this.wakeHour) {
-      // Crosses midnight: sleep if hour >= sleepHour OR hour < wakeHour
-      return time.hour >= this.sleepHour || time.hour < this.wakeHour;
+    // Trigger once at exact sleep hour — sleepTriggered flag prevents re-firing
+    return time.hour === this.sleepHour && time.minute === 0;
+  }
+
+  /** Begin the sleep sequence: store narrative memory, then reflect, then walk to bed */
+  private beginSleepSequence(time: GameTime): void {
+    // Store narrative bridge memory so agent knows WHY they're going to bed
+    const sleepArea = this.nameHash(AgentController.SLEEP_AREAS);
+    void this.cognition.addMemory({
+      id: crypto.randomUUID(),
+      agentId: this.agent.id,
+      type: 'observation',
+      content: `It's getting late. I was ${this.preSleepActivity} at ${this.preSleepArea}. Time to head to the ${sleepArea} and get some rest.`,
+      importance: 3,
+      timestamp: Date.now(),
+      relatedAgentIds: [],
+    });
+
+    if (this.decisionQueue) {
+      this.decisionQueue.enqueue({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: 'reflect',
+        priority: 1,
+        context: { trigger: 'bedtime', details: `day ${time.day}` },
+        enqueuedAt: Date.now(),
+        expiresAt: Date.now() + 120000,
+      });
+      this.state = 'deciding';
+    } else {
+      void this.doReflect();
     }
-    return time.hour >= this.sleepHour;
   }
 
   // --- Social Ledger Helpers ---
