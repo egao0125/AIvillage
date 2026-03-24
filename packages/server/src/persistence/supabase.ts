@@ -33,6 +33,10 @@ export interface WorldStateData {
   buildings: Record<string, unknown>;
   technologies: unknown[];
   materialSpawns: unknown[];
+  // Fix 3: Persist emergent world state across restarts
+  worldObjects?: unknown[];
+  culturalNames?: Record<string, unknown>;
+  resourcePools?: Record<string, number>;
 }
 
 export class SupabasePersistence {
@@ -60,6 +64,10 @@ export class SupabasePersistence {
       buildings: mapToRecord(world.buildings),
       technologies: world.technologies,
       materialSpawns: world.materialSpawns,
+      // Fix 3: Persist emergent world state
+      worldObjects: Array.from(world.worldObjects.values()),
+      culturalNames: Object.fromEntries(world.culturalNames),
+      resourcePools: Object.fromEntries(world.resourcePools),
     };
 
     const { error } = await this.client

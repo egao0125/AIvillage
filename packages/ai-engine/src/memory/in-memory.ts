@@ -9,6 +9,7 @@ interface MemoryStore {
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
   getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
   removeBatch(ids: string[]): Promise<void>;
+  getById(agentId: string, memoryId: string): Promise<Memory | undefined>;
 }
 
 export class InMemoryStore implements MemoryStore {
@@ -112,6 +113,11 @@ export class InMemoryStore implements MemoryStore {
     for (const [agentId, memories] of this.memories) {
       this.memories.set(agentId, memories.filter(m => !idSet.has(m.id)));
     }
+  }
+
+  async getById(agentId: string, memoryId: string): Promise<Memory | undefined> {
+    const memories = this.getAgentMemories(agentId);
+    return memories.find(m => m.id === memoryId);
   }
 }
 

@@ -10,6 +10,7 @@ interface MemoryStore {
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
   getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
   removeBatch(ids: string[]): Promise<void>;
+  getById(agentId: string, memoryId: string): Promise<Memory | undefined>;
 }
 
 export class SupabaseMemoryStore implements MemoryStore {
@@ -66,7 +67,9 @@ export class SupabaseMemoryStore implements MemoryStore {
         related_agent_ids: memory.relatedAgentIds ?? [],
         visibility: memory.visibility ?? 'private',
         emotional_valence: memory.emotionalValence ?? 0,
-        // Note: is_core is tracked in-memory via importance >= 9, not persisted
+        // Fix 2/3: Persist causal chain fields
+        caused_by: memory.causedBy ?? null,
+        led_to: memory.ledTo ?? null,
       });
       if (error) {
         console.error(`[SupabaseMemoryStore] add() error for ${memory.agentId}: ${error.message}`);
@@ -189,6 +192,17 @@ export class SupabaseMemoryStore implements MemoryStore {
     }
   }
 
+  async getById(agentId: string, memoryId: string): Promise<Memory | undefined> {
+    const { data, error } = await this.supabase
+      .from('memories')
+      .select('*')
+      .eq('id', memoryId)
+      .eq('agent_id', agentId)
+      .single();
+    if (error || !data) return undefined;
+    return this.rowToMemory(data as Record<string, unknown>);
+  }
+
   private rowToMemory(row: Record<string, unknown>): Memory {
     return {
       id: row.id as string,
@@ -200,7 +214,10 @@ export class SupabaseMemoryStore implements MemoryStore {
       relatedAgentIds: (row.related_agent_ids as string[]) ?? [],
       visibility: (row.visibility as Memory['visibility']) ?? 'private',
       emotionalValence: (row.emotional_valence as number) ?? 0,
-      isCore: (row.importance as number) >= 9,  // core memories are high-importance
+      isCore: (row.importance as number) >= 9,
+      // Fix 2/3: Restore causal chain fields
+      causedBy: (row.caused_by as string) ?? undefined,
+      ledTo: (row.led_to as string[]) ?? undefined,
     };
   }
 }

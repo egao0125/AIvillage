@@ -96,7 +96,7 @@ export class PostConversationProcessor {
           .filter(Boolean);
 
         try {
-          await cognition.addMemory({
+          await cognition.addLinkedMemory({
             id: crypto.randomUUID(),
             agentId: participantId,
             type: 'plan',
@@ -113,7 +113,7 @@ export class PostConversationProcessor {
             const otherCognition = cognitions.get(otherId);
             if (!otherCognition) continue;
             try {
-              await otherCognition.addMemory({
+              await otherCognition.addLinkedMemory({
                 id: crypto.randomUUID(),
                 agentId: otherId,
                 type: 'plan',
@@ -196,7 +196,7 @@ export class PostConversationProcessor {
     }
 
     // --- Structured fact extraction (one cheap LLM call per participant) ---
-    await this.extractAndStoreFacts(conversation, cognitions);
+    await this.extractAndStoreFacts(conversation, cognitions, conversationMemoryIds);
   }
 
   /**
@@ -207,6 +207,7 @@ export class PostConversationProcessor {
   private async extractAndStoreFacts(
     conversation: Conversation,
     cognitions: Map<string, AgentCognition>,
+    conversationMemoryIds?: Map<string, string>,
   ): Promise<void> {
     const messages = conversation.messages;
     if (messages.length < 2) return;
@@ -267,7 +268,7 @@ export class PostConversationProcessor {
                 break;
               }
             }
-            await cognition.addMemory({
+            await cognition.addLinkedMemory({
               id: crypto.randomUUID(),
               agentId: participantId,
               type: 'observation',
@@ -275,12 +276,13 @@ export class PostConversationProcessor {
               importance: 6,
               timestamp: Date.now(),
               relatedAgentIds: otherIds,
+              causedBy: conversationMemoryIds?.get(participantId),
             });
             break;
           }
 
           case 'resource': {
-            await cognition.addMemory({
+            await cognition.addLinkedMemory({
               id: crypto.randomUUID(),
               agentId: participantId,
               type: 'observation',
@@ -288,6 +290,7 @@ export class PostConversationProcessor {
               importance: 6,
               timestamp: Date.now(),
               relatedAgentIds: otherIds,
+              causedBy: conversationMemoryIds?.get(participantId),
             });
             break;
           }
@@ -298,7 +301,7 @@ export class PostConversationProcessor {
             if (mentionedAgent && !relatedIds.includes(mentionedAgent.id)) {
               relatedIds.push(mentionedAgent.id);
             }
-            await cognition.addMemory({
+            await cognition.addLinkedMemory({
               id: crypto.randomUUID(),
               agentId: participantId,
               type: 'observation',
@@ -308,13 +311,14 @@ export class PostConversationProcessor {
               relatedAgentIds: relatedIds,
               sourceAgentId: otherIds[0],
               hearsayDepth: 1,
+              causedBy: conversationMemoryIds?.get(participantId),
             });
             break;
           }
 
           case 'agreement': {
             // Store memory for this participant
-            await cognition.addMemory({
+            await cognition.addLinkedMemory({
               id: crypto.randomUUID(),
               agentId: participantId,
               type: 'plan',
@@ -322,13 +326,14 @@ export class PostConversationProcessor {
               importance: 7,
               timestamp: Date.now(),
               relatedAgentIds: otherIds,
+              causedBy: conversationMemoryIds?.get(participantId),
             });
             // Store memory for other participants too
             for (const otherId of otherIds) {
               const otherCognition = cognitions.get(otherId);
               if (!otherCognition) continue;
               try {
-                await otherCognition.addMemory({
+                await otherCognition.addLinkedMemory({
                   id: crypto.randomUUID(),
                   agentId: otherId,
                   type: 'plan',
@@ -336,6 +341,7 @@ export class PostConversationProcessor {
                   importance: 7,
                   timestamp: Date.now(),
                   relatedAgentIds: [participantId],
+                  causedBy: conversationMemoryIds?.get(otherId),
                 });
               } catch {}
             }
@@ -423,7 +429,7 @@ export class PostConversationProcessor {
           }
 
           case 'need': {
-            await cognition.addMemory({
+            await cognition.addLinkedMemory({
               id: crypto.randomUUID(),
               agentId: participantId,
               type: 'observation',
@@ -431,12 +437,13 @@ export class PostConversationProcessor {
               importance: 4,
               timestamp: Date.now(),
               relatedAgentIds: otherIds,
+              causedBy: conversationMemoryIds?.get(participantId),
             });
             break;
           }
 
           case 'skill': {
-            await cognition.addMemory({
+            await cognition.addLinkedMemory({
               id: crypto.randomUUID(),
               agentId: participantId,
               type: 'observation',
@@ -444,6 +451,7 @@ export class PostConversationProcessor {
               importance: 5,
               timestamp: Date.now(),
               relatedAgentIds: otherIds,
+              causedBy: conversationMemoryIds?.get(participantId),
             });
             break;
           }

@@ -1,4 +1,5 @@
 import type { Conversation, Position } from '@ai-village/shared';
+import { EventBus } from '@ai-village/shared';
 import { AgentCognition } from '@ai-village/ai-engine';
 import type { World } from '../world.js';
 import type { EventBroadcaster } from '../events.js';
@@ -24,8 +25,9 @@ export class ConversationManager {
   constructor(
     private world: World,
     private broadcaster: EventBroadcaster,
+    bus?: EventBus,
   ) {
-    this.actionPipeline = new ActionPipeline(world, broadcaster);
+    this.actionPipeline = new ActionPipeline(world, broadcaster, bus);
     this.postProcessor = new PostConversationProcessor(world);
 
     // Wire the conversation lookup callback for social act handling
