@@ -14,6 +14,10 @@ interface ActiveConversation {
   currentSpeakerIdx: number;
   processing: boolean;
   agendas: Map<string, string>; // agentId -> pre-conversation agenda
+  purpose?: string; // intention that triggered the conversation
+  purposeFulfilled: boolean; // action completed that matches purpose
+  stallCount: number; // consecutive rounds where both agents want to leave
+  lastResponses: string[]; // last 4 responses for stall detection
 }
 
 export class ConversationManager {
@@ -50,7 +54,9 @@ export class ConversationManager {
    * Accepts an array of agent IDs (2 or more for group conversations).
    * Also accepts two separate string args for backward compatibility.
    */
-  startConversation(agentIdsOrFirst: string | string[], agent2Id?: string, location?: Position): string {
+  private static readonly PURPOSE_SHORT = /\b(trade|give|teach|ask|question|tell|deliver|offer|buy|sell)\b/i;
+
+  startConversation(agentIdsOrFirst: string | string[], agent2Id?: string, location?: Position, purpose?: string): string {
     let agentIds: string[];
     let loc: Position;
 
@@ -64,8 +70,18 @@ export class ConversationManager {
     }
 
     const id = crypto.randomUUID();
-    // Safety valve only — goodbye detection handles natural endings
-    const maxTurns = 12;
+
+    // Dynamic maxTurns based on purpose
+    let maxTurns: number;
+    if (purpose && ConversationManager.PURPOSE_SHORT.test(purpose)) {
+      maxTurns = 6; // transactional — trade, give, teach, ask
+    } else if (purpose) {
+      maxTurns = 8; // has purpose but general
+    } else {
+      maxTurns = 8; // spontaneous/social
+    }
+    // Hard cap
+    maxTurns = Math.min(maxTurns, 10);
 
     const conversation: Conversation = {
       id,
@@ -83,11 +99,15 @@ export class ConversationManager {
       currentSpeakerIdx: 0,
       processing: false,
       agendas: new Map(),
+      purpose,
+      purposeFulfilled: false,
+      stallCount: 0,
+      lastResponses: [],
     });
 
     const names = agentIds.map(aid => this.world.getAgent(aid)?.config.name ?? aid);
     console.log(
-      `[Conversation] Started between ${names.join(', ')} (max ${maxTurns} turns)`,
+      `[Conversation] Started between ${names.join(', ')} (max ${maxTurns} turns${purpose ? `, purpose: "${purpose.substring(0, 50)}"` : ''})`,
     );
 
     // Broadcast conversation start so client can draw visual link
@@ -216,9 +236,11 @@ export class ConversationManager {
         combinedWorldContext += (combinedWorldContext ? '\n\n' : '') + ledgerContext;
       }
 
-      // Hint the LLM to wrap up when conversation is getting long
+      // Hint the LLM to wrap up based on context
       const turnsLeft = active.maxTurns - active.turnCount;
-      if (turnsLeft <= 4 && active.turnCount >= 4) {
+      if (active.purposeFulfilled) {
+        history.push(`[The matter you came to discuss is resolved. Say goodbye naturally.]`);
+      } else if (turnsLeft <= 3 && active.turnCount >= 4) {
         history.push(`[You feel the conversation winding down. Wrap up naturally — say goodbye or make a parting remark.]`);
       }
 
@@ -255,9 +277,16 @@ export class ConversationManager {
       // --- Execute [ACTION: ...] tags ---
       const defaultTargetId = otherIds[0];
       const actionMatches = response.matchAll(/\[ACTION:\s*(.+?)\]/gi);
+      let actionExecuted = false;
       for (const match of actionMatches) {
         const actionIntent = match[1].trim();
         this.actionPipeline.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition, cognitions, this.requestConversationFn);
+        actionExecuted = true;
+      }
+
+      // Mark purpose fulfilled if an action was executed
+      if (actionExecuted && !active.purposeFulfilled) {
+        active.purposeFulfilled = true;
       }
 
       // Detect meta/prompt contamination — replace with in-character fallback
@@ -309,6 +338,27 @@ export class ConversationManager {
       active.turnCount++;
       // Round-robin to next speaker
       active.currentSpeakerIdx = (active.currentSpeakerIdx + 1) % participants.length;
+
+      // Track recent responses for stall detection
+      active.lastResponses.push(dialogueOnly);
+      if (active.lastResponses.length > 4) active.lastResponses.shift();
+
+      // Stall detection: both agents repeating movement-agreement phrases
+      const STALL_PHRASES = /\b(let's go|come on|lead the way|right behind|i'm ready|let's move|let's head|after you|shall we|let's do it|sounds good|let's get going|ready when you are)\b/i;
+      if (active.lastResponses.length >= 2) {
+        const curr = active.lastResponses[active.lastResponses.length - 1];
+        const prev = active.lastResponses[active.lastResponses.length - 2];
+        if (STALL_PHRASES.test(curr) && STALL_PHRASES.test(prev)) {
+          active.stallCount++;
+        } else {
+          active.stallCount = 0;
+        }
+        if (active.stallCount >= 2) {
+          console.log(`[Conversation] Stall detected (${active.stallCount} rounds of agreement) — ending`);
+          this.endConversation(conversationId, cognitions);
+          return false;
+        }
+      }
 
       // Check if the speaker said goodbye
       const lower = response.toLowerCase();
