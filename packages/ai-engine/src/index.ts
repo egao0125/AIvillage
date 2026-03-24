@@ -273,11 +273,13 @@ If nothing notable was exchanged, return []`;
     const { config } = this.agent;
     const parts: string[] = [];
 
-    // Soul + backstory (truncated to prevent fictional character leakage)
+    // Soul + backstory (800 char limit — enough for rich original characters)
     const soulRaw = config.soul || config.backstory || '';
-    const soulText = soulRaw.length > 200 ? soulRaw.slice(0, 200) + '...' : soulRaw;
+    const soulText = soulRaw.length > 800 ? soulRaw.slice(0, 800) + '...' : soulRaw;
     parts.push(`You are ${config.name}, age ${config.age}. ${soulText}`);
-    if (config.goal) parts.push(`Your goal: ${config.goal}`);
+    // Use explicit goal, or first desire as fallback
+    const effectiveGoal = config.goal || (config.desires?.length ? config.desires[0] : '');
+    if (effectiveGoal) parts.push(`Your goal: ${effectiveGoal}`);
 
     // Deep identity
     const identityParts: string[] = [];

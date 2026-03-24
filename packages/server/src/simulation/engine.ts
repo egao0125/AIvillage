@@ -281,15 +281,19 @@ export class SimulationEngine {
 
     // Save agent to Supabase FIRST, then seed memories (FK: memories.agent_id → agents.id)
     const seedMemories = () => {
+      // Use soul (rich character text) when backstory is empty
+      const identityText = config.soul || config.backstory || '';
       void cognition.addMemory({
         id: crypto.randomUUID(), agentId: id, type: 'reflection',
-        content: `I am ${config.name}. ${config.backstory}`,
+        content: `I am ${config.name}. ${identityText}`,
         importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
       });
-      if (config.goal) {
+      // Seed goal from explicit goal field, or first desire as fallback
+      const effectiveGoal = config.goal || (config.desires?.length ? config.desires[0] : '');
+      if (effectiveGoal) {
         void cognition.addMemory({
           id: crypto.randomUUID(), agentId: id, type: 'reflection',
-          content: `My goal: ${config.goal}`,
+          content: `My goal: ${effectiveGoal}`,
           importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
         });
       }
