@@ -147,9 +147,25 @@ io.on('connection', (socket) => {
     socket.emit('dev:status', { paused: !engine.isRunning });
   });
 
+  // --- Infra 6: Viewport-aware streaming ---
+  socket.on('viewport:update', (data: { x: number; y: number; width: number; height: number }) => {
+    if (typeof data?.x !== 'number' || typeof data?.y !== 'number') return;
+    engine.viewportManager.setViewport(socket.id, {
+      x: data.x,
+      y: data.y,
+      width: data.width ?? 40,
+      height: data.height ?? 30,
+      buffer: 10,
+    });
+    // Send catch-up: agents currently in the new viewport
+    const agents = engine.getViewportCatchup(socket.id);
+    socket.emit('viewport:catchup', { agents });
+  });
+
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
     spectatorLastComment.delete(socket.id);
+    engine.viewportManager.removeClient(socket.id);
     const existing = watchIntervals.get(socket.id);
     if (existing) {
       clearInterval(existing.interval);

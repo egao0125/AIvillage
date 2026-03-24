@@ -3,6 +3,10 @@
 // Every type here enables a new dimension of CONSEQUENCE.
 // ============================================================================
 
+// --- Infra 1: Event Bus ---
+export { EventBus } from './event-bus.js';
+export type { SimEvent } from './events.js';
+
 // --- Agent ---
 
 export interface AgentPersonality {
@@ -269,6 +273,11 @@ export interface Memory {
   actionSuccess?: boolean; // for action_outcome memories
   sourceAgentId?: string;   // who told them (undefined = firsthand)
   hearsayDepth?: number;    // 0 = direct, 1 = secondhand
+
+  // --- Freedom 4: Narrative Memory ---
+  // Causal linking: enables agents to reason about chains of cause and effect.
+  causedBy?: string;        // memory ID that caused this memory
+  ledTo?: string[];         // memory IDs that this memory led to
 }
 
 // --- Conversation ---
@@ -366,6 +375,22 @@ export interface Weather {
   season: Season;
   temperature: number;   // Abstract 0-100 (0=freezing, 100=scorching)
   seasonDay: number;     // Day within current season (0-29)
+}
+
+// --- World Objects (Freedom 1: open-ended actions) ---
+// Consequence: agents can create arbitrary things that persist and are perceivable.
+// A memorial, a warning sign, a garden, art — anything the agent imagines.
+
+export interface WorldObject {
+  id: string;
+  name: string;
+  description: string;
+  creatorId: string;
+  creatorName: string;
+  areaId: string;
+  position: Position;
+  createdAt: number;        // game totalMinutes
+  lastInteractedAt: number; // game totalMinutes — decays if not interacted with
 }
 
 // --- Phase 7: Buildings ---
@@ -481,7 +506,9 @@ export type ServerEvent =
   | { type: "institution:update"; institution: Institution }
   | { type: "artifact:created"; artifact: Artifact }
   | { type: "building:update"; building: Building }
-  | { type: "technology:discovered"; technology: Technology };
+  | { type: "technology:discovered"; technology: Technology }
+  | { type: "world_object:created"; worldObject: WorldObject }
+  | { type: "world_object:modified"; worldObject: WorldObject };
 
 export type ClientEvent =
   | { type: "viewport:update"; bounds: { x: number; y: number; width: number; height: number } }
@@ -549,6 +576,7 @@ export interface WorldSnapshot {
   artifacts: Artifact[];
   buildings: Building[];
   technologies: Technology[];
+  worldObjects: WorldObject[];
   narratives?: NarrativeEntry[];
   storylines?: Storyline[];
   weeklySummary?: string | null;

@@ -283,6 +283,15 @@ export function connectSocket(): Socket {
     if (data.summary) gameStore.setWeeklySummary(data.summary);
   });
 
+  // --- Infra 6: Viewport catch-up ---
+  socket.on('viewport:catchup', (data: { agents: Array<{ id: string; position: { x: number; y: number }; state: string; currentAction: string; mood: string; config: any }> }) => {
+    for (const agent of data.agents) {
+      gameStore.moveAgent(agent.id, agent.position);
+      gameStore.updateAgentAction(agent.id, agent.currentAction);
+    }
+    eventBus.emit('viewport:catchup', data);
+  });
+
   // Update last-seen day periodically
   setInterval(() => {
     const time = gameStore.getState().time;
@@ -325,5 +334,10 @@ export function watchThoughts(agentId: string): void {
 
 export function unwatchThoughts(): void {
   socket?.emit('agent:unwatch-thoughts');
+}
+
+/** Infra 6: Report viewport rectangle to server for spatial event filtering */
+export function sendViewportUpdate(x: number, y: number, width: number, height: number): void {
+  socket?.emit('viewport:update', { x, y, width, height });
 }
 

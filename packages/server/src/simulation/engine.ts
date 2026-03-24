@@ -1,13 +1,16 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, SEASONS } from '@ai-village/ai-engine';
+import { EventBus } from '@ai-village/shared';
+import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, SEASONS } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
 import { World } from './world.js';
 import { EventBroadcaster } from './events.js';
-import { ConversationManager } from './conversation.js';
+import { ConversationManager } from './conversation/index.js';
 import { AgentController } from './agent-controller.js';
+import { DecisionQueue } from './decision-queue.js';
+import { ViewportManager } from './viewport-manager.js';
 import { STARTER_AGENTS } from '../agents/starter.js';
 import { AREAS } from '../map/village.js';
 import { SupabasePersistence } from '../persistence/supabase.js';
@@ -21,6 +24,7 @@ export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
 
   private world: World;
+  readonly bus: EventBus = new EventBus();
   private controllers: Map<string, AgentController> = new Map();
   private conversationManager!: ConversationManager;
   private broadcaster!: EventBroadcaster;
@@ -29,11 +33,15 @@ export class SimulationEngine {
   // Shared throttle per API key — limits concurrent LLM calls to prevent OOM
   private static readonly MAX_CONCURRENT_LLM = 10;
   private throttles: Map<string, ThrottledProvider> = new Map();
+  private decisionQueue: DecisionQueue;
+  private decisionInterval: NodeJS.Timeout | null = null;
+  readonly viewportManager: ViewportManager = new ViewportManager();
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
   private persistence: SupabasePersistence | null = null;
   private weatherStableUntil: number = 0;
   private lastConversationPair: Map<string, number> = new Map();
+  private spontaneousConversationsToday: Map<string, number> = new Map(); // Freedom 2: per-agent daily cap
   private narrator!: VillageNarrator;
   private characterTimeline!: CharacterTimeline;
   private storylineDetector!: StorylineDetector;
@@ -44,6 +52,7 @@ export class SimulationEngine {
 
   constructor(private io: Server) {
     this.world = new World();
+    this.decisionQueue = new DecisionQueue(SimulationEngine.MAX_CONCURRENT_LLM);
 
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -56,8 +65,10 @@ export class SimulationEngine {
   }
 
   async initialize(): Promise<void> {
-    // Create broadcaster
+    // Create broadcaster with viewport-aware filtering
     this.broadcaster = new EventBroadcaster(this.io);
+    this.broadcaster.setViewportManager(this.viewportManager);
+    this.broadcaster.setPositionLookup((agentId) => this.world.getAgent(agentId)?.position);
 
     // Create narrator + timeline + storyline systems
     const globalKey = process.env.ANTHROPIC_API_KEY;
@@ -88,6 +99,42 @@ export class SimulationEngine {
     if (this.persistence) {
       await this.loadFromSupabase();
     }
+
+    // --- Infra 1: Wire event bus subscriptions ---
+    // Registration order = execution order within a tick.
+
+    // Midnight: reset counters, decay objects
+    this.bus.on('midnight', () => {
+      this.world.resetDailyCounters();
+      this.world.spoilFood();
+      this.spontaneousConversationsToday.clear();
+      this.decayWorldObjects();
+    });
+
+    // Tick controllers
+    this.bus.on('tick', (e) => {
+      for (const controller of this.controllers.values()) {
+        controller.tick(e.time);
+      }
+    });
+
+    // Perception
+    this.bus.on('perception_cycle', () => this.runPerception());
+
+    // Proximity → conversations (single subscriber preserves ordering)
+    this.bus.on('tick', () => {
+      this.checkProximityConversations();
+      this.advanceConversations();
+    });
+
+    // Periodic save
+    this.bus.on('save_requested', () => {
+      if (this.persistence) {
+        void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
+          console.error('[Persistence] Periodic save failed:', err)
+        );
+      }
+    });
 
     console.log(`[Engine] AI Village initialized (no starter agents — users create agents via UI)`);
   }
@@ -158,6 +205,7 @@ export class SimulationEngine {
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = (ctrlDataForWorldView as any)?.worldViewParts as WorldViewParts | undefined;
         const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts);
+        this.wireTieredMemory(cognition, agent, sharedMemoryStore);
         this.cognitions.set(agent.id, cognition);
 
         // Restore controller
@@ -182,7 +230,7 @@ export class SimulationEngine {
         if (ctrlData) {
           const restoredState = ctrlData.controllerState as ControllerState;
           // Reset transient states to idle — path/conversation state is not saved across restarts
-          controller.state = (restoredState === 'moving' || restoredState === 'performing' || restoredState === 'conversing')
+          controller.state = (restoredState === 'moving' || restoredState === 'performing' || restoredState === 'conversing' || restoredState === 'deciding')
             ? 'idle'
             : restoredState;
           controller.intentions = (ctrlData as any).intentions ??
@@ -192,6 +240,7 @@ export class SimulationEngine {
           controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
         }
 
+        controller.decisionQueue = this.decisionQueue;
         this.controllers.set(agent.id, controller);
       }
 
@@ -257,6 +306,7 @@ export class SimulationEngine {
     const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
+    this.wireTieredMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Broadcast spawn AFTER cognition is set so getSnapshot() can enrich with worldView
@@ -275,6 +325,7 @@ export class SimulationEngine {
       this.createActionExecutor(),
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
+    controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
     console.log(
@@ -331,9 +382,10 @@ export class SimulationEngine {
       this.controllers.delete(id);
     }
 
-    // Remove cognition and API key
+    // Remove cognition, API key, and queued decisions
     this.cognitions.delete(id);
     this.agentApiKeys.delete(id);
+    this.decisionQueue.removeAgent(id);
 
     // Remove from any active conversations
     for (const conv of this.world.getActiveConversations()) {
@@ -353,7 +405,8 @@ export class SimulationEngine {
       }
     }
 
-    // Remove from world
+    // Remove from world + grid
+    this.world.grid.unregister(id);
     this.world.agents.delete(id);
 
     // Broadcast leave
@@ -425,6 +478,7 @@ export class SimulationEngine {
     // Preserve worldViewParts from old cognition if available
     const oldCognition = this.cognitions.get(id);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
+    this.wireTieredMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Recreate controller with default wake/sleep hours
@@ -439,6 +493,7 @@ export class SimulationEngine {
       this.createActionExecutor(),
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
+    controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
     // Set state to idle and place at plaza
@@ -509,6 +564,7 @@ export class SimulationEngine {
     // Preserve worldViewParts — resurrection keeps knowledge
     const oldCognition = this.cognitions.get(id);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
+    this.wireTieredMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Recreate controller
@@ -523,6 +579,7 @@ export class SimulationEngine {
       this.createActionExecutor(),
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
+    controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
     // Place at plaza
@@ -594,6 +651,19 @@ export class SimulationEngine {
       this.tick();
     }, 83); // 12x speed: 1 game minute = 83ms real time (~3x previous)
 
+    // Infra 3: Decision queue processing loop — dequeue and execute cold-path LLM calls
+    this.decisionInterval = setInterval(() => {
+      const decision = this.decisionQueue.dequeue();
+      if (!decision) return;
+      const ctrl = this.controllers.get(decision.agentId);
+      if (!ctrl || ctrl.apiExhausted) {
+        this.decisionQueue.complete(decision.agentId);
+        return;
+      }
+      ctrl.executeQueuedDecision(decision.type, decision.context)
+        .finally(() => this.decisionQueue.complete(decision.agentId));
+    }, 50);
+
     console.log('[Engine] Simulation started');
   }
 
@@ -602,8 +672,12 @@ export class SimulationEngine {
     if (this.tickInterval) {
       clearInterval(this.tickInterval);
       this.tickInterval = null;
-      console.log('[Engine] Simulation paused');
     }
+    if (this.decisionInterval) {
+      clearInterval(this.decisionInterval);
+      this.decisionInterval = null;
+    }
+    console.log('[Engine] Simulation paused');
   }
 
   /** Execute a single tick (for dev step-through). Only works when paused. */
@@ -618,6 +692,10 @@ export class SimulationEngine {
       clearInterval(this.tickInterval);
       this.tickInterval = null;
     }
+    if (this.decisionInterval) {
+      clearInterval(this.decisionInterval);
+      this.decisionInterval = null;
+    }
     if (this.persistence) {
       try {
         await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
@@ -631,59 +709,46 @@ export class SimulationEngine {
 
   private tick(): void {
     this.tickCount++;
-
-    // 1. Advance game time
     const time = this.world.advanceTime();
 
-    // 1b. Reset daily counters at midnight
+    // --- Emit clock events (subscribers handle the rest) ---
+
     if (time.hour === 0 && time.minute === 0) {
-      this.world.resetDailyCounters();
-      this.world.spoilFood();
+      this.bus.emit({ type: 'midnight', day: time.day });
     }
 
-    // 2. Broadcast time every 15 game minutes
+    if (time.minute === 0) {
+      this.bus.emit({ type: 'hour_changed', hour: time.hour, day: time.day });
+    }
+
+    // Broadcast time to clients every 15 game minutes
     if (time.minute % 15 === 0) {
       this.broadcaster.worldTime(time);
     }
 
-    // 3. Tick each agent controller
-    for (const controller of this.controllers.values()) {
-      controller.tick(time);
-    }
+    // Core tick: controllers + proximity + conversations (via bus subscribers)
+    this.bus.emit({ type: 'tick', time });
 
-    // 4. Run perception every 120 ticks — agents notice their surroundings
+    // Perception every 120 ticks
     if (this.tickCount % 120 === 0) {
-      this.runPerception();
+      this.bus.emit({ type: 'perception_cycle', tick: this.tickCount });
     }
 
-    // 5. Check proximity for conversations
-    this.checkProximityConversations();
+    // --- Direct calls for subsystems with complex timing ---
 
-    // 6. Advance active conversations (fire-and-forget)
-    this.advanceConversations();
-
-    // 7. Every 10 ticks: check overhearing
     if (this.tickCount % 10 === 0) this.checkOverhearing();
-
-    // 8. Every tick: check election deadlines
     this.checkElections();
 
-    // 9. Every 600 ticks (~10 game hours): update weather (was 60 — too frequent)
     if (this.tickCount % 600 === 0) {
       this.updateWeather();
     }
 
-    // 12. Every 1440 ticks (~1 game day): advance season check, damage buildings
     if (this.tickCount % 1440 === 0) {
       this.checkSeasonAdvance();
       this.weatherDamageBuildings();
     }
 
-    // 13. Narrator — DISABLED (only weekly recap uses the global API key)
-
-    // 14. Storyline detection — DISABLED (replaced by weekly recap)
-
-    // 16. Auto weekly summary — check every 120 ticks (~2 game hours)
+    // Auto weekly summary — every 120 ticks (~2 game hours)
     if (this.tickCount % 120 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
       console.log(`[WeeklySummary] Triggering for Day ${time.day} (last: ${this.lastWeeklySummaryDay})`);
       this.weeklySummaryGenerating = true;
@@ -703,11 +768,20 @@ export class SimulationEngine {
       });
     }
 
-    // 15. Periodic save every 300 ticks (~5 game hours)
-    if (this.tickCount % 300 === 0 && this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Periodic save failed:', err)
-      );
+    // Periodic save every 300 ticks
+    if (this.tickCount % 300 === 0) {
+      this.bus.emit({ type: 'save_requested' });
+    }
+  }
+
+  /** Freedom 5: Decay world objects not interacted with for 7 game-days */
+  private decayWorldObjects(): void {
+    const DECAY_MINUTES = 7 * 24 * 60;
+    for (const [id, obj] of this.world.worldObjects) {
+      if (this.world.time.totalMinutes - obj.lastInteractedAt > DECAY_MINUTES) {
+        this.world.removeWorldObject(id);
+        console.log(`[Engine] WorldObject decayed: "${obj.name}" (no interaction for 7 days)`);
+      }
     }
   }
 
@@ -732,7 +806,24 @@ export class SimulationEngine {
         return Math.sqrt(dx * dx + dy * dy) < 6;
       });
 
-      void cognition.perceive(nearby, nearbyAreas).catch(() => {});
+      // Freedom 1: include world objects at nearby areas
+      const nearbyWorldObjects: { name: string; description: string; creatorName: string }[] = [];
+      for (const area of nearbyAreas) {
+        for (const obj of this.world.getWorldObjectsAt(area.id)) {
+          nearbyWorldObjects.push({ name: obj.name, description: obj.description, creatorName: obj.creatorName });
+        }
+      }
+      // Freedom 5: collect cultural names for nearby areas
+      const culturalNames = new Map<string, string>();
+      for (const area of nearbyAreas) {
+        const cName = this.world.getCulturalName(area.id);
+        if (cName) culturalNames.set(area.id, cName);
+      }
+      void cognition.perceive(
+        nearby, nearbyAreas,
+        nearbyWorldObjects.length > 0 ? nearbyWorldObjects : undefined,
+        culturalNames.size > 0 ? culturalNames : undefined,
+      ).catch(() => {});
     }
   }
 
@@ -779,23 +870,53 @@ export class SimulationEngine {
         const c1WantsC2 = c1.pendingConversationTarget === a2.id;
         const c2WantsC1 = c2.pendingConversationTarget === a1.id;
 
+        // Intentional conversation: one agent specifically planned to talk to the other
         if (c1WantsC2 || c2WantsC1) {
-          // Start conversation
           const location = { ...a1.position };
-          const convId = this.conversationManager.startConversation(a1.id, a2.id, location);
-
-          // Record pair cooldown
+          this.conversationManager.startConversation(a1.id, a2.id, location);
           this.lastConversationPair.set(pairKey, this.tickCount);
-
-          // Put both controllers into conversing state
           c1.enterConversation();
           c2.enterConversation();
+          console.log(`[Engine] Intentional conversation: ${a1.config.name} <-> ${a2.config.name}`);
+          return;
+        }
 
-          console.log(
-            `[Engine] Proximity conversation started: ${a1.config.name} <-> ${a2.config.name}`,
-          );
+        // Freedom 2: Spontaneous conversation — probability-based
+        const MAX_SPONTANEOUS_PER_DAY = 3;
+        const a1Count = this.spontaneousConversationsToday.get(a1.id) ?? 0;
+        const a2Count = this.spontaneousConversationsToday.get(a2.id) ?? 0;
+        if (a1Count >= MAX_SPONTANEOUS_PER_DAY || a2Count >= MAX_SPONTANEOUS_PER_DAY) continue;
 
-          // Only start one conversation per tick
+        // Base 5% chance, modified by extraversion and belonging drive
+        const ext1 = a1.config.personality?.extraversion ?? 0.5;
+        const ext2 = a2.config.personality?.extraversion ?? 0.5;
+        const belonging1 = (a1.drives?.belonging ?? 50) / 100; // 0-1, higher = lonelier
+        const belonging2 = (a2.drives?.belonging ?? 50) / 100;
+
+        // Same activity boost: both performing the same action type
+        const sameActivity = (c1.state === 'performing' && c2.state === 'performing') ? 0.05 : 0;
+
+        // Have they met before? Check mental models
+        const haveMet = a1.mentalModels?.some(m => m.targetId === a2.id) ?? false;
+        const metBonus = haveMet ? 0.03 : 0;
+
+        const probability = 0.05
+          + (ext1 - 0.5) * 0.1      // +/- 5% from agent 1 extraversion
+          + (ext2 - 0.5) * 0.1      // +/- 5% from agent 2 extraversion
+          + belonging1 * 0.03        // lonely agents seek connection
+          + belonging2 * 0.03
+          + sameActivity
+          + metBonus;
+
+        if (Math.random() < probability) {
+          const location = { ...a1.position };
+          this.conversationManager.startConversation(a1.id, a2.id, location);
+          this.lastConversationPair.set(pairKey, this.tickCount);
+          c1.enterConversation();
+          c2.enterConversation();
+          this.spontaneousConversationsToday.set(a1.id, a1Count + 1);
+          this.spontaneousConversationsToday.set(a2.id, a2Count + 1);
+          console.log(`[Engine] Spontaneous conversation: ${a1.config.name} <-> ${a2.config.name} (p=${probability.toFixed(3)})`);
           return;
         }
       }
@@ -810,7 +931,7 @@ export class SimulationEngine {
 
       void this.conversationManager
         .advanceTurn(conv.id, this.cognitions)
-        .then(continuing => {
+        .then((continuing: boolean) => {
           if (!continuing) {
             // Release agents from conversation
             for (const pid of conv.participants) {
@@ -821,7 +942,7 @@ export class SimulationEngine {
             }
           }
         })
-        .catch(err => {
+        .catch((err: unknown) => {
           console.error('[Engine] Error advancing conversation:', err);
           // Release agents on error
           for (const pid of conv.participants) {
@@ -1084,6 +1205,22 @@ export class SimulationEngine {
     return snapshot;
   }
 
+  /** Infra 6: Get agents visible in a client's viewport (for catch-up on scroll) */
+  getViewportCatchup(socketId: string): { id: string; position: { x: number; y: number }; state: string; currentAction: string; mood: string; config: any }[] {
+    const ids = this.viewportManager.getVisibleAgents(socketId, this.world.grid);
+    return ids
+      .map(id => this.world.getAgent(id))
+      .filter((a): a is NonNullable<typeof a> => !!a && a.alive !== false)
+      .map(a => ({
+        id: a.id,
+        position: a.position,
+        state: a.state,
+        currentAction: a.currentAction,
+        mood: a.mood ?? 'neutral',
+        config: a.config,
+      }));
+  }
+
   getCharacterTimeline(agentId: string, limit?: number) {
     return this.characterTimeline.getTimeline(agentId, limit);
   }
@@ -1169,6 +1306,13 @@ export class SimulationEngine {
     return throttled;
   }
 
+  /** Infra 5: Wire tiered memory onto a cognition instance */
+  private wireTieredMemory(cognition: AgentCognition, agent: Agent, memoryStore: import('@ai-village/ai-engine').MemoryStore): void {
+    const tiered = new TieredMemory(agent.id, memoryStore);
+    tiered.seedIdentity(agent.config);
+    cognition.tieredMemory = tiered;
+  }
+
   private createActionExecutor() {
     const requestConv = (initiatorId: string, targetId: string): boolean => {
         // Block self-conversations
@@ -1204,7 +1348,7 @@ export class SimulationEngine {
           actorId, actorName, targetId, action, cognition,
           this.cognitions,
           requestConv,
-        ).then((outcomeDesc) => {
+        ).then((outcomeDesc: string) => {
           const controller = this.controllers.get(actorId);
           if (controller) controller.lastOutcomeDescription = outcomeDesc;
         });
@@ -1227,6 +1371,7 @@ export class SimulationEngine {
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
+    this.wireTieredMemory(cognition, agent, memoryStore);
     this.cognitions.set(agentId, cognition);
 
     // Reset controller's API state

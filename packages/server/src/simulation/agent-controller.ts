@@ -4,6 +4,7 @@ import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_H
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
+import type { DecisionQueue } from './decision-queue.js';
 
 interface SoloActionExecutor {
   executeSocialAction(actorId: string, actorName: string, targetId: string, action: string, cognition: AgentCognition): void;
@@ -18,6 +19,7 @@ export type ControllerState =
   | 'performing'
   | 'conversing'
   | 'reflecting'
+  | 'deciding'    // Infra 3: waiting for queue-managed LLM call
   | 'idle';
 
 /** Count overlapping words (>3 chars) between two strings */
@@ -53,12 +55,18 @@ export class AgentController {
   private apiAuthDead: boolean = false; // true = 401/403, don't auto-recover
   private lastReplanTick: number = 0;
   private currentPerformingActivity: string = '';
+  // Freedom 3: think budget — N reactive thinks per game-hour, resets on the hour
+  private reactiveThinkBudget: number = 4;
+  private lastBudgetResetHour: number = -1;
   onDeath?: (agentId: string, cause: string) => void;
   private thinkInProgress: boolean = false;
   private lastHungerBand: number = 0;
   private lastEnergyBand: number = 0;
   private lastHealthBand: number = 0;
   public lastOutcomeDescription: string = '';
+  decisionQueue?: DecisionQueue;  // Infra 3: injected by engine
+  // Freedom 4: track intention memory ID for causal chain linking
+  private currentIntentionMemoryId: string | undefined;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -176,6 +184,22 @@ export class AgentController {
     this.broadcaster.agentAction(this.agent.id, 'API key updated — resuming', '\u2705');
   }
 
+  /** Infra 3: Execute a queued decision. Called by the engine's processing loop. */
+  async executeQueuedDecision(type: string, context: { trigger: string; details: string }): Promise<void> {
+    switch (type) {
+      case 'think':
+        await this.thinkThenAct();
+        break;
+      case 'plan':
+        await this.doPlan(this.world.time);
+        break;
+      // think_after_outcome is hot-path (fire-and-forget), never queued
+      case 'reflect':
+        await this.doReflect();
+        break;
+    }
+  }
+
   get isAvailable(): boolean {
     return (
       this.state !== 'sleeping' &&
@@ -214,9 +238,22 @@ export class AgentController {
     if (this.conversationCooldown > 0) this.conversationCooldown--;
 
     // Universal sleep check — fires regardless of current state
-    if (this.state !== 'sleeping' && this.state !== 'reflecting' && this.state !== 'waking') {
+    if (this.state !== 'sleeping' && this.state !== 'reflecting' && this.state !== 'waking' && this.state !== 'deciding') {
       if (this.shouldSleep(time)) {
-        void this.doReflect();
+        if (this.decisionQueue) {
+          this.decisionQueue.enqueue({
+            id: crypto.randomUUID(),
+            agentId: this.agent.id,
+            type: 'reflect',
+            priority: 1, // highest priority — nightly reflection
+            context: { trigger: 'bedtime', details: `day ${time.day}` },
+            enqueuedAt: Date.now(),
+            expiresAt: Date.now() + 120000, // 2 min — must complete before next day
+          });
+          this.state = 'deciding';
+        } else {
+          void this.doReflect();
+        }
         return;
       }
     }
@@ -253,7 +290,8 @@ export class AgentController {
       case 'performing': {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
-          // Think about what just happened before going idle
+          // HOT PATH — consequence reaction must be immediate while context is fresh.
+          // Never queue: agent just finished an activity and needs to react now.
           void this.thinkAfterOutcome();
         }
         break;
@@ -271,17 +309,48 @@ export class AgentController {
         break;
       }
 
+      case 'deciding': {
+        // Infra 3: waiting for queue-managed LLM call — no-op, engine processes queue
+        break;
+      }
+
       case 'idle': {
         this.idleTimer++;
         if (this.idleTimer >= 10) {
           this.idleTimer = 0;
           const allIntentionsDone = this.currentIntentionIndex >= this.intentions.length;
           if ((this.intentions.length === 0 || allIntentionsDone) && !this.planningInProgress) {
-            // No plan or exhausted all intentions — replan
-            void this.doPlan(time);
+            // No plan or exhausted all intentions — enqueue replan
+            if (this.decisionQueue) {
+              this.decisionQueue.enqueue({
+                id: crypto.randomUUID(),
+                agentId: this.agent.id,
+                type: 'plan',
+                priority: 2, // high priority — agent has no plan
+                context: { trigger: 'no_plan', details: `day ${time.day} hour ${time.hour}` },
+                enqueuedAt: Date.now(),
+                expiresAt: Date.now() + 60000, // 60s — plans are important
+              });
+              this.state = 'deciding';
+            } else {
+              void this.doPlan(time);
+            }
           } else if (!this.thinkInProgress) {
-            // Think before acting — let the agent decide whether to follow the plan
-            void this.thinkThenAct();
+            // Think before acting — enqueue cold-path think
+            if (this.decisionQueue) {
+              this.decisionQueue.enqueue({
+                id: crypto.randomUUID(),
+                agentId: this.agent.id,
+                type: 'think',
+                priority: 5, // low priority — idle thinking
+                context: { trigger: 'idle_cycle', details: this.agent.currentAction },
+                enqueuedAt: Date.now(),
+                expiresAt: Date.now() + 25000, // ~300 ticks
+              });
+              this.state = 'deciding';
+            } else {
+              void this.thinkThenAct();
+            }
           }
         }
         break;
@@ -405,6 +474,19 @@ export class AgentController {
 
     const intention = this.intentions[this.currentIntentionIndex];
     this.currentIntentionIndex++;
+
+    // Freedom 4: Store intention as a memory so outcome can link back via causedBy
+    const intentionMemoryId = crypto.randomUUID();
+    this.currentIntentionMemoryId = intentionMemoryId;
+    void this.cognition.addMemory({
+      id: intentionMemoryId,
+      agentId: this.agent.id,
+      type: 'plan',
+      content: `I decided to: ${intention}`,
+      importance: 3,
+      timestamp: Date.now(),
+      relatedAgentIds: [],
+    });
 
     // Check if intention mentions talking to a specific agent
     let talkTargetAgent: Agent | null = null;
@@ -670,22 +752,25 @@ export class AgentController {
       this.world.updateAgentState(this.agent.id, 'idle', nextIntention || '');
     };
 
-    // Micro-log: record factual outcome as memory even when think is skipped due to cooldown
+    // Micro-log: record factual outcome as memory even when think is skipped
+    // Freedom 4: Save the memory ID so subsequent think memories can link causedBy
+    let outcomeMemoryId: string | undefined;
     if (activity && this.lastOutcomeDescription) {
-      // Clean raw system prefixes into natural agent memory
       let outcomeContent = this.lastOutcomeDescription
         .replace(/^SUCCESS:\s*/i, '')
         .replace(/^FAILED:\s*/i, 'Failed: ')
         .replace(/\s*NEXT STEP:.*$/i, '');
       if (outcomeContent.length > 0) {
+        outcomeMemoryId = crypto.randomUUID();
         void this.cognition.addMemory({
-          id: crypto.randomUUID(),
+          id: outcomeMemoryId,
           agentId: this.agent.id,
           type: 'observation',
           content: outcomeContent,
           importance: 3,
           timestamp: Date.now(),
           relatedAgentIds: [],
+          causedBy: this.currentIntentionMemoryId,  // Freedom 4: link outcome → intention
         });
       }
     }
@@ -695,13 +780,18 @@ export class AgentController {
       return;
     }
 
-    // 30 game-minute cooldown
-    const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
-    if (ticksSinceLast < 30) {
+    // Freedom 3: Budget-based reactive thinking — always fire thinkAfterOutcome,
+    // limited by N calls per game-hour (default 4). No time cooldown.
+    // Reset budget on the hour.
+    if (this.world.time.hour !== this.lastBudgetResetHour) {
+      this.reactiveThinkBudget = 4;
+      this.lastBudgetResetHour = this.world.time.hour;
+    }
+    if (this.reactiveThinkBudget <= 0) {
       goIdle();
       return;
     }
-
+    this.reactiveThinkBudget--;
     this.lastSoloActionTick = this.world.time.totalMinutes;
 
     try {
@@ -749,6 +839,23 @@ export class AgentController {
         // Firing in-place fails when the action needs a different area (e.g. "gather mushrooms" while at park).
         this.intentions.splice(this.currentIntentionIndex, 0, ...output.actions);
         console.log(`[Agent] ${this.agent.config.name} thinkAfterOutcome inserted ${output.actions.length} new intentions: ${output.actions.join(', ')}`);
+
+        // Freedom 4: Link new actions back to the outcome that caused them
+        if (outcomeMemoryId) {
+          for (const action of output.actions) {
+            void this.cognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: this.agent.id,
+              type: 'plan',
+              content: `I decided to: ${action}`,
+              importance: 4,
+              timestamp: Date.now(),
+              relatedAgentIds: [],
+              causedBy: outcomeMemoryId,
+            });
+          }
+        }
+
         this.state = 'idle';
         this.idleTimer = 25; // trigger followNextIntention quickly
         return;
@@ -764,7 +871,7 @@ export class AgentController {
    * Event-driven think — immediate, bypasses the 60-minute cooldown.
    * Used for: witnessing events, vital threshold crossings, conversation endings.
    */
-  async thinkOnEvent(trigger: string, context: string): Promise<void> {
+  async thinkOnEvent(trigger: string, context: string, causedByMemoryId?: string): Promise<void> {
     if (this.apiExhausted || this.state === 'sleeping' || this.state === 'conversing') return;
 
     try {
@@ -1006,21 +1113,46 @@ export class AgentController {
 
     if (hungerBand > this.lastHungerBand) {
       const foodCount = this.agent.inventory.filter(i => i.type === 'food').length;
+      // Freedom 4: Create vitals observation with tracked ID for causal linking
+      const vitalsMemId = crypto.randomUUID();
+      void this.cognition.addMemory({
+        id: vitalsMemId, agentId: this.agent.id, type: 'observation',
+        content: `I'm getting ${hungerBand === 2 ? 'very hungry' : 'hungry'}. Hunger: ${Math.round(v.hunger)}/100.`,
+        importance: hungerBand === 2 ? 7 : 5,
+        timestamp: Date.now(), relatedAgentIds: [],
+      });
       void this.thinkOnEvent(
         `You're getting ${hungerBand === 2 ? 'very hungry — your health is starting to drop' : 'hungry'}.`,
-        `Hunger: ${Math.round(v.hunger)}/100. Food in inventory: ${foodCount} items.`
+        `Hunger: ${Math.round(v.hunger)}/100. Food in inventory: ${foodCount} items.`,
+        vitalsMemId,
       );
     }
     if (energyBand > this.lastEnergyBand) {
+      const vitalsMemId = crypto.randomUUID();
+      void this.cognition.addMemory({
+        id: vitalsMemId, agentId: this.agent.id, type: 'observation',
+        content: `I'm ${energyBand === 2 ? 'completely exhausted' : 'getting tired'}. Energy: ${Math.round(v.energy)}/100.`,
+        importance: energyBand === 2 ? 7 : 5,
+        timestamp: Date.now(), relatedAgentIds: [],
+      });
       void this.thinkOnEvent(
         `You're ${energyBand === 2 ? 'completely exhausted' : 'getting tired'}.`,
-        `Energy: ${Math.round(v.energy)}/100.`
+        `Energy: ${Math.round(v.energy)}/100.`,
+        vitalsMemId,
       );
     }
     if (healthBand > this.lastHealthBand) {
+      const vitalsMemId = crypto.randomUUID();
+      void this.cognition.addMemory({
+        id: vitalsMemId, agentId: this.agent.id, type: 'observation',
+        content: `I'm ${healthBand === 2 ? 'critically injured' : 'hurt and need care'}. Health: ${Math.round(v.health)}/100.`,
+        importance: healthBand === 2 ? 8 : 6,
+        timestamp: Date.now(), relatedAgentIds: [],
+      });
       void this.thinkOnEvent(
         `You're ${healthBand === 2 ? 'critically injured' : 'hurt and need care'}.`,
-        `Health: ${Math.round(v.health)}/100.`
+        `Health: ${Math.round(v.health)}/100.`,
+        vitalsMemId,
       );
     }
 

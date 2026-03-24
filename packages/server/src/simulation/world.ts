@@ -1,10 +1,12 @@
-import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldObject, WorldSnapshot } from '@ai-village/shared';
 import type { TradeProposal } from '@ai-village/ai-engine';
 import { RESOURCES, SKILLS, BUILDINGS } from '@ai-village/ai-engine';
 import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
+import { SpatialGrid } from './spatial-grid.js';
 
 export class World {
   agents: Map<string, Agent> = new Map();
+  readonly grid: SpatialGrid = new SpatialGrid(8);
   conversations: Map<string, Conversation> = new Map();
   board: BoardPost[] = [];
   time: GameTime;
@@ -18,10 +20,15 @@ export class World {
   artifacts: Artifact[] = [];
   buildings: Map<string, Building> = new Map();
   technologies: Technology[] = [];
+  worldObjects: Map<string, WorldObject> = new Map();
   weather: Weather;
 
   // --- Deterministic action resolver state ---
   dailyGatherCounts: Map<string, number> = new Map();
+  // Freedom 5: Resource pools — persistent depletion. Key = areaId:resource, value = remaining pool (0-100)
+  resourcePools: Map<string, number> = new Map();
+  // Freedom 5: Cultural names — key = areaId, value = { name, mentionCount, lastMentioned }
+  culturalNames: Map<string, { name: string; mentionCount: number; lastMentionedDay: number }> = new Map();
   activeBuildProjects: Map<string, { buildingDefId: string; sessionsComplete: number; ownerId: string; location: string }> = new Map();
   pendingTrades: Map<string, TradeProposal> = new Map();
 
@@ -59,6 +66,7 @@ export class World {
     if (!agent.inventory) agent.inventory = [];
     if (!agent.skills) agent.skills = [];
     this.agents.set(agent.id, agent);
+    this.grid.register(agent.id, agent.position);
   }
 
   getAgent(id: string): Agent | undefined {
@@ -68,7 +76,9 @@ export class World {
   updateAgentPosition(id: string, pos: Position): void {
     const agent = this.agents.get(id);
     if (agent) {
+      const from = { ...agent.position };
       agent.position = { x: pos.x, y: pos.y };
+      this.grid.move(id, from, pos);
     }
   }
 
@@ -90,12 +100,14 @@ export class World {
   }
 
   getNearbyAgents(pos: Position, radius: number): Agent[] {
+    const ids = this.grid.getNearby(pos, radius);
     const nearby: Agent[] = [];
-    for (const agent of this.agents.values()) {
+    for (const id of ids) {
+      const agent = this.agents.get(id);
+      if (!agent) continue;
       const dx = agent.position.x - pos.x;
       const dy = agent.position.y - pos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist <= radius) {
+      if (Math.sqrt(dx * dx + dy * dy) <= radius) {
         nearby.push(agent);
       }
     }
@@ -143,6 +155,8 @@ export class World {
     for (const [id, t] of this.pendingTrades) {
       if (t.expiresAt < now || t.status !== 'pending') this.pendingTrades.delete(id);
     }
+    // Freedom 5: Regenerate resource pools (to 80%, creating long-term depletion)
+    this.regenerateResourcePools();
     console.log(`[World] Daily counters reset (day ${this.time.day})`);
   }
 
@@ -217,6 +231,7 @@ export class World {
       artifacts: this.artifacts.slice(-100),
       buildings: Array.from(this.buildings.values()),
       technologies: this.technologies,
+      worldObjects: Array.from(this.worldObjects.values()),
     };
   }
 
@@ -496,6 +511,7 @@ export class World {
     agent.state = 'dead';
     agent.alive = false;
     agent.causeOfDeath = cause;
+    this.grid.unregister(id);
 
     // Drop all items — set ownerId to 'unclaimed'
     const droppedItems: Item[] = [];
@@ -631,6 +647,115 @@ export class World {
 
   hasTechnology(name: string): boolean {
     return this.technologies.some(t => t.name === name);
+  }
+
+  // --- Freedom 5: Resource Depletion ---
+
+  /**
+   * Get the resource pool level for an area:resource combo (0-100).
+   * Initializes at 100 if not tracked yet.
+   */
+  getResourcePool(areaId: string, resource: string): number {
+    const key = `${areaId}:${resource}`;
+    if (!this.resourcePools.has(key)) this.resourcePools.set(key, 100);
+    return this.resourcePools.get(key)!;
+  }
+
+  /**
+   * Deplete a resource pool after gathering. Each gather depletes by 3-5 points.
+   */
+  depleteResource(areaId: string, resource: string, amount: number = 4): void {
+    const key = `${areaId}:${resource}`;
+    const current = this.getResourcePool(areaId, resource);
+    this.resourcePools.set(key, Math.max(0, current - amount));
+  }
+
+  /**
+   * Regenerate resource pools. Called at midnight.
+   * Pools regenerate to 80% of max (slight long-term depletion).
+   */
+  regenerateResourcePools(): void {
+    for (const [key, value] of this.resourcePools) {
+      // Regenerate 20% of missing pool, capped at 80
+      const missing = 80 - value;
+      if (missing > 0) {
+        this.resourcePools.set(key, Math.min(80, value + Math.ceil(missing * 0.2)));
+      }
+    }
+  }
+
+  // --- Freedom 5: Cultural Naming ---
+
+  /**
+   * Record a cultural name mention. When 3+ agents use the same name for a place,
+   * it becomes the official cultural name.
+   */
+  recordCulturalNameMention(areaId: string, name: string, day: number): string | null {
+    const existing = this.culturalNames.get(areaId);
+    if (existing && existing.name === name) {
+      existing.mentionCount++;
+      existing.lastMentionedDay = day;
+      if (existing.mentionCount >= 3) {
+        console.log(`[World] Cultural name established: ${areaId} → "${name}" (${existing.mentionCount} mentions)`);
+        return name;
+      }
+    } else {
+      // New name or different name — reset
+      this.culturalNames.set(areaId, { name, mentionCount: 1, lastMentionedDay: day });
+    }
+    return null;
+  }
+
+  /**
+   * Get the cultural name for an area, if one has been established.
+   * Reverts if not mentioned for 14 days.
+   */
+  getCulturalName(areaId: string): string | null {
+    const entry = this.culturalNames.get(areaId);
+    if (!entry || entry.mentionCount < 3) return null;
+    // Decay: revert if not mentioned for 14 days
+    if (this.time.day - entry.lastMentionedDay > 14) {
+      this.culturalNames.delete(areaId);
+      return null;
+    }
+    return entry.name;
+  }
+
+  // --- World Objects (Freedom 1: open-ended actions) ---
+
+  addWorldObject(obj: WorldObject): void {
+    this.worldObjects.set(obj.id, obj);
+    // Cap at 200
+    if (this.worldObjects.size > 200) {
+      // Remove oldest by createdAt
+      let oldest: WorldObject | undefined;
+      for (const wo of this.worldObjects.values()) {
+        if (!oldest || wo.createdAt < oldest.createdAt) oldest = wo;
+      }
+      if (oldest) this.worldObjects.delete(oldest.id);
+    }
+    console.log(`[World] WorldObject created: "${obj.name}" by ${obj.creatorName} at ${obj.areaId}`);
+  }
+
+  getWorldObject(id: string): WorldObject | undefined {
+    return this.worldObjects.get(id);
+  }
+
+  getWorldObjectsAt(areaId: string): WorldObject[] {
+    return Array.from(this.worldObjects.values()).filter(o => o.areaId === areaId);
+  }
+
+  removeWorldObject(id: string): void {
+    const obj = this.worldObjects.get(id);
+    if (obj) {
+      this.worldObjects.delete(id);
+      console.log(`[World] WorldObject removed: "${obj.name}"`);
+    }
+  }
+
+  touchWorldObject(id: string): void {
+    const obj = this.worldObjects.get(id);
+    if (obj) obj.lastInteractedAt = this.time.totalMinutes;
   }
 
   // --- Weather & Seasons (Phase 7) ---

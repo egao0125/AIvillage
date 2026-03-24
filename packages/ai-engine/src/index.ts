@@ -6,6 +6,8 @@
 
 import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput } from "@ai-village/shared";
 import { GATHERING } from './world-rules.js';
+import type { TieredMemory } from './memory/tiered-store.js';
+import { ActionCache } from './action-cache.js';
 
 // --- World Rules + Action Resolver (deterministic physics) ---
 export * from './world-rules.js';
@@ -66,6 +68,9 @@ export interface WorldViewParts {
 }
 
 export class AgentCognition {
+  /** Infra 7: Shared action classification cache across all agents */
+  private static actionCache = new ActionCache();
+
   /** Additive-only map of discovered places: areaKey → "Name — description" */
   public knownPlaces: Map<string, string> = new Map();
   /** Fully rewritten each night by the LLM */
@@ -98,6 +103,9 @@ ${this.myExperience}`;
       knowsPlaza: this.knowsPlaza,
     };
   }
+
+  /** Infra 5: Tiered memory — when set, buildWorkingMemory() is used for prompt assembly */
+  public tieredMemory?: TieredMemory;
 
   constructor(
     private agent: Agent,
@@ -140,6 +148,35 @@ ${this.myExperience}`;
     about?: string;
     source?: string;
   }[]> {
+    // Infra 7: Skip LLM call for pure small talk — only extract when transcript
+    // contains entity names (agents, places, resources) beyond the participants
+    const lower = transcript.toLowerCase();
+    const participantSet = new Set([myName.toLowerCase(), ...partnerNames.map(n => n.toLowerCase())]);
+    let hasEntity = false;
+    // Check for third-party agent names
+    for (const name of this.nameMap.values()) {
+      if (!participantSet.has(name.toLowerCase()) && lower.includes(name.toLowerCase())) {
+        hasEntity = true;
+        break;
+      }
+    }
+    // Check for known place names
+    if (!hasEntity) {
+      for (const place of this.knownPlaces.values()) {
+        const placeName = place.split('—')[0].trim().toLowerCase();
+        if (placeName.length > 2 && lower.includes(placeName)) {
+          hasEntity = true;
+          break;
+        }
+      }
+    }
+    // Check for agreement/deal signals
+    if (!hasEntity) {
+      const dealSignals = ['agree', 'promise', 'deal', 'trade', 'teach', 'help me', 'i need', 'looking for'];
+      hasEntity = dealSignals.some(s => lower.includes(s));
+    }
+    if (!hasEntity) return [];
+
     const systemPrompt = `Extract the key facts from this conversation. For each fact, categorize it.
 
 CATEGORIES:
@@ -243,24 +280,42 @@ If nothing notable was exchanged, return []`;
     if (memory.emotionalValence === undefined) {
       memory.emotionalValence = this.computeValence(memory.content);
     }
-    await this.memory.add(memory);
+    if (this.tieredMemory) {
+      await this.tieredMemory.addEpisodic(memory);
+    } else {
+      await this.memory.add(memory);
+    }
   }
 
   /**
-   * Rate the significance of a memory using a cheap LLM call.
-   * Returns 1-10 where 1 = completely mundane, 10 = life-changing.
+   * Infra 7: Heuristic importance scoring — no LLM call.
+   * Base score by type + emotional valence boost + named entity boost + novelty boost.
    */
-  async scoreImportance(content: string, type: string): Promise<number> {
-    try {
-      const response = await this.llm.complete(
-        `You rate memory significance for ${this.agent.config.name}. Rate 1-10. 1 = mundane (saw a tree). 5 = notable (had an argument). 10 = life-changing (betrayal, death, major discovery). Reply with ONLY a single number.`,
-        `[${type}] ${content}`
-      );
-      const parsed = parseInt(response.trim(), 10);
-      return (parsed >= 1 && parsed <= 10) ? parsed : 5;
-    } catch {
-      return 5; // fallback on LLM failure
+  scoreImportance(content: string, type: string): number {
+    // Base score by type
+    const baseScores: Record<string, number> = {
+      reflection: 6, plan: 5, conversation: 4, observation: 2, thought: 3, action: 3,
+    };
+    let score = baseScores[type] ?? 4;
+
+    // Emotional valence boost
+    const valence = this.computeValence(content);
+    if (Math.abs(valence) > 0.5) score += 1;
+    if (Math.abs(valence) > 0.7) score += 1;
+
+    // Named entity boost — mentions of known people
+    const lower = content.toLowerCase();
+    let entityHits = 0;
+    for (const name of this.nameMap.values()) {
+      if (lower.includes(name.toLowerCase())) entityHits++;
     }
+    if (entityHits >= 2) score += 1;
+
+    // High-signal word boost
+    const highSignal = ['betray', 'die', 'dead', 'discover', 'secret', 'steal', 'attack', 'promise', 'alliance', 'broke', 'election', 'vote'];
+    if (highSignal.some(w => lower.includes(w))) score += 2;
+
+    return Math.min(10, Math.max(1, score));
   }
 
   // --- Shared helpers (consolidate identity/context construction) ---
@@ -381,7 +436,9 @@ Anything you say out loud — declarations, promises, threats — will be heard 
 
 If your mood changed, add: MOOD: how you feel (in your own words)`;
 
-    const memories = await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
+    const memories = this.tieredMemory
+      ? await this.tieredMemory.buildWorkingMemory(trigger + ' ' + context)
+      : await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
     const memoryContext = memories.length > 0
       ? `\nRelevant memories:\n${memories.map(m => m.content).join('\n')}`
       : '';
@@ -438,10 +495,13 @@ An agent wants to do something. Break it down into primitive operations.
 
 PRIMITIVES:
 - create: add something to the world. Specify "type" and "data".
-  types: board_post, item, artifact, building
+  types: board_post, item, artifact, building, world_object
+  world_object = anything physical the agent places in the world: a memorial, sign, garden, decoration, marker, artwork, etc.
+  data for world_object: {"name": "...", "description": "..."}
 - remove: delete/discard something. Specify "type" and which one. Use to drop unwanted items from inventory.
 - modify: change a value. Specify "target" (agent name or "self"), "field", and "value" or "delta".
   fields: gold, skill
+  Also: modify a world_object — specify "target": "world_object", "name": "...", "description": "new description"
 - transfer: move something between agents. Specify "what", "from", "to", and details.
 - interact: talk to someone. Specify "target" (name or "anyone nearby").
 - observe: notice/learn something. Specify "observation".
@@ -483,6 +543,10 @@ Action: "${action}"`;
    * Returns a clean, machine-parseable action command like "gather wheat" or "eat bread".
    */
   async classifyAction(rawAction: string, location: string, inventory: string[]): Promise<string> {
+    // Infra 7: Check cache — keyed on (action, location), only for explicit-target actions
+    const cached = AgentCognition.actionCache.get(rawAction, location);
+    if (cached) return cached;
+
     const systemPrompt = `You translate freeform action descriptions into simple game commands.
 
 Available commands:
@@ -505,7 +569,9 @@ Inventory: ${inventory.join(', ') || 'nothing'}
 Action: "${rawAction}"`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
-    return response.trim().replace(/^["']|["']$/g, '');
+    const command = response.trim().replace(/^["']|["']$/g, '');
+    AgentCognition.actionCache.set(rawAction, location, command);
+    return command;
   }
 
   /**
@@ -525,6 +591,14 @@ Action: "${rawAction}"`;
     }
     const memoryContext = allMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
 
+    // Freedom 3: Explicitly surface recent action outcomes so plan sees what worked/failed
+    const recentOutcomes = allMemories
+      .filter(m => m.type === 'observation' && (/\bSuccess/i.test(m.content) || /\bFailed/i.test(m.content)))
+      .slice(0, 5);
+    const outcomeSection = recentOutcomes.length > 0
+      ? `\n\nRECENT RESULTS:\n${recentOutcomes.map(m => `- ${m.content}`).join('\n')}`
+      : '';
+
     const boardSection = boardContext ? `\n\nVILLAGE BOARD:\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
 
@@ -534,7 +608,7 @@ ${this.buildIdentityBlock()}
 
 Today is day ${currentTime.day}.`;
 
-    const userPrompt = `${this.buildContextBlock()}${boardSection}${worldSection}
+    const userPrompt = `${this.buildContextBlock()}${boardSection}${worldSection}${outcomeSection}
 
 Your recent experiences:
 ${memoryContext || 'No recent memories yet.'}
@@ -614,7 +688,9 @@ Return a JSON array of strings ONLY.`;
    */
   async talk(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string, agenda?: string, tradeContext?: string): Promise<string> {
     const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
-    const memories = await this.memory.retrieve(this.agent.id, memoryQuery, 10);
+    const memories = this.tieredMemory
+      ? await this.tieredMemory.buildWorkingMemory(memoryQuery)
+      : await this.memory.retrieve(this.agent.id, memoryQuery, 10);
 
     const otherDescriptions = otherAgents.map(a => {
       return a.config.soul ? ` What you know about ${a.config.name}: age ${a.config.age}.` : '';
@@ -703,6 +779,7 @@ Your turn to speak (dialogue ONLY — no narration, no actions, no "I look at", 
 
   /**
    * reflect() — End-of-day synthesis. Calls assess() + compress().
+   * Infra 7: Merged with updateWorldView() into a single LLM call.
    */
   async reflect(socialContext?: string): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string; commitmentUpdates?: { description: string; status: 'fulfilled' | 'broken' | 'pending' }[] }> {
     const recentMemories = await this.memory.getRecent(this.agent.id, 20);
@@ -713,7 +790,38 @@ Your turn to speak (dialogue ONLY — no narration, no actions, no "I look at", 
     }
 
     const socialSection = socialContext ? `\n${socialContext}` : '';
+    const placesKnown = Array.from(this.knownPlaces.values()).join('\n') || '(none yet)';
+    const memoryText = recentMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
 
+    // Freedom 4: Present causal chains as narratives in the prompt
+    const chains = this.buildCausalChains(recentMemories);
+    let narrativeSection = '';
+    if (chains.length > 0) {
+      const narratives = chains.map(chain =>
+        chain.map(m => m.content).join(' → ')
+      );
+      narrativeSection = `\n\nCAUSAL CHAINS (what led to what):\n${narratives.join('\n')}`;
+    }
+
+    // Freedom 3: Scan for repeated failure patterns across recent memories
+    const failurePatterns = new Map<string, number>();
+    for (const m of recentMemories) {
+      if (m.content.includes('Failed') || m.content.includes('failed')) {
+        const match = m.content.match(/failed.*?at (?:the )?(\w+)/i);
+        if (match) {
+          const key = match[1].toLowerCase();
+          failurePatterns.set(key, (failurePatterns.get(key) || 0) + 1);
+        }
+      }
+    }
+    const failureNotes = [...failurePatterns.entries()]
+      .filter(([, count]) => count >= 2)
+      .map(([location, count]) => `I've failed ${count} times at the ${location} recently.`);
+    const failureSection = failureNotes.length > 0
+      ? `\n\nREPEATED FAILURES:\n${failureNotes.join('\n')}`
+      : '';
+
+    // Infra 7: Single prompt produces both reflection + MY EXPERIENCE update
     const systemPrompt = `${this.worldView}
 
 ${this.buildIdentityBlock()}
@@ -723,14 +831,19 @@ ${this.getSituationalObservations()}
 
 ${this.buildContextBlock()}${socialSection}
 
-Reflect:
+WHAT YOU WROTE YESTERDAY (MY EXPERIENCE):
+${this.myExperience}
+
+PLACES I KNOW:
+${placesKnown}
+
+You have TWO tasks. Output them in order, separated by the line "---MY EXPERIENCE---":
+
+TASK 1 — REFLECTION (2-3 sentences, first person, practical and honest):
 - What worked? What failed? Why?
 - Are you prepared for tomorrow? For winter?
 - Who helped you? Who do you owe? Who owes you?
-- What skill should you develop next?
-- What do you need that you can't get alone?
-
-2-3 sentences. First person. Be practical and honest.
+End with: MOOD: how you feel (in your own words)
 ${socialContext ? `
 For each commitment listed above, evaluate its status based on what actually happened today.
 Reply with one COMMITMENT line per entry:
@@ -739,15 +852,42 @@ COMMITMENT: [description] → [fulfilled/broken/pending]
 Only mark "fulfilled" if you genuinely completed it. "broken" if you failed or chose not to.
 "pending" if it hasn't come due yet.
 ` : ''}
-End with: MOOD: how you feel (in your own words)`;
 
-    const userPrompt = `Recent experiences:\n${recentMemories.map(m => m.content).join('\n')}`;
+---MY EXPERIENCE---
+
+TASK 2 — Rewrite your MY EXPERIENCE. This is your personal field guide.
+Be specific: names, numbers, locations, skill levels. Remove what's outdated. Add what you learned.
+Max 500 words. First person. No section headers. No lists of places.`;
+
+    const userPrompt = `Today's events:\n${memoryText}${narrativeSection}${failureSection}`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
-    // Parse mood from response (free-form)
-    const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
+    // Parse the combined output — try delimiter, fall back to separate call
+    const delimiter = '---MY EXPERIENCE---';
+    const delimiterIdx = response.search(/---\s*MY EXPERIENCE\s*---/i);
+
+    let reflectionPart: string;
+    let experiencePart: string;
+
+    if (delimiterIdx !== -1) {
+      // Merged path worked — parse both sections
+      reflectionPart = response.slice(0, delimiterIdx).trim();
+      experiencePart = response.slice(delimiterIdx).replace(/---\s*MY EXPERIENCE\s*---/i, '').trim();
+    } else {
+      // Delimiter missing — LLM didn't follow format. Use full response as reflection.
+      console.warn(`[Reflect] ${this.agent.config.name} — delimiter missing, falling back to separate worldview call`);
+      reflectionPart = response.trim();
+      experiencePart = '';
+    }
+
+    // Parse mood from reflection part
+    const moodMatch = reflectionPart.match(/^MOOD:\s*(.+)$/mi);
     const mood: Mood = moodMatch ? moodMatch[1].trim() : "neutral";
+    const reflection = reflectionPart
+      .replace(/^\s*MOOD:\s*.+$/mi, '')
+      .replace(/^\s*COMMITMENT:\s*.+$/gmi, '')
+      .trim();
 
     // Parse commitment updates from response
     const commitmentUpdates: { description: string; status: 'fulfilled' | 'broken' | 'pending' }[] = [];
@@ -757,14 +897,8 @@ End with: MOOD: how you feel (in your own words)`;
       commitmentUpdates.push({ description: cMatch[1].trim(), status: cMatch[2].trim() as 'fulfilled' | 'broken' | 'pending' });
     }
 
-    // Strip the MOOD and COMMITMENT lines from the reflection text
-    const reflection = response
-      .replace(/^\s*MOOD:\s*.+$/mi, '')
-      .replace(/^\s*COMMITMENT:\s*.+$/gmi, '')
-      .trim();
-
-    // Score importance dynamically
-    const importance = await this.scoreImportance(reflection, 'reflection');
+    // Score importance heuristically (Infra 7: synchronous, no LLM call)
+    const importance = this.scoreImportance(reflection, 'reflection');
 
     await this.addMemory({
       id: crypto.randomUUID(),
@@ -776,6 +910,22 @@ End with: MOOD: how you feel (in your own words)`;
       relatedAgentIds: [],
     });
 
+    // Update MY EXPERIENCE
+    let updatedWorldView: string | undefined;
+    if (experiencePart.length >= 20 && experiencePart.length <= 3500) {
+      // Merged path produced good output
+      this.myExperience = experiencePart;
+      updatedWorldView = this.worldView;
+      console.log(`[WorldView] ${this.agent.config.name} updated MY EXPERIENCE`);
+    } else {
+      // Fallback: fire separate updateWorldView() call (old behavior)
+      try {
+        updatedWorldView = await this.updateWorldView(memoryText, reflection);
+      } catch (err) {
+        console.error(`[WorldView] ${this.agent.config.name} failed to update worldView:`, err);
+      }
+    }
+
     // assess() — update mental models based on recent interactions
     const interactionMemories = recentMemories
       .filter(m => m.type === 'conversation' || m.type === 'observation')
@@ -783,15 +933,6 @@ End with: MOOD: how you feel (in your own words)`;
     let mentalModels: MentalModel[] | undefined;
     if (interactionMemories.length > 0) {
       mentalModels = await this.assess(interactionMemories);
-    }
-
-    // updateWorldView() — evolve this agent's understanding of the world
-    let updatedWorldView: string | undefined;
-    try {
-      const memoryText = recentMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
-      updatedWorldView = await this.updateWorldView(memoryText, reflection);
-    } catch (err) {
-      console.error(`[WorldView] ${this.agent.config.name} failed to update worldView:`, err);
     }
 
     // compress() — summarize old memories to prevent unbounded growth
@@ -913,35 +1054,76 @@ Output a JSON array ONLY, no other text:
    * Called at end of reflect() to keep memory stores bounded.
    */
   async compress(): Promise<void> {
+    // Infra 5: delegate to tiered memory when available
+    if (this.tieredMemory) {
+      await this.tieredMemory.compress(this.llm);
+      return;
+    }
+
     const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
     const oldMemories = await this.memory.getOlderThan(this.agent.id, threeHoursAgo);
 
     if (oldMemories.length < 10) return; // not worth summarizing yet
 
-    // Keep high-importance memories intact
-    const summarizable = oldMemories.filter(m => m.importance < 7);
+    // Keep high-importance and core memories intact
+    const summarizable = oldMemories.filter(m => m.importance < 7 && !m.isCore);
     if (summarizable.length < 5) return;
 
-    // Group by type
+    // Freedom 4: Group by causal chains first, then fall back to type-based grouping
+    const chains = this.buildCausalChains(summarizable);
+    const claimed = new Set<string>();
+
+    for (const chain of chains) {
+      for (const m of chain) claimed.add(m.id);
+
+      const memoryTexts = chain.map(m => m.content).join('\n→ ');
+      try {
+        const summary = await this.llm.complete(
+          `You are summarizing a chain of connected events for ${this.agent.config.name}. Preserve cause and effect. Be concise. Tell the story, don't flatten it.`,
+          `Summarize this sequence of ${chain.length} connected events into 2-3 sentences that preserve what led to what:\n→ ${memoryTexts}`
+        );
+
+        // Preserve peak emotional valence from source memories
+        const peakValence = chain.reduce(
+          (max, m) => Math.abs(m.emotionalValence ?? 0) > Math.abs(max) ? (m.emotionalValence ?? 0) : max,
+          0
+        );
+
+        await this.memory.add({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'reflection',
+          content: `[Narrative: ${chain.length} linked events] ${summary}`,
+          importance: 6,
+          timestamp: Date.now(),
+          relatedAgentIds: [...new Set(chain.flatMap(m => m.relatedAgentIds))],
+          emotionalValence: peakValence,
+        });
+        await this.memory.removeBatch(chain.map(m => m.id));
+        console.log(`[Memory] ${this.agent.config.name}: compressed causal chain of ${chain.length} memories`);
+      } catch (err) {
+        console.error(`[Memory] Failed to compress causal chain for ${this.agent.config.name}:`, err);
+      }
+    }
+
+    // Fallback: group remaining unclaimed memories by type (original behavior)
+    const unclaimed = summarizable.filter(m => !claimed.has(m.id));
     const groups: Map<string, Memory[]> = new Map();
-    for (const m of summarizable) {
+    for (const m of unclaimed) {
       const key = m.type;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(m);
     }
 
     for (const [type, memories] of groups) {
-      if (memories.length < 3) continue; // too few to summarize
+      if (memories.length < 3) continue;
 
       const memoryTexts = memories.map(m => m.content).join('\n- ');
-
       try {
         const summary = await this.llm.complete(
           `You are summarizing old memories for ${this.agent.config.name}. Be concise.`,
           `Summarize these ${memories.length} ${type} memories into 2-3 sentences that capture the key information:\n- ${memoryTexts}`
         );
-
-        // Create summary memory
         await this.memory.add({
           id: crypto.randomUUID(),
           agentId: this.agent.id,
@@ -951,15 +1133,45 @@ Output a JSON array ONLY, no other text:
           timestamp: Date.now(),
           relatedAgentIds: [...new Set(memories.flatMap(m => m.relatedAgentIds))],
         });
-
-        // Remove originals
         await this.memory.removeBatch(memories.map(m => m.id));
-
         console.log(`[Memory] ${this.agent.config.name}: summarized ${memories.length} old ${type} memories`);
       } catch (err) {
         console.error(`[Memory] Failed to summarize ${type} memories for ${this.agent.config.name}:`, err);
       }
     }
+  }
+
+  /**
+   * Freedom 4: Build causal chains from memories that have causedBy/ledTo links.
+   * Returns chains of length >= 2, depth limited to 5.
+   */
+  private buildCausalChains(memories: Memory[]): Memory[][] {
+    const byId = new Map(memories.map(m => [m.id, m]));
+    const visited = new Set<string>();
+    const chains: Memory[][] = [];
+
+    // Find chain roots: memories that are not caused by anything in this set
+    const causedIds = new Set(memories.filter(m => m.causedBy).map(m => m.causedBy!));
+    const roots = memories.filter(m => !m.causedBy || !byId.has(m.causedBy));
+
+    for (const root of roots) {
+      if (visited.has(root.id)) continue;
+      if (!root.ledTo?.length) continue; // not part of a chain
+
+      const chain: Memory[] = [];
+      let current: Memory | undefined = root;
+      let depth = 0;
+      while (current && !visited.has(current.id) && depth < 5) {
+        visited.add(current.id);
+        chain.push(current);
+        depth++;
+        // Follow the first ledTo link
+        current = current.ledTo?.length ? byId.get(current.ledTo[0]) : undefined;
+      }
+      if (chain.length >= 2) chains.push(chain);
+    }
+
+    return chains;
   }
 
   // --- Perception (kept unchanged) ---
@@ -970,7 +1182,12 @@ Output a JSON array ONLY, no other text:
    */
   private lastPerceptionKey: string = '';
 
-  async perceive(nearbyAgents: Agent[], nearbyAreas: MapArea[]): Promise<string[]> {
+  async perceive(
+    nearbyAgents: Agent[],
+    nearbyAreas: MapArea[],
+    worldObjects?: { name: string; description: string; creatorName: string }[],
+    culturalNames?: Map<string, string>, // Freedom 5: areaId → cultural name
+  ): Promise<string[]> {
     const observations: string[] = [];
 
     for (const other of nearbyAgents) {
@@ -980,7 +1197,17 @@ Output a JSON array ONLY, no other text:
     }
 
     for (const area of nearbyAreas) {
-      observations.push(`I am near ${area.name} (${area.type}).`);
+      // Freedom 5: Use cultural name if one exists
+      const culturalName = culturalNames?.get(area.id);
+      const displayName = culturalName ? `${culturalName} (${area.name})` : area.name;
+      observations.push(`I am near ${displayName} (${area.type}).`);
+    }
+
+    // Freedom 1: perceive world objects placed by agents
+    if (worldObjects) {
+      for (const obj of worldObjects) {
+        observations.push(`There is a ${obj.name} here, placed by ${obj.creatorName}. ${obj.description}`);
+      }
     }
 
     if (observations.length === 0) return observations;
@@ -1099,6 +1326,9 @@ Output a JSON array ONLY, no other text:
    * Searches memory stream for experiences related to current situation.
    */
   async retrieve(currentContext: string): Promise<Memory[]> {
+    if (this.tieredMemory) {
+      return this.tieredMemory.buildWorkingMemory(currentContext);
+    }
     let memories = await this.memory.retrieve(this.agent.id, currentContext, 10);
     memories = await this.anchorIdentity(memories, 10);
     return memories;
@@ -1163,6 +1393,8 @@ Output a JSON array ONLY, no other text:
 export { AgentCognition as default };
 export { InMemoryStore } from './memory/in-memory.js';
 export { SupabaseMemoryStore } from './memory/supabase-store.js';
+export { TieredMemory } from './memory/tiered-store.js';
 export { AnthropicProvider } from './providers/anthropic.js';
 export { OpenAIProvider } from './providers/openai.js';
 export { ThrottledProvider } from './providers/throttled.js';
+export { ActionCache } from './action-cache.js';
