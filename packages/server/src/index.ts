@@ -143,6 +143,14 @@ io.on('connection', (socket) => {
     io.emit('world:snapshot', engine.getSnapshot());
   });
 
+  socket.on('dev:fresh-start', async () => {
+    console.log('[Server] Fresh start requested');
+    await engine.freshStart();
+    io.emit('world:snapshot', engine.getSnapshot());
+    io.emit('dev:status', { paused: !engine.isRunning });
+    console.log('[Server] Fresh start complete — snapshot broadcast');
+  });
+
   socket.on('dev:status-request', () => {
     socket.emit('dev:status', { paused: !engine.isRunning });
   });
