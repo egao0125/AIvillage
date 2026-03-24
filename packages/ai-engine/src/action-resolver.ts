@@ -57,6 +57,8 @@ export interface ActionOutcome {
   socialMeaning?: string; // what the social act means in context
   remediation?: string;   // actionable hint when action fails
   deferredAction?: string; // remainder text from compound action split
+  targetAgentId?: string;      // agent affected by this action (fight/steal target)
+  targetHealthChange?: number; // health change applied to the target (negative = damage)
 }
 
 // --- Agent State Interface (what the resolver needs to know) ---
@@ -1130,14 +1132,16 @@ function executeFight(intent: ParsedIntent, agent: AgentState, world: WorldState
   }
 
   // Both sides take damage, attacker has slight advantage
-  const attackerDamage = Math.floor(Math.random() * 10) + 5;  // 5-14 damage dealt
-  const defenderDamage = Math.floor(Math.random() * 12) + 3;  // 3-14 damage taken
+  const attackerDamage = Math.floor(Math.random() * 10) + 5;  // 5-14 damage dealt TO defender
+  const defenderDamage = Math.floor(Math.random() * 12) + 3;  // 3-14 retaliation damage taken BY attacker
 
   return {
     ...base, success: true,
     description: `Fought ${nearby.name}. Dealt ${attackerDamage} damage, took ${defenderDamage} damage.`,
     energySpent: 15,
-    healthChange: -defenderDamage,
+    healthChange: -defenderDamage,          // attacker takes retaliation damage
+    targetHealthChange: -attackerDamage,     // defender takes the attack damage
+    targetAgentId: nearby.id,                // who got hit
   } as ActionOutcome;
 }
 

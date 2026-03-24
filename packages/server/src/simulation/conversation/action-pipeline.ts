@@ -732,6 +732,40 @@ export class ActionPipeline {
       }
     }
 
+    // --- Fight target damage ---
+    if (outcome.type === 'fight' && outcome.success && outcome.targetAgentId && outcome.targetHealthChange) {
+      const target = this.world.getAgent(outcome.targetAgentId);
+      if (target?.vitals) {
+        target.vitals.health = Math.max(0, Math.min(100,
+          target.vitals.health + outcome.targetHealthChange));
+
+        // Defender gets a memory of being attacked
+        const targetCognition = cognitions?.get(outcome.targetAgentId);
+        if (targetCognition) {
+          void targetCognition.addLinkedMemory({
+            id: crypto.randomUUID(),
+            agentId: outcome.targetAgentId,
+            type: 'observation',
+            content: `${actorName} attacked me! I took ${Math.abs(outcome.targetHealthChange)} damage.`,
+            importance: 9,
+            timestamp: Date.now(),
+            relatedAgentIds: [actorId],
+          });
+        }
+
+        // Emit fight event for witnesses
+        if (this.bus) {
+          this.bus.emit({
+            type: 'fight_occurred',
+            attackerId: actorId,
+            defenderId: outcome.targetAgentId,
+            outcome: `${actorName} dealt ${Math.abs(outcome.targetHealthChange)} damage, took ${Math.abs(outcome.healthChange)} retaliation`,
+            location: actor.position,
+          });
+        }
+      }
+    }
+
     // --- Trade proposals ---
     if (outcome.tradeProposal) {
       if (outcome.type === 'trade_offer') {
