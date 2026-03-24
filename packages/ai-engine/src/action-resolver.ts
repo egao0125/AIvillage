@@ -57,8 +57,9 @@ export interface ActionOutcome {
   socialMeaning?: string; // what the social act means in context
   remediation?: string;   // actionable hint when action fails
   deferredAction?: string; // remainder text from compound action split
-  targetAgentId?: string;      // agent affected by this action (fight/steal target)
+  targetAgentId?: string;      // agent affected by this action (fight/steal/give/teach target)
   targetHealthChange?: number; // health change applied to the target (negative = damage)
+  targetItemsRemoved?: { resource: string; qty: number }[]; // items removed from target (steal)
 }
 
 // --- Agent State Interface (what the resolver needs to know) ---
@@ -517,7 +518,10 @@ export function executeAction(
     case 'teach': outcome = executeTeach(intent, agent, world); break;
     case 'post': outcome = executePost(intent, agent); break;
     case 'move': outcome = { success: true, type: 'move', description: `heading to ${intent.location}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 }; break;
-    case 'talk': outcome = { success: true, type: 'talk', description: `wants to talk to ${intent.targetAgent}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0 }; break;
+    case 'talk': {
+      const talkTarget = intent.targetAgent ? agent.nearbyAgents.find(a => a.name.toLowerCase().includes(intent.targetAgent!.toLowerCase())) : undefined;
+      outcome = { success: true, type: 'talk', description: `wants to talk to ${intent.targetAgent}`, energySpent: 0, hungerChange: 0, healthChange: 0, durationMinutes: 0, targetAgentId: talkTarget?.id }; break;
+    }
     case 'intent': outcome = executeSocialIntent(intent); break;
     case 'social': outcome = executeSocialAct(intent, agent); break;
     default:
@@ -863,6 +867,7 @@ function executeGive(intent: ParsedIntent, agent: AgentState, world: WorldState)
     ...base, success: true,
     description: `Gave ${qty} ${resource} to ${nearby.name}.`,
     itemsConsumed: [{ resource, qty }],
+    targetAgentId: nearby.id,
   } as ActionOutcome;
 }
 
@@ -979,6 +984,7 @@ function executeTeach(intent: ParsedIntent, agent: AgentState, world: WorldState
     description: `Taught ${nearby.name} the basics of ${intent.skill}. They're now level ${result.studentNewLevel}.`,
     durationMinutes: result.durationMinutes,
     teachResult: { skill: intent.skill, studentNewLevel: result.studentNewLevel },
+    targetAgentId: nearby.id,
   } as ActionOutcome;
 }
 
@@ -1057,6 +1063,7 @@ function executeSteal(intent: ParsedIntent, agent: AgentState, world: WorldState
       reason: 'caught',
       remediation: 'You were spotted. Witnesses may remember this. Lay low for a while.',
       energySpent: 5,
+      targetAgentId: nearby.id,  // victim knows even on failed attempt
     } as ActionOutcome;
   }
 
@@ -1079,6 +1086,8 @@ function executeSteal(intent: ParsedIntent, agent: AgentState, world: WorldState
     ...base, success: true,
     description: `Stole ${qty} ${stolen.resource} from ${nearby.name}.`,
     itemsGained: [{ resource: stolen.resource, qty }],
+    targetAgentId: nearby.id,
+    targetItemsRemoved: [{ resource: stolen.resource, qty }],
     energySpent: 5,
   } as ActionOutcome;
 }
