@@ -732,40 +732,6 @@ export class ActionPipeline {
       }
     }
 
-    // --- Fight target damage ---
-    if (outcome.type === 'fight' && outcome.success && outcome.targetAgentId && outcome.targetHealthChange) {
-      const target = this.world.getAgent(outcome.targetAgentId);
-      if (target?.vitals) {
-        target.vitals.health = Math.max(0, Math.min(100,
-          target.vitals.health + outcome.targetHealthChange));
-
-        // Defender gets a memory of being attacked
-        const targetCognition = cognitions?.get(outcome.targetAgentId);
-        if (targetCognition) {
-          void targetCognition.addLinkedMemory({
-            id: crypto.randomUUID(),
-            agentId: outcome.targetAgentId,
-            type: 'observation',
-            content: `${actorName} attacked me! I took ${Math.abs(outcome.targetHealthChange)} damage.`,
-            importance: 9,
-            timestamp: Date.now(),
-            relatedAgentIds: [actorId],
-          });
-        }
-
-        // Emit fight event for witnesses
-        if (this.bus) {
-          this.bus.emit({
-            type: 'fight_occurred',
-            attackerId: actorId,
-            defenderId: outcome.targetAgentId,
-            outcome: `${actorName} dealt ${Math.abs(outcome.targetHealthChange)} damage, took ${Math.abs(outcome.healthChange)} retaliation`,
-            location: actor.position,
-          });
-        }
-      }
-    }
-
     // --- Trade proposals ---
     if (outcome.tradeProposal) {
       if (outcome.type === 'trade_offer') {
@@ -858,69 +824,44 @@ export class ActionPipeline {
       }
     }
 
-    // --- Teach result ---
-    if (outcome.teachResult) {
-      // Find the target agent and update their skill
-      const targetName = outcome.description.match(/Taught (\w+)/)?.[1];
-      if (targetName) {
-        const target = findAgentByName(this.world, targetName);
-        if (target) {
-          this.world.addSkill(target.id, {
-            name: outcome.teachResult.skill,
-            level: outcome.teachResult.studentNewLevel,
-            xp: 0,
-            learnedFrom: actorId,
-          });
-          const updatedSkill = target.skills.find(s => s.name === outcome.teachResult!.skill);
-          if (updatedSkill) this.broadcaster.agentSkill(target.id, updatedSkill);
-
-          // Memory for student
-          const studentCog = cognitions?.get(target.id);
-          if (studentCog) {
-            void studentCog.addMemory({
-              id: crypto.randomUUID(), agentId: target.id, type: 'observation',
-              content: `${actorName} taught me ${outcome.teachResult.skill}. I'm now level ${outcome.teachResult.studentNewLevel}.`,
-              importance: 7, timestamp: Date.now(), relatedAgentIds: [actorId],
-            }).catch(() => {});
-          }
-        }
+    // --- Teach result (skill update via targetAgentId) ---
+    if (outcome.teachResult && outcome.targetAgentId) {
+      const target = this.world.getAgent(outcome.targetAgentId);
+      if (target) {
+        this.world.addSkill(target.id, {
+          name: outcome.teachResult.skill,
+          level: outcome.teachResult.studentNewLevel,
+          xp: 0,
+          learnedFrom: actorId,
+        });
+        const updatedSkill = target.skills.find(s => s.name === outcome.teachResult!.skill);
+        if (updatedSkill) this.broadcaster.agentSkill(target.id, updatedSkill);
+        // Memory is handled by the unified target handler above
       }
     }
 
-    // --- Give (transfer items to target) ---
-    if (outcome.type === 'give' && outcome.success) {
-      const targetName = outcome.description.match(/to (\w+)/)?.[1];
-      if (targetName) {
-        const target = findAgentByName(this.world, targetName);
-        if (target && outcome.itemsConsumed) {
-          for (const consumed of outcome.itemsConsumed) {
-            // Items already removed from actor above — now create for target
-            const resDef = RESOURCES[consumed.resource];
-            for (let i = 0; i < consumed.qty; i++) {
-              const item: Item = {
-                id: crypto.randomUUID(),
-                name: resDef?.name ?? consumed.resource,
-                description: `${resDef?.name ?? consumed.resource} received from ${actorName}`,
-                ownerId: target.id,
-                createdBy: actorId,
-                value: resDef?.baseTradeValue ?? 5,
-                type: (resDef?.type === 'food' || (resDef?.type === 'raw' && (resDef?.nutritionValue ?? 0) > 0)) ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
-              };
-              this.world.addItem(item);
-            }
-          }
-          this.broadcaster.agentInventory(target.id, target.inventory);
-
-          // Memory for recipient
-          const recipientCog = cognitions?.get(target.id);
-          if (recipientCog) {
-            void recipientCog.addMemory({
-              id: crypto.randomUUID(), agentId: target.id, type: 'observation',
-              content: `${actorName} gave me ${outcome.itemsConsumed.map(i => `${i.qty} ${i.resource}`).join(', ')}.`,
-              importance: 7, timestamp: Date.now(), relatedAgentIds: [actorId],
-            }).catch(() => {});
+    // --- Give (transfer items to target via targetAgentId) ---
+    if (outcome.type === 'give' && outcome.success && outcome.targetAgentId && outcome.itemsConsumed) {
+      const target = this.world.getAgent(outcome.targetAgentId);
+      if (target) {
+        for (const consumed of outcome.itemsConsumed) {
+          // Items already removed from actor above — now create for target
+          const resDef = RESOURCES[consumed.resource];
+          for (let i = 0; i < consumed.qty; i++) {
+            const item: Item = {
+              id: crypto.randomUUID(),
+              name: resDef?.name ?? consumed.resource,
+              description: `${resDef?.name ?? consumed.resource} received from ${actorName}`,
+              ownerId: target.id,
+              createdBy: actorId,
+              value: resDef?.baseTradeValue ?? 5,
+              type: (resDef?.type === 'food' || (resDef?.type === 'raw' && (resDef?.nutritionValue ?? 0) > 0)) ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
+            };
+            this.world.addItem(item);
           }
         }
+        this.broadcaster.agentInventory(target.id, target.inventory);
+        // Memory is handled by the unified target handler above
       }
     }
 
@@ -943,13 +884,16 @@ export class ActionPipeline {
       }
     }
 
-    // --- Talk (request conversation) ---
+    // --- Talk (request conversation via targetAgentId) ---
     if (outcome.type === 'talk' && outcome.success && requestConversation) {
-      const targetName = outcome.description.match(/talk to (\w+)/)?.[1];
-      if (targetName) {
-        const target = findAgentByName(this.world, targetName);
-        if (target) {
-          requestConversation(actorId, target.id);
+      if (outcome.targetAgentId) {
+        requestConversation(actorId, outcome.targetAgentId);
+      } else {
+        // Fallback for legacy: try regex extraction
+        const targetName = outcome.description.match(/talk to (\w+)/)?.[1];
+        if (targetName) {
+          const target = findAgentByName(this.world, targetName);
+          if (target) requestConversation(actorId, target.id);
         }
       }
     }
@@ -1056,65 +1000,145 @@ export class ActionPipeline {
       return;
     }
 
-    // --- Fix 4: Theft victim memory + event emission ---
-    if (outcome.type === 'steal' && outcome.success && outcome.itemsGained) {
-      const stolenItemName = RESOURCES[outcome.itemsGained[0]?.resource]?.name ?? outcome.itemsGained[0]?.resource ?? 'something';
-      // Extract victim name from outcome description
-      const victimMatch = outcome.description.match(/from\s+(\w+)/i);
-      const victimName = victimMatch?.[1];
-      const victim = victimName ? findAgentByName(this.world, victimName) : undefined;
-
-      if (victim && cognitions) {
-        // Remove stolen item from victim inventory
-        const victimItem = victim.inventory.find(i =>
-          i.name.toLowerCase().includes(stolenItemName.toLowerCase())
-        );
-        if (victimItem) {
-          this.world.removeItem(victimItem.id);
-          this.broadcaster.agentInventory(victim.id, victim.inventory);
+    // --- Unified target handler: apply effects to the second agent ---
+    if (outcome.targetAgentId) {
+      const target = this.world.getAgent(outcome.targetAgentId);
+      if (target) {
+        // Health damage (fight)
+        if (outcome.targetHealthChange && target.vitals) {
+          target.vitals.health = Math.max(0, Math.min(100,
+            target.vitals.health + outcome.targetHealthChange));
         }
 
-        // Victim gets a memory
-        const victimCog = cognitions.get(victim.id);
-        if (victimCog) {
-          void victimCog.addMemory({
+        // Items removed from target (steal)
+        if (outcome.targetItemsRemoved) {
+          for (const removed of outcome.targetItemsRemoved) {
+            for (let i = 0; i < removed.qty; i++) {
+              const item = target.inventory.find(it =>
+                it.name.toLowerCase().replace(/\s+/g, '_') === removed.resource);
+              if (item) this.world.removeItem(item.id);
+            }
+          }
+          this.broadcaster.agentInventory(outcome.targetAgentId, target.inventory);
+        }
+
+        // Target gets a memory of what happened
+        const targetCognition = cognitions?.get(outcome.targetAgentId);
+        if (targetCognition && outcome.success) {
+          const memoryContent: Record<string, string> = {
+            'steal': `${actorName} stole from me! I lost ${outcome.targetItemsRemoved?.map(i => `${i.qty} ${i.resource}`).join(', ') ?? 'something'}.`,
+            'fight': `${actorName} attacked me! I took ${Math.abs(outcome.targetHealthChange ?? 0)} damage.`,
+            'give': `${actorName} gave me ${outcome.itemsConsumed?.map(i => `${i.qty} ${i.resource}`).join(', ') ?? 'something'}.`,
+            'teach': `${actorName} taught me ${outcome.teachResult?.skill ?? 'something'}. I'm now level ${outcome.teachResult?.studentNewLevel ?? '?'}.`,
+          };
+
+          const content = memoryContent[outcome.type];
+          if (content) {
+            void targetCognition.addLinkedMemory({
+              id: crypto.randomUUID(),
+              agentId: outcome.targetAgentId,
+              type: 'observation',
+              content,
+              importance: outcome.type === 'steal' || outcome.type === 'fight' ? 9 : 7,
+              timestamp: Date.now(),
+              relatedAgentIds: [actorId],
+            });
+          }
+        }
+
+        // Failed steal — victim notices the attempt
+        if (outcome.type === 'steal' && !outcome.success && outcome.reason === 'caught' && targetCognition) {
+          void targetCognition.addLinkedMemory({
             id: crypto.randomUUID(),
-            agentId: victim.id,
+            agentId: outcome.targetAgentId,
             type: 'observation',
-            content: `${actorName} stole ${stolenItemName} from me!`,
-            importance: 8,
+            content: `${actorName} tried to steal from me and I caught them!`,
+            importance: 9,
             timestamp: Date.now(),
             relatedAgentIds: [actorId],
           });
         }
 
-        // Emit event for nearby witnesses
-        if (this.bus) {
-          this.bus.emit({
-            type: 'theft_occurred',
-            thiefId: actorId,
-            victimId: victim.id,
-            item: stolenItemName,
-            location: actor.position,
-          });
+        // Event emission for witnesses
+        if (this.bus && outcome.success) {
+          if (outcome.type === 'steal') {
+            const stolenItemName = outcome.targetItemsRemoved?.[0]?.resource ?? 'something';
+            this.bus.emit({
+              type: 'theft_occurred',
+              thiefId: actorId,
+              victimId: outcome.targetAgentId,
+              item: stolenItemName,
+              location: actor.position,
+            });
+          }
+          if (outcome.type === 'fight') {
+            this.bus.emit({
+              type: 'fight_occurred',
+              attackerId: actorId,
+              defenderId: outcome.targetAgentId,
+              outcome: `${actorName} dealt ${Math.abs(outcome.targetHealthChange ?? 0)} damage, took ${Math.abs(outcome.healthChange)} retaliation`,
+              location: actor.position,
+            });
+          }
         }
       }
     }
 
-    // --- Fix 4: Fight event emission ---
-    if (outcome.type === 'fight' && outcome.success) {
-      const defenderMatch = outcome.description.match(/(?:Fought|attacked|hit)\s+(\w+)/i);
-      const defenderName = defenderMatch?.[1];
-      const defender = defenderName ? findAgentByName(this.world, defenderName) : undefined;
+    // --- Destroy: apply damage to building durability ---
+    if (outcome.type === 'destroy' && outcome.success && !outcome.itemsConsumed) {
+      // Not destroying own inventory item — targeting a building
+      const area = this.world.getAreaAt(actor.position);
+      if (area) {
+        const targetName = outcome.description.replace(/^Damaged the /, '').replace(/\.$/, '').toLowerCase();
+        for (const [id, building] of this.world.buildings) {
+          if (building.areaId === area.id && building.name.toLowerCase().includes(targetName)) {
+            const damage = 15 + Math.floor(Math.random() * 11); // 15-25
+            building.durability = Math.max(0, building.durability - damage);
+            if (building.durability <= 0) {
+              this.world.buildings.delete(id);
+              this.broadcaster.agentAction(actorId, `destroyed ${building.name}`, '💥');
+            } else {
+              this.broadcaster.buildingUpdate(building);
+            }
+            // Owner gets a memory
+            if (building.ownerId && building.ownerId !== actorId) {
+              const ownerCog = cognitions?.get(building.ownerId);
+              if (ownerCog) {
+                void ownerCog.addLinkedMemory({
+                  id: crypto.randomUUID(),
+                  agentId: building.ownerId,
+                  type: 'observation',
+                  content: building.durability <= 0
+                    ? `${actorName} destroyed my ${building.name}!`
+                    : `${actorName} damaged my ${building.name}! (${building.durability} durability remaining)`,
+                  importance: 9,
+                  timestamp: Date.now(),
+                  relatedAgentIds: [actorId],
+                });
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
 
-      if (defender && this.bus) {
-        this.bus.emit({
-          type: 'fight_occurred',
-          attackerId: actorId,
-          defenderId: defender.id,
-          outcome: outcome.description,
-          location: actor.position,
-        });
+    // --- Repair: increase building durability ---
+    if (outcome.type === 'repair' && outcome.success) {
+      const area = this.world.getAreaAt(actor.position);
+      if (area) {
+        const targetName = outcome.description.replace(/^Repaired the /, '').replace(/\.$/, '').toLowerCase();
+        for (const building of this.world.buildings.values()) {
+          if (building.areaId === area.id && building.name.toLowerCase().includes(targetName)) {
+            const repairAmount = 20 + Math.floor(Math.random() * 11); // 20-30
+            building.durability = Math.min(
+              building.maxDurability ?? 100,
+              building.durability + repairAmount
+            );
+            this.broadcaster.buildingUpdate(building);
+            break;
+          }
+        }
       }
     }
 
