@@ -87,7 +87,7 @@ export class PostConversationProcessor {
 
       const commitmentPattern = /\b(i('ll| will| promise| swear)|tomorrow|at dawn|meet (you|me)|i('m| am) (going|coming)|you have my word|count on me|i won't (bail|forget|flake))\b/i;
 
-      const commitmentLines = agentLines.filter(line => commitmentPattern.test(line));
+      const commitmentLines = agentLines.filter(line => commitmentPattern.test(line) && line.length >= 20);
 
       if (commitmentLines.length > 0) {
         const otherNames = conversation.participants
@@ -242,6 +242,7 @@ export class PostConversationProcessor {
       }
 
       if (facts.length === 0) continue;
+      facts = facts.slice(0, 4); // Cap at 4 facts per conversation to reduce memory bloat
       console.log(`[Facts] ${participant.config.name} extracted ${facts.length} facts`);
 
       for (const fact of facts) {
@@ -323,7 +324,7 @@ export class PostConversationProcessor {
               agentId: participantId,
               type: 'plan',
               content: `AGREEMENT with ${otherNames.join(', ')}: ${fact.content}`,
-              importance: 7,
+              importance: 5,
               timestamp: Date.now(),
               relatedAgentIds: otherIds,
               causedBy: conversationMemoryIds?.get(participantId),
@@ -338,7 +339,7 @@ export class PostConversationProcessor {
                   agentId: otherId,
                   type: 'plan',
                   content: `AGREEMENT with ${participant.config.name}: ${fact.content}`,
-                  importance: 7,
+                  importance: 5,
                   timestamp: Date.now(),
                   relatedAgentIds: [participantId],
                   causedBy: conversationMemoryIds?.get(otherId),

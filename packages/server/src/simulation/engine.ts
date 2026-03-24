@@ -326,6 +326,10 @@ export class SimulationEngine {
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = (ctrlDataForWorldView as any)?.worldViewParts as WorldViewParts | undefined;
         const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts);
+        // Reset MY EXPERIENCE to prevent stale worldView from previous simulation runs
+        const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
+        const freshParts = buildStartingWorldViewParts(spawnArea as any);
+        cognition.resetExperience(freshParts.myExperience);
         this.wireTieredMemory(cognition, agent, sharedMemoryStore);
         this.cognitions.set(agent.id, cognition);
 
@@ -858,8 +862,8 @@ export class SimulationEngine {
     // Core tick: controllers + proximity + conversations (via bus subscribers)
     this.bus.emit({ type: 'tick', time });
 
-    // Perception every 120 ticks
-    if (this.tickCount % 120 === 0) {
+    // Perception every 240 ticks (halved from 120 to reduce observation memory bloat)
+    if (this.tickCount % 240 === 0) {
       this.bus.emit({ type: 'perception_cycle', tick: this.tickCount });
     }
 

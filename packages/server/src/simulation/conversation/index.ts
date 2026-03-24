@@ -92,13 +92,20 @@ export class ConversationManager {
     };
 
     this.world.addConversation(conversation);
+    const agendas = new Map<string, string>();
+    if (purpose) {
+      // The initiator's agenda is their purpose for starting this conversation
+      const initiatorId = agentIds[0];
+      agendas.set(initiatorId, purpose);
+    }
+
     this.activeConversations.set(id, {
       conversation,
       turnCount: 0,
       maxTurns,
       currentSpeakerIdx: 0,
       processing: false,
-      agendas: new Map(),
+      agendas,
       purpose,
       purposeFulfilled: false,
       stallCount: 0,
