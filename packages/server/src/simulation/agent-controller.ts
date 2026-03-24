@@ -93,6 +93,55 @@ export class AgentController {
     this.consecutiveApiFailures = 0;
   }
 
+  /** Truncate verbose intention text to a clean short activity description */
+  private shortActivity(raw: string): string {
+    // Strip "ACTION: " prefix if present
+    let s = raw.replace(/^ACTION:\s*/i, '');
+    // Take first sentence or first 80 chars
+    const dot = s.indexOf('. ');
+    if (dot > 0 && dot < 80) s = s.slice(0, dot);
+    if (s.length > 80) s = s.slice(0, 77) + '...';
+    return s.toLowerCase();
+  }
+
+  private logTransitionMemory(from: ControllerState, to: ControllerState): void {
+    if (from === to) return;
+    const skip: ControllerState[] = ['waking', 'planning', 'reflecting'];
+    if (skip.includes(from) || skip.includes(to)) return;
+
+    const area = getAreaAt(this.agent.position);
+    const location = area?.name ?? 'the village';
+    let content: string;
+
+    if (to === 'moving') {
+      const dest = this.pendingActivity?.areaId ?? 'somewhere';
+      const act = this.pendingActivity?.activity ? this.shortActivity(this.pendingActivity.activity) : 'do something';
+      content = `I'm heading to ${dest} to ${act}.`;
+    } else if (to === 'performing') {
+      content = `I started ${this.shortActivity(this.currentPerformingActivity)} at ${location}.`;
+    } else if (to === 'idle' && from === 'performing') {
+      return; // handled directly in thinkAfterOutcome's goIdle where activity is available
+    } else if (to === 'idle' && from === 'moving') {
+      content = `I arrived at ${location}.`;
+    } else if (to === 'conversing') {
+      content = `I started a conversation at ${location}.`;
+    } else if (to === 'idle' && from === 'conversing') {
+      content = `I finished talking at ${location}.`;
+    } else {
+      return;
+    }
+
+    void this.cognition.addMemory({
+      id: crypto.randomUUID(),
+      agentId: this.agent.id,
+      type: 'observation',
+      content,
+      importance: 2,
+      timestamp: Date.now(),
+      relatedAgentIds: [],
+    });
+  }
+
   resetApiState(newCognition: AgentCognition): void {
     this.cognition = newCognition;
     this.apiExhausted = false;
@@ -131,6 +180,8 @@ export class AgentController {
         return;
       }
     }
+
+    const stateBeforeTick = this.state;
 
     switch (this.state) {
       case 'sleeping': {
@@ -195,6 +246,11 @@ export class AgentController {
         }
         break;
       }
+    }
+
+    // Log transition memories when state changes (zero LLM cost)
+    if (this.state !== stateBeforeTick) {
+      this.logTransitionMemory(stateBeforeTick, this.state);
     }
   }
 
@@ -551,12 +607,46 @@ export class AgentController {
     this.currentPerformingActivity = '';
 
     const goIdle = () => {
+      // Log finish-transition here where we still have the activity variable
+      if (activity) {
+        const area = getAreaAt(this.agent.position);
+        const location = area?.name ?? 'the village';
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'observation',
+          content: `I finished ${this.shortActivity(activity)} at ${location}.`,
+          importance: 2,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        });
+      }
       this.state = 'idle';
       this.idleTimer = 0;
       const nextIdx = this.currentIntentionIndex;
       const nextIntention = nextIdx < this.intentions.length ? this.intentions[nextIdx] : null;
       this.world.updateAgentState(this.agent.id, 'idle', nextIntention || '');
     };
+
+    // Micro-log: record factual outcome as memory even when think is skipped due to cooldown
+    if (activity && this.lastOutcomeDescription) {
+      // Clean raw system prefixes into natural agent memory
+      let outcomeContent = this.lastOutcomeDescription
+        .replace(/^SUCCESS:\s*/i, '')
+        .replace(/^FAILED:\s*/i, 'Failed: ')
+        .replace(/\s*NEXT STEP:.*$/i, '');
+      if (outcomeContent.length > 0) {
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'observation',
+          content: outcomeContent,
+          importance: 3,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        });
+      }
+    }
 
     if (this.apiExhausted || !this.soloActionExecutor || !activity) {
       goIdle();
