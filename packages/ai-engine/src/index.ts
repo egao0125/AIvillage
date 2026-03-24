@@ -691,7 +691,7 @@ Before you plan your day, think about the bigger picture:
 - Is anyone expecting something from you?
 - Is there anything you've been avoiding?
 
-Now plan your day. What will you ACTUALLY do — not what you should do, but what you'll really do given who you are?
+Look at your inventory and hunger above. What will you actually do today? Include both survival and social plans.
 
 Someone conscientious makes a careful plan. Someone impulsive follows their gut. Someone afraid plays it safe. Someone angry settles scores.
 

@@ -113,7 +113,24 @@ export function buildStartingWorldViewParts(spawnAreaId: string): {
     ? knownNames.join(' and ')
     : knownNames.slice(0, -1).join(', ') + ', and ' + knownNames[knownNames.length - 1];
 
-  const myExperience = `I just arrived. I can see ${knownList} from here. I should explore to find out what else is around.`;
+  // Ensure all survival locations are known — every person would know where food comes from
+  const survivalLocations: Record<string, string> = {
+    farm: AREA_DESCRIPTIONS.farm,
+    lake: AREA_DESCRIPTIONS.lake,
+    forest: AREA_DESCRIPTIONS.forest,
+    garden: AREA_DESCRIPTIONS.garden,
+  };
+  for (const [id, desc] of Object.entries(survivalLocations)) {
+    if (!knownPlaces[id]) knownPlaces[id] = desc;
+  }
+
+  const myExperience = `I just arrived. I can see ${knownList} from here. I should explore to find out what else is around.
+
+To gather food and materials, go to the right place first, then gather:
+  [ACTION: go to farm] then [ACTION: gather wheat]
+  [ACTION: go to lake] then [ACTION: gather fish]
+  [ACTION: go to forest] then [ACTION: gather wood]
+  [ACTION: go to garden] then [ACTION: gather herbs]`;
 
   return { knownPlaces, myExperience, knowsPlaza };
 }
