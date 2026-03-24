@@ -41,7 +41,6 @@ export class SimulationEngine {
   private persistence: SupabasePersistence | null = null;
   private weatherStableUntil: number = 0;
   private lastConversationPair: Map<string, number> = new Map();
-  private spontaneousConversationsToday: Map<string, number> = new Map(); // Freedom 2: per-agent daily cap
   private narrator!: VillageNarrator;
   private characterTimeline!: CharacterTimeline;
   private storylineDetector!: StorylineDetector;
@@ -107,7 +106,6 @@ export class SimulationEngine {
     this.bus.on('midnight', () => {
       this.world.resetDailyCounters();
       this.world.spoilFood();
-      this.spontaneousConversationsToday.clear();
       this.decayWorldObjects();
     });
 
@@ -1004,52 +1002,15 @@ export class SimulationEngine {
         // Intentional conversation: one agent specifically planned to talk to the other
         if (c1WantsC2 || c2WantsC1) {
           const location = { ...a1.position };
-          this.conversationManager.startConversation(a1.id, a2.id, location);
+          const purpose = c1WantsC2 ? c1.pendingConversationPurpose : c2.pendingConversationPurpose;
+          this.conversationManager.startConversation(a1.id, a2.id, location, purpose ?? undefined);
           this.lastConversationPair.set(pairKey, this.tickCount);
           c1.enterConversation();
           c2.enterConversation();
-          console.log(`[Engine] Intentional conversation: ${a1.config.name} <-> ${a2.config.name}`);
+          console.log(`[Engine] Intentional conversation: ${a1.config.name} <-> ${a2.config.name}${purpose ? ` (purpose: "${purpose.substring(0, 40)}")` : ''}`);
           return;
         }
 
-        // Freedom 2: Spontaneous conversation — probability-based
-        const MAX_SPONTANEOUS_PER_DAY = 3;
-        const a1Count = this.spontaneousConversationsToday.get(a1.id) ?? 0;
-        const a2Count = this.spontaneousConversationsToday.get(a2.id) ?? 0;
-        if (a1Count >= MAX_SPONTANEOUS_PER_DAY || a2Count >= MAX_SPONTANEOUS_PER_DAY) continue;
-
-        // Base 5% chance, modified by extraversion and belonging drive
-        const ext1 = a1.config.personality?.extraversion ?? 0.5;
-        const ext2 = a2.config.personality?.extraversion ?? 0.5;
-        const belonging1 = (a1.drives?.belonging ?? 50) / 100; // 0-1, higher = lonelier
-        const belonging2 = (a2.drives?.belonging ?? 50) / 100;
-
-        // Same activity boost: both performing the same action type
-        const sameActivity = (c1.state === 'performing' && c2.state === 'performing') ? 0.05 : 0;
-
-        // Have they met before? Check mental models
-        const haveMet = a1.mentalModels?.some(m => m.targetId === a2.id) ?? false;
-        const metBonus = haveMet ? 0.03 : 0;
-
-        const probability = 0.05
-          + (ext1 - 0.5) * 0.1      // +/- 5% from agent 1 extraversion
-          + (ext2 - 0.5) * 0.1      // +/- 5% from agent 2 extraversion
-          + belonging1 * 0.03        // lonely agents seek connection
-          + belonging2 * 0.03
-          + sameActivity
-          + metBonus;
-
-        if (Math.random() < probability) {
-          const location = { ...a1.position };
-          this.conversationManager.startConversation(a1.id, a2.id, location);
-          this.lastConversationPair.set(pairKey, this.tickCount);
-          c1.enterConversation();
-          c2.enterConversation();
-          this.spontaneousConversationsToday.set(a1.id, a1Count + 1);
-          this.spontaneousConversationsToday.set(a2.id, a2Count + 1);
-          console.log(`[Engine] Spontaneous conversation: ${a1.config.name} <-> ${a2.config.name} (p=${probability.toFixed(3)})`);
-          return;
-        }
       }
     }
   }
@@ -1464,11 +1425,12 @@ export class SimulationEngine {
         const a1 = this.world.getAgent(initiatorId);
         if (!a1) return false;
 
-        const convId = this.conversationManager.startConversation(initiatorId, targetId, { ...a1.position });
+        const purpose = c1.pendingConversationPurpose ?? undefined;
+        const convId = this.conversationManager.startConversation(initiatorId, targetId, { ...a1.position }, purpose);
         this.lastConversationPair.set(pairKey, this.tickCount);
         c1.enterConversation();
         c2.enterConversation();
-        console.log(`[Engine] Intentional conversation: ${a1.config.name} sought out ${this.world.getAgent(targetId)?.config.name}`);
+        console.log(`[Engine] Intentional conversation: ${a1.config.name} sought out ${this.world.getAgent(targetId)?.config.name}${purpose ? ` (purpose: "${purpose.substring(0, 40)}")` : ''}`);
         return true;
     };
     // Wire requestConversation so conversation [ACTION:] tags can trigger interactions
@@ -1587,7 +1549,6 @@ export class SimulationEngine {
     // 3. Reset each agent to fresh state, recreate cognition + controller
     this.controllers.clear();
     this.cognitions.clear();
-    this.spontaneousConversationsToday.clear();
     this.lastConversationPair.clear();
     this.tickCount = 0;
 
