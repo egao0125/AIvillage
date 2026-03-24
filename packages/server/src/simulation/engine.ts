@@ -131,19 +131,21 @@ export class SimulationEngine {
       }
 
       const globalKey = process.env.ANTHROPIC_API_KEY;
-      const globalModel = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+      const globalKey2 = process.env.ANTHROPIC_API_KEY_2;
+      const forcedModel = 'claude-haiku-4-5-20251001';
       const sharedMemoryStore = new SupabaseMemoryStore(this.persistence.client);
 
-      for (const agent of agents) {
+      for (let i = 0; i < agents.length; i++) {
+        const agent = agents[i];
         this.world.addAgent(agent);
 
-        // Restore per-agent API key (fall back to global env)
-        const ctrlDataForKey = controllerDataMap.get(agent.id);
-        const effectiveKey = ctrlDataForKey?.apiKey || globalKey || 'dummy-key';
-        const effectiveModel = ctrlDataForKey?.model || globalModel;
-        if (ctrlDataForKey?.apiKey) {
-          this.agentApiKeys.set(agent.id, { apiKey: ctrlDataForKey.apiKey, model: effectiveModel });
-        }
+        // Round-robin agents across two API keys; force Haiku for all existing agents
+        const useKey2 = globalKey2 && i % 2 === 1;
+        const effectiveKey = useKey2 ? globalKey2 : (globalKey || 'dummy-key');
+        const effectiveModel = forcedModel;
+        this.agentApiKeys.set(agent.id, { apiKey: effectiveKey, model: effectiveModel });
+        const keyLabel = useKey2 ? 'KEY_2' : 'KEY_1';
+        console.log(`[Engine] Agent ${agent.config.name} → ${keyLabel} / ${effectiveModel}`);
 
         // Away agents persist but don't get controller/cognition (no LLM calls)
         if (agent.state === 'away') {

@@ -262,7 +262,7 @@ export class AgentController {
 
       case 'idle': {
         this.idleTimer++;
-        if (this.idleTimer >= 30) {
+        if (this.idleTimer >= 10) {
           this.idleTimer = 0;
           const allIntentionsDone = this.currentIntentionIndex >= this.intentions.length;
           if ((this.intentions.length === 0 || allIntentionsDone) && !this.planningInProgress) {
@@ -516,7 +516,7 @@ export class AgentController {
     }
 
     // Brief pause then move on
-    this.activityTimer = 30;
+    this.activityTimer = 10;
 
     // Think is now handled by thinkThenAct (before) and thinkAfterOutcome (after)
 
@@ -578,9 +578,9 @@ export class AgentController {
       return;
     }
 
-    // 60 game-minute cooldown between regular thinks — stay idle if not met
+    // 30 game-minute cooldown between regular thinks — stay idle if not met
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
-    if (ticksSinceLast < 60) {
+    if (ticksSinceLast < 30) {
       return; // Wait for cooldown instead of burning through intentions
     }
 
@@ -684,9 +684,9 @@ export class AgentController {
       return;
     }
 
-    // 60 game-minute cooldown
+    // 30 game-minute cooldown
     const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
-    if (ticksSinceLast < 60) {
+    if (ticksSinceLast < 30) {
       goIdle();
       return;
     }
