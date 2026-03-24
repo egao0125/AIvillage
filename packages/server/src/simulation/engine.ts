@@ -1523,6 +1523,158 @@ export class SimulationEngine {
     return true;
   }
 
+  /**
+   * Fresh start: wipe memories + world state, reset agents to day-1 state.
+   * Keeps agents (same configs, same API keys) but erases all accumulated state.
+   */
+  async freshStart(): Promise<void> {
+    const wasRunning = this.isRunning;
+    this.pause();
+    console.log('[Engine] Fresh start — wiping world state and memories');
+
+    // 1. Wipe Supabase data (memories, world_state, agent_controllers) but keep agent rows
+    if (this.persistence) {
+      // Delete all memories
+      const { error: memErr } = await this.persistence.client
+        .from('memories')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000'); // delete all rows
+      if (memErr) console.error('[FreshStart] Failed to delete memories:', memErr.message);
+      else console.log('[FreshStart] All memories deleted');
+
+      // Reset world state to empty
+      const { error: wsErr } = await this.persistence.client
+        .from('world_state')
+        .upsert({ id: 'current', data: {}, updated_at: new Date().toISOString() });
+      if (wsErr) console.error('[FreshStart] Failed to reset world_state:', wsErr.message);
+
+      // Delete agent controllers (will be recreated)
+      const { error: ctrlErr } = await this.persistence.client
+        .from('agent_controllers')
+        .delete()
+        .neq('agent_id', '00000000-0000-0000-0000-000000000000');
+      if (ctrlErr) console.error('[FreshStart] Failed to delete controllers:', ctrlErr.message);
+    }
+
+    // 2. Reset world to day 1
+    this.world.time = { day: 1, hour: 5, minute: 0, totalMinutes: 5 * 60 };
+    this.world.weather = { current: 'clear', season: 'spring', temperature: 50, seasonDay: 0 };
+    this.world.board = [];
+    this.world.conversations.clear();
+    this.world.elections.clear();
+    this.world.properties.clear();
+    this.world.reputation = [];
+    this.world.secrets = [];
+    this.world.items.clear();
+    this.world.institutions.clear();
+    this.world.artifacts = [];
+    this.world.buildings.clear();
+    this.world.technologies = [];
+    this.world.worldObjects.clear();
+    this.world.culturalNames.clear();
+    this.world.resourcePools.clear();
+    this.world.dailyGatherCounts.clear();
+    this.world.activeBuildProjects.clear();
+    this.world.pendingTrades.clear();
+    for (const spawn of this.world.materialSpawns) {
+      spawn.lastGathered = undefined;
+    }
+
+    // 3. Reset each agent to fresh state, recreate cognition + controller
+    this.controllers.clear();
+    this.cognitions.clear();
+    this.spontaneousConversationsToday.clear();
+    this.lastConversationPair.clear();
+    this.tickCount = 0;
+
+    const sharedMemoryStore = this.persistence
+      ? new SupabaseMemoryStore(this.persistence.client)
+      : new InMemoryStore();
+
+    for (const agent of this.world.agents.values()) {
+      // Reset agent state
+      const spawnArea = SimulationEngine.SPAWN_AREAS[
+        Math.floor(Math.random() * SimulationEngine.SPAWN_AREAS.length)
+      ];
+      const spawnPos = getAreaEntrance(spawnArea);
+      agent.position = { ...spawnPos };
+      agent.state = 'idle';
+      agent.currentAction = 'arriving';
+      agent.vitals = { health: 100, hunger: 0, energy: 100 };
+      agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
+      agent.alive = true;
+      agent.causeOfDeath = undefined;
+      agent.mood = 'neutral';
+      agent.inventory = [];
+      agent.skills = [];
+      agent.mentalModels = [];
+      agent.institutionIds = [];
+      agent.joinedDay = 1;
+
+      // Recreate cognition with fresh worldView
+      const keyData = this.agentApiKeys.get(agent.id);
+      const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+      const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+      const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+      const startingParts = buildStartingWorldViewParts(spawnArea);
+      const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts);
+      this.wireTieredMemory(cognition, agent, sharedMemoryStore);
+      this.cognitions.set(agent.id, cognition);
+
+      // Seed identity memories
+      const identityText = agent.config.soul || agent.config.backstory || '';
+      void cognition.addMemory({
+        id: crypto.randomUUID(), agentId: agent.id, type: 'reflection',
+        content: `I am ${agent.config.name}. ${identityText}`,
+        importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+      });
+      const effectiveGoal = agent.config.goal || (agent.config.desires?.length ? agent.config.desires[0] : '');
+      if (effectiveGoal) {
+        void cognition.addMemory({
+          id: crypto.randomUUID(), agentId: agent.id, type: 'reflection',
+          content: `My goal: ${effectiveGoal}`,
+          importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+        });
+      }
+      void cognition.addMemory({
+        id: crypto.randomUUID(), agentId: agent.id, type: 'observation',
+        content: `I just arrived at the ${spawnArea}. I should explore to discover what else is in this village.`,
+        importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+      });
+
+      // Create fresh controller
+      const controller = new AgentController(
+        agent, cognition, this.world, this.broadcaster, 7, 23, 'plaza',
+        this.createActionExecutor(),
+      );
+      controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
+      controller.bus = this.bus;
+      controller.decisionQueue = this.decisionQueue;
+      this.controllers.set(agent.id, controller);
+
+      console.log(`[FreshStart] Agent ${agent.config.name} reset at ${spawnArea}`);
+    }
+
+    this.refreshNameMaps();
+
+    // 4. Save fresh state to Supabase
+    if (this.persistence) {
+      try {
+        await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+        console.log('[FreshStart] Fresh state saved to Supabase');
+      } catch (err) {
+        console.error('[FreshStart] Save failed:', err);
+      }
+    }
+
+    // 5. Resume if was running
+    if (wasRunning) {
+      this.start();
+    }
+
+    console.log('[Engine] Fresh start complete — day 1, all agents reset');
+  }
+
   get isConfigured(): boolean {
     // With BYOK, always allow — each agent carries its own key
     return true;

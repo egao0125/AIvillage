@@ -317,6 +317,7 @@ export function devPause(): void { socket?.emit('dev:pause'); }
 export function devResume(): void { socket?.emit('dev:resume'); }
 export function devStep(): void { socket?.emit('dev:step'); }
 export function devResetVitals(): void { socket?.emit('dev:reset-vitals'); }
+export function devFreshStart(): void { socket?.emit('dev:fresh-start'); }
 export function devRequestStatus(): void { socket?.emit('dev:status-request'); }
 export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void {
   socket?.on('dev:status', cb);

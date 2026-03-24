@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { devPause, devResume, devStep, devResetVitals, devRequestStatus, onDevStatus } from '../../network/socket';
+import { devPause, devResume, devStep, devResetVitals, devFreshStart, devRequestStatus, onDevStatus } from '../../network/socket';
 
 export const DevPanel: React.FC = () => {
   const [paused, setPaused] = useState(false);
@@ -46,6 +46,11 @@ export const DevPanel: React.FC = () => {
         <button style={{ ...btnStyle, background: '#5a2a2a' }} onClick={devPause}>Pause</button>
       )}
       <button style={btnStyle} onClick={devResetVitals}>Reset Vitals</button>
+      <button style={{ ...btnStyle, background: '#5a3a2a' }} onClick={() => {
+        if (confirm('Fresh Start: Wipe all memories and world state? Agents keep their identity but lose all experiences.')) {
+          devFreshStart();
+        }
+      }}>Fresh Start</button>
       <span style={{ color: paused ? '#f88' : '#8f8', fontSize: 11, fontFamily: 'monospace' }}>
         {paused ? 'PAUSED' : 'RUNNING'}
       </span>

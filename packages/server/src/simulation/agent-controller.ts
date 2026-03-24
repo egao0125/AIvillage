@@ -546,6 +546,7 @@ export class AgentController {
   }
 
   private pendingActivity: { activity: string; duration: number; areaId: string } | null = null;
+  private pendingSleep: string | null = null; // sleep area name, set when walking to bed
 
   startMoveTo(target: Position): void {
     const path = findPath(this.agent.position, target, getWalkable, MAP_WIDTH, MAP_HEIGHT);
@@ -570,7 +571,10 @@ export class AgentController {
   private advanceMovement(): void {
     if (this.pathIndex >= this.path.length) {
       // Arrived at destination
-      if (this.pendingActivity) {
+      if (this.pendingSleep) {
+        this.enterSleepState(this.pendingSleep);
+        this.pendingSleep = null;
+      } else if (this.pendingActivity) {
         this.startPerforming(this.pendingActivity.activity, this.pendingActivity.duration, this.pendingActivity.areaId);
         this.pendingActivity = null;
       } else {
@@ -648,6 +652,7 @@ export class AgentController {
     this.path = [];
     this.pathIndex = 0;
     this.pendingActivity = null;
+    this.pendingSleep = null;
     this.activityTimer = 0;
     this.currentPerformingActivity = '';
     this.state = 'conversing';
@@ -1298,20 +1303,32 @@ export class AgentController {
   private static readonly SLEEP_AREAS = ['park', 'garden', 'church', 'tavern', 'forest'];
 
   goToSleep(): void {
-    this.state = 'sleeping';
     this.intentions = [];
     this.currentIntentionIndex = 0;
-    this.world.updateAgentState(this.agent.id, 'sleeping', '');
-    this.broadcaster.agentAction(this.agent.id, 'sleeping', '\u{1F634}');
-    console.log(`[Agent] ${this.agent.config.name} goes to sleep`);
 
     // Deterministic sleep spot based on agent name (no randomness)
     const sleepArea = this.nameHash(AgentController.SLEEP_AREAS);
     const sleepPos = getAreaEntrance(sleepArea);
-    this.world.updateAgentPosition(this.agent.id, sleepPos);
-    this.agent.position = sleepPos;
 
-    // Explain the transition so agents don't interpret teleportation as existential crisis
+    const dist = Math.abs(this.agent.position.x - sleepPos.x) + Math.abs(this.agent.position.y - sleepPos.y);
+    if (dist <= 1) {
+      // Already at sleep spot — sleep immediately
+      this.enterSleepState(sleepArea);
+    } else {
+      // Walk to sleep spot first
+      this.pendingSleep = sleepArea;
+      this.pendingActivity = null;
+      console.log(`[Agent] ${this.agent.config.name} walking to ${sleepArea} to sleep`);
+      this.startMoveTo(sleepPos);
+    }
+  }
+
+  private enterSleepState(sleepArea: string): void {
+    this.state = 'sleeping';
+    this.world.updateAgentState(this.agent.id, 'sleeping', '');
+    this.broadcaster.agentAction(this.agent.id, 'sleeping', '\u{1F634}');
+    console.log(`[Agent] ${this.agent.config.name} goes to sleep at ${sleepArea}`);
+
     void this.cognition.addMemory({
       id: crypto.randomUUID(),
       agentId: this.agent.id,
