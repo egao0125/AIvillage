@@ -1,4 +1,5 @@
 import type { BoardPostType, Conversation, Item, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
+import { EventBus } from '@ai-village/shared';
 import { AgentCognition, parseIntent, executeAction, RESOURCES, BUILDINGS, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
 import type { World } from '../world.js';
 import type { EventBroadcaster } from '../events.js';
@@ -11,6 +12,7 @@ export class ActionPipeline {
   constructor(
     private world: World,
     private broadcaster: EventBroadcaster,
+    private bus?: EventBus,
   ) {}
 
   /**
@@ -126,6 +128,24 @@ export class ActionPipeline {
     }
 
     const outcome = executeAction(intent, agentState, worldState);
+
+    // Fix 1: Check resource pool depletion before granting gather
+    if (outcome.type === 'gather' && outcome.success && outcome.itemsGained) {
+      const gatherArea = this.world.getAreaAt(actor.position);
+      const gatherAreaId = gatherArea?.id ?? 'unknown';
+      const gatherResource = outcome.itemsGained[0]?.resource;
+      if (gatherResource) {
+        const poolLevel = this.world.getResourcePool(gatherAreaId, gatherResource);
+        if (poolLevel <= 0) {
+          outcome.success = false;
+          const resName = RESOURCES[gatherResource]?.name ?? gatherResource;
+          outcome.description = `There's no ${resName} left here — the area has been depleted.`;
+          outcome.itemsGained = undefined;
+          outcome.reason = 'resource_depleted';
+          outcome.remediation = 'Try a different area, or wait for resources to regenerate.';
+        }
+      }
+    }
 
     console.log(`[Social] ${actorName} → ${outcome.type}: ${outcome.success ? 'SUCCESS' : 'FAILED'} — ${outcome.description}`);
 
@@ -555,6 +575,39 @@ export class ActionPipeline {
   }
 
   /**
+   * Fix 5: Check if an action violates institutional rules and emit events.
+   */
+  private checkInstitutionalViolations(actor: Agent, outcome: ActionOutcome): void {
+    if (!this.bus) return;
+    for (const instId of actor.institutionIds ?? []) {
+      const inst = this.world.getInstitution(instId);
+      if (!inst || inst.dissolved || !inst.rules) continue;
+
+      for (const rule of inst.rules) {
+        const ruleLower = rule.toLowerCase();
+        let violated = false;
+
+        if (outcome.type === 'steal' && (ruleLower.includes('no steal') || ruleLower.includes('no theft'))) violated = true;
+        if (outcome.type === 'fight' && (ruleLower.includes('no fight') || ruleLower.includes('no violen'))) violated = true;
+        if (outcome.type === 'destroy' && (ruleLower.includes('no destroy') || ruleLower.includes('no damag'))) violated = true;
+
+        if (violated) {
+          this.bus.emit({
+            type: 'rule_violated',
+            agentId: actor.id,
+            agentName: actor.config.name,
+            institutionId: instId,
+            institutionName: inst.name,
+            rule,
+            action: outcome.description,
+            location: actor.position,
+          });
+        }
+      }
+    }
+  }
+
+  /**
    * Apply a deterministic ActionOutcome to the world state.
    * Handles item creation/removal, skill XP, vitals, trades, builds, and memory feedback.
    */
@@ -967,6 +1020,73 @@ export class ActionPipeline {
         actor.vitals.energy = Math.max(0, Math.min(100, actor.vitals.energy - outcome.energySpent));
       }
       return;
+    }
+
+    // --- Fix 4: Theft victim memory + event emission ---
+    if (outcome.type === 'steal' && outcome.success && outcome.itemsGained) {
+      const stolenItemName = RESOURCES[outcome.itemsGained[0]?.resource]?.name ?? outcome.itemsGained[0]?.resource ?? 'something';
+      // Extract victim name from outcome description
+      const victimMatch = outcome.description.match(/from\s+(\w+)/i);
+      const victimName = victimMatch?.[1];
+      const victim = victimName ? findAgentByName(this.world, victimName) : undefined;
+
+      if (victim && cognitions) {
+        // Remove stolen item from victim inventory
+        const victimItem = victim.inventory.find(i =>
+          i.name.toLowerCase().includes(stolenItemName.toLowerCase())
+        );
+        if (victimItem) {
+          this.world.removeItem(victimItem.id);
+          this.broadcaster.agentInventory(victim.id, victim.inventory);
+        }
+
+        // Victim gets a memory
+        const victimCog = cognitions.get(victim.id);
+        if (victimCog) {
+          void victimCog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: victim.id,
+            type: 'observation',
+            content: `${actorName} stole ${stolenItemName} from me!`,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: [actorId],
+          });
+        }
+
+        // Emit event for nearby witnesses
+        if (this.bus) {
+          this.bus.emit({
+            type: 'theft_occurred',
+            thiefId: actorId,
+            victimId: victim.id,
+            item: stolenItemName,
+            location: actor.position,
+          });
+        }
+      }
+    }
+
+    // --- Fix 4: Fight event emission ---
+    if (outcome.type === 'fight' && outcome.success) {
+      const defenderMatch = outcome.description.match(/(?:Fought|attacked|hit)\s+(\w+)/i);
+      const defenderName = defenderMatch?.[1];
+      const defender = defenderName ? findAgentByName(this.world, defenderName) : undefined;
+
+      if (defender && this.bus) {
+        this.bus.emit({
+          type: 'fight_occurred',
+          attackerId: actorId,
+          defenderId: defender.id,
+          outcome: outcome.description,
+          location: actor.position,
+        });
+      }
+    }
+
+    // --- Fix 5: Check institutional rule violations ---
+    if (outcome.success && this.bus) {
+      this.checkInstitutionalViolations(actor, outcome);
     }
 
     // --- Broadcast action ---

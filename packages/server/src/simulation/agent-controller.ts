@@ -1,4 +1,5 @@
 import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
@@ -59,6 +60,7 @@ export class AgentController {
   private reactiveThinkBudget: number = 4;
   private lastBudgetResetHour: number = -1;
   onDeath?: (agentId: string, cause: string) => void;
+  bus?: EventBus;  // Fix 4: event bus for gameplay events
   private thinkInProgress: boolean = false;
   private lastHungerBand: number = 0;
   private lastEnergyBand: number = 0;
@@ -446,8 +448,25 @@ export class AgentController {
       const nextSeason = SEASON_ORDER[(seasonIdx + 1) % SEASON_ORDER.length];
       const seasonContext = `\nSEASON: ${currentSeason} (day ${daysIntoSeason + 1}/${SEASON_LENGTH}, ${daysLeft} days until ${nextSeason}). ${seasonDef.description}`;
 
+      // Fix 5: Surface institutional rules the agent is bound by
+      let institutionRulesContext = '';
+      for (const instId of this.agent.institutionIds ?? []) {
+        const inst = this.world.institutions.get(instId);
+        if (!inst || inst.dissolved) continue;
+        const membership = inst.members.find((m: any) => m.agentId === this.agent.id);
+        const roleLabel = membership?.role ? ` (${membership.role})` : '';
+        institutionRulesContext += `\nYou are a member of ${inst.name}${roleLabel}.`;
+        if (inst.rules && inst.rules.length > 0) {
+          institutionRulesContext += ` Rules you follow:\n`;
+          institutionRulesContext += inst.rules.map((r: string) => `- ${r}`).join('\n');
+        }
+        if (inst.description) {
+          institutionRulesContext += `\nPurpose: ${inst.description}`;
+        }
+      }
+
       const ledgerCtx = this.buildLedgerContext();
-      const worldCtx = (institutionContext + buildingContext + seasonContext + ledgerCtx) || undefined;
+      const worldCtx = (institutionContext + buildingContext + seasonContext + ledgerCtx + institutionRulesContext) || undefined;
       const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx);
       this.intentions = plan;
       this.currentIntentionIndex = 0;
@@ -762,7 +781,7 @@ export class AgentController {
         .replace(/\s*NEXT STEP:.*$/i, '');
       if (outcomeContent.length > 0) {
         outcomeMemoryId = crypto.randomUUID();
-        void this.cognition.addMemory({
+        void this.cognition.addLinkedMemory({
           id: outcomeMemoryId,
           agentId: this.agent.id,
           type: 'observation',
@@ -843,7 +862,7 @@ export class AgentController {
         // Freedom 4: Link new actions back to the outcome that caused them
         if (outcomeMemoryId) {
           for (const action of output.actions) {
-            void this.cognition.addMemory({
+            void this.cognition.addLinkedMemory({
               id: crypto.randomUUID(),
               agentId: this.agent.id,
               type: 'plan',
@@ -1221,6 +1240,15 @@ export class AgentController {
 
     this.broadcaster.agentDeath(this.agent.id, cause);
     this.broadcaster.agentAction(this.agent.id, `died: ${cause}`, '\u{1F480}');
+
+    // Fix 4: Emit agent_died event for nearby witness perception
+    if (this.bus) {
+      this.bus.emit({
+        type: 'agent_died',
+        agentId: this.agent.id,
+        cause,
+      });
+    }
 
     // Notify engine for cleanup + other agent notification
     if (this.onDeath) {

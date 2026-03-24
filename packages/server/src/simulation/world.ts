@@ -684,6 +684,23 @@ export class World {
     }
   }
 
+  /**
+   * Hourly micro-regeneration of resource pools. Season-aware.
+   * Called every game hour from engine. Slower than midnight regen.
+   */
+  regenerateResourcePoolsHourly(seasonGatherMultipliers?: Record<string, number>): void {
+    for (const spawn of this.materialSpawns) {
+      const key = `${spawn.areaId}:${spawn.material}`;
+      const current = this.resourcePools.get(key);
+      if (current === undefined || current >= 100) continue;
+      // Base: 0.5 units per game-hour, scaled by season
+      const seasonMultiplier = seasonGatherMultipliers?.[spawn.material] ?? 1.0;
+      const regenRate = 0.5 * seasonMultiplier;
+      if (regenRate <= 0) continue;
+      this.resourcePools.set(key, Math.min(100, current + regenRate));
+    }
+  }
+
   // --- Freedom 5: Cultural Naming ---
 
   /**

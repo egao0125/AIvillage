@@ -22,6 +22,7 @@ export interface MemoryStore {
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
   getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
   removeBatch(ids: string[]): Promise<void>;
+  getById(agentId: string, memoryId: string): Promise<Memory | undefined>;  // Fix 2: causal chain linking
 }
 
 // --- LLM Provider ---
@@ -284,6 +285,37 @@ If nothing notable was exchanged, return []`;
       await this.tieredMemory.addEpisodic(memory);
     } else {
       await this.memory.add(memory);
+    }
+  }
+
+  /**
+   * Fix 2: Add a memory and maintain bidirectional causal links.
+   * If causedBy is set, updates the parent memory's ledTo array.
+   */
+  async addLinkedMemory(memory: Memory): Promise<void> {
+    if (memory.emotionalValence === undefined) {
+      memory.emotionalValence = this.computeValence(memory.content);
+    }
+    if (this.tieredMemory) {
+      await this.tieredMemory.addEpisodic(memory);
+    } else {
+      await this.memory.add(memory);
+    }
+
+    // Maintain bidirectional link
+    if (memory.causedBy) {
+      try {
+        const parent = await this.memory.getById(memory.agentId, memory.causedBy);
+        if (parent) {
+          if (!parent.ledTo) parent.ledTo = [];
+          if (!parent.ledTo.includes(memory.id)) {
+            parent.ledTo.push(memory.id);
+            await this.memory.add(parent); // re-upsert with updated ledTo
+          }
+        }
+      } catch {
+        // Parent may have been evicted — one-directional link is acceptable
+      }
     }
   }
 

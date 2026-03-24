@@ -93,7 +93,7 @@ export class SimulationEngine {
     this.broadcaster.setDayGetter(() => this.world.time.day);
 
     // Create conversation manager
-    this.conversationManager = new ConversationManager(this.world, this.broadcaster);
+    this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus);
 
     // Restore from Supabase if persistence is enabled
     if (this.persistence) {
@@ -118,6 +118,14 @@ export class SimulationEngine {
       }
     });
 
+    // Hourly resource regeneration (Fix 1: wire resource depletion)
+    this.bus.on('hour_changed', () => {
+      const seasonIdx = Math.floor((this.world.time.day - 1) / 30) % 4;
+      const seasonName = (['spring', 'summer', 'autumn', 'winter'] as const)[seasonIdx];
+      const seasonDef = SEASONS[seasonName];
+      this.world.regenerateResourcePoolsHourly(seasonDef.gatherMultipliers);
+    });
+
     // Perception
     this.bus.on('perception_cycle', () => this.runPerception());
 
@@ -125,6 +133,103 @@ export class SimulationEngine {
     this.bus.on('tick', () => {
       this.checkProximityConversations();
       this.advanceConversations();
+    });
+
+    // Fix 4: Witness-based perception for theft events
+    this.bus.on('theft_occurred', (e) => {
+      const nearby = this.world.getNearbyAgents(e.location, 5);
+      const thiefName = this.world.getAgent(e.thiefId)?.config.name ?? 'someone';
+      const victimName = this.world.getAgent(e.victimId)?.config.name ?? 'someone';
+
+      for (const witness of nearby) {
+        if (witness.id === e.thiefId || witness.id === e.victimId) continue;
+        if (witness.alive === false) continue;
+        const cognition = this.cognitions.get(witness.id);
+        if (!cognition) continue;
+
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: witness.id,
+          type: 'observation',
+          content: `I saw ${thiefName} steal ${e.item} from ${victimName}.`,
+          importance: 8,
+          timestamp: Date.now(),
+          relatedAgentIds: [e.thiefId, e.victimId],
+        });
+
+        // Trigger reactive think — witness decides whether to intervene
+        const ctrl = this.controllers.get(witness.id);
+        if (ctrl && !ctrl.apiExhausted) {
+          void cognition.think(
+            `You just saw ${thiefName} steal ${e.item} from ${victimName}.`,
+            `You're nearby. They might not have seen you watching.`,
+          ).catch(() => {});
+        }
+      }
+      this.broadcaster.agentAction(e.thiefId, `stole ${e.item}`, '\u{1F978}');
+    });
+
+    // Fix 4: Witness-based perception for fight events
+    this.bus.on('fight_occurred', (e) => {
+      const nearby = this.world.getNearbyAgents(e.location, 6);
+      const attackerName = this.world.getAgent(e.attackerId)?.config.name ?? 'someone';
+      const defenderName = this.world.getAgent(e.defenderId)?.config.name ?? 'someone';
+
+      for (const witness of nearby) {
+        if (witness.id === e.attackerId || witness.id === e.defenderId) continue;
+        if (witness.alive === false) continue;
+        const cognition = this.cognitions.get(witness.id);
+        if (!cognition) continue;
+
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: witness.id,
+          type: 'observation',
+          content: `I saw ${attackerName} fight ${defenderName}. ${e.outcome}`,
+          importance: 7,
+          timestamp: Date.now(),
+          relatedAgentIds: [e.attackerId, e.defenderId],
+        });
+      }
+    });
+
+    // Fix 5: Institutional rule enforcement — leaders react to violations
+    this.bus.on('rule_violated', (e) => {
+      const institution = this.world.institutions.get(e.institutionId);
+      if (!institution) return;
+
+      // Find institution leaders
+      const leaders = (institution.members ?? [])
+        .filter((m: any) =>
+          m.role === 'leader' || m.role === 'elder' || m.role === 'founder'
+        )
+        .map((m: any) => m.agentId as string)
+        .filter((id: string) => id !== e.agentId); // violator can't judge themselves
+
+      for (const leaderId of leaders) {
+        const cognition = this.cognitions.get(leaderId);
+        const ctrl = this.controllers.get(leaderId);
+        if (!cognition || !ctrl || ctrl.apiExhausted) continue;
+
+        // Leader gets a high-importance memory of the violation
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: leaderId,
+          type: 'observation',
+          content: `${e.agentName} violated ${e.institutionName} rule: "${e.rule}" by doing: ${e.action}`,
+          importance: 8,
+          timestamp: Date.now(),
+          relatedAgentIds: [e.agentId],
+        });
+
+        // Trigger a reactive think — leader decides how to respond
+        void cognition.think(
+          `${e.agentName}, a member of ${e.institutionName}, just broke the rule: "${e.rule}". They ${e.action}.`,
+          `You are a leader of ${e.institutionName}. You must decide how to respond — warn them, confront them, expel them, or let it slide.`,
+        ).catch(() => {});
+      }
+
+      console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}"`);
     });
 
     // Periodic save
@@ -169,6 +274,24 @@ export class SimulationEngine {
         this.world.items = recordToMap(worldData.items ?? {}) as typeof this.world.items;
         this.world.institutions = recordToMap(worldData.institutions ?? {}) as typeof this.world.institutions;
         this.world.buildings = recordToMap(worldData.buildings ?? {}) as typeof this.world.buildings;
+
+        // Fix 3: Restore emergent world state
+        if (worldData.worldObjects && Array.isArray(worldData.worldObjects)) {
+          for (const obj of worldData.worldObjects as any[]) {
+            if (obj && obj.id) this.world.worldObjects.set(obj.id, obj);
+          }
+        }
+        if (worldData.culturalNames) {
+          for (const [key, val] of Object.entries(worldData.culturalNames)) {
+            this.world.culturalNames.set(key, val as { name: string; mentionCount: number; lastMentionedDay: number });
+          }
+        }
+        if (worldData.resourcePools) {
+          for (const [key, val] of Object.entries(worldData.resourcePools)) {
+            this.world.resourcePools.set(key, val as number);
+          }
+        }
+
         console.log(`[Engine] World state restored (day ${this.world.time.day}, hour ${this.world.time.hour})`);
       }
 
@@ -225,6 +348,7 @@ export class SimulationEngine {
           this.createActionExecutor(),
         );
         controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
+        controller.bus = this.bus;
 
         // Restore mutable controller state
         if (ctrlData) {
@@ -325,6 +449,7 @@ export class SimulationEngine {
       this.createActionExecutor(),
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
+    controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
@@ -493,6 +618,7 @@ export class SimulationEngine {
       this.createActionExecutor(),
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
+    controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
@@ -579,6 +705,7 @@ export class SimulationEngine {
       this.createActionExecutor(),
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
+    controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 

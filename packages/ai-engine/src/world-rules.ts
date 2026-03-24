@@ -408,6 +408,7 @@ export interface SeasonDef {
   coldDamagePerHour: number;                        // health lost per hour without shelter when temp < 20
   stormChance: number;                              // probability per weather check that weather is "storm"
   description: string;
+  gatherMultipliers: Record<string, number>;        // Fix 1: seasonal resource regeneration rates
 }
 
 export const SEASONS: Record<Season, SeasonDef> = {
@@ -417,6 +418,7 @@ export const SEASONS: Record<Season, SeasonDef> = {
     coldDamagePerHour: 0,
     stormChance: 0.1,
     description: 'Mild and wet. Farms begin producing. Herbs are plentiful.',
+    gatherMultipliers: { wood: 1.0, stone: 1.0, herb: 1.5, fish: 1.2, crop: 0.8 },
   },
   summer: {
     temperature: { min: 60, max: 95 },
@@ -424,6 +426,7 @@ export const SEASONS: Record<Season, SeasonDef> = {
     coldDamagePerHour: 0,
     stormChance: 0.15,
     description: 'Hot and productive. Peak farm output. Storms can be violent.',
+    gatherMultipliers: { wood: 1.0, stone: 1.0, herb: 1.0, fish: 1.0, crop: 1.5 },
   },
   autumn: {
     temperature: { min: 30, max: 60 },
@@ -431,6 +434,7 @@ export const SEASONS: Record<Season, SeasonDef> = {
     coldDamagePerHour: 0,
     stormChance: 0.1,
     description: 'Cooling down. Mushrooms peak. Last chance to stockpile.',
+    gatherMultipliers: { wood: 1.2, stone: 1.0, herb: 0.5, fish: 0.8, crop: 0.6 },
   },
   winter: {
     temperature: { min: 0, max: 30 },
@@ -438,6 +442,7 @@ export const SEASONS: Record<Season, SeasonDef> = {
     coldDamagePerHour: 0.5,
     stormChance: 0.25,
     description: 'Farms dead. Lake mostly frozen. Without shelter and stored food, you die.',
+    gatherMultipliers: { wood: 0.5, stone: 0.8, herb: 0.0, fish: 0.3, crop: 0.0 },
   },
 };
 

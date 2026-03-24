@@ -39,6 +39,13 @@ export type SimEvent =
   | { type: 'landmark_decayed'; id: string }
   | { type: 'cultural_name_established'; areaId: string; name: string }
 
+  // Fix 4: Gameplay events (witness-based perception)
+  | { type: 'theft_occurred'; thiefId: string; victimId: string; item: string; location: Position }
+  | { type: 'fight_occurred'; attackerId: string; defenderId: string; outcome: string; location: Position }
+
+  // Fix 5: Institutional enforcement
+  | { type: 'rule_violated'; agentId: string; agentName: string; institutionId: string; institutionName: string; rule: string; action: string; location: Position }
+
   // Perception
   | { type: 'perception_cycle'; tick: number }
 
