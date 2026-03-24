@@ -565,7 +565,7 @@ function executeGather(intent: ParsedIntent, agent: AgentState, world: WorldStat
   }
 
   // If no specific resource requested, pick the first available option at this location
-  if (!gatherDef && options.length > 0) {
+  if (!gatherDef && !intent.resource && options.length > 0) {
     gatherDef = options[0];
   }
 
