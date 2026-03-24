@@ -80,6 +80,8 @@ export class AgentCognition {
   public knowsPlaza: boolean = false;
   /** Agent ID → name mapping for resolving mental model targets */
   public nameMap: Map<string, string> = new Map();
+  /** Current game time — updated by controller each tick for time-aware prompts */
+  public currentTime: { day: number; hour: number } = { day: 1, hour: 7 };
 
   /** Compose the full worldView from exactly 3 sections */
   get worldView(): string {
@@ -456,6 +458,8 @@ If nothing notable was exchanged, return []`;
 
 ${this.buildIdentityBlock()}
 
+It is day ${this.currentTime.day}, ${this.currentTime.hour}:00.
+
 This is your inner voice. Think honestly. You can also act.
 IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events. If you're alone, you're alone.
 There are no NPCs, shopkeepers, or background characters. Every person in this village is named in your context. Locations may be empty.
@@ -638,7 +642,7 @@ Action: "${rawAction}"`;
 
 ${this.buildIdentityBlock()}
 
-Today is day ${currentTime.day}.`;
+It is day ${currentTime.day}, ${currentTime.hour}:00.`;
 
     const userPrompt = `${this.buildContextBlock()}${boardSection}${worldSection}${outcomeSection}
 
@@ -751,6 +755,8 @@ Return a JSON array of strings ONLY.`;
 ${this.worldView}
 
 ${this.buildIdentityBlock()}
+
+It is day ${this.currentTime.day}, ${this.currentTime.hour}:00.
 
 You are in a conversation with ${otherAgents.map(a => a.config.name).join(', ')}.${otherDescriptions}${boardSection}${worldSection}${artifactSection}${secretsSection}${tradeSection}
 
