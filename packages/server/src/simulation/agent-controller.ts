@@ -1,6 +1,6 @@
 import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
-import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS } from '@ai-village/ai-engine';
+import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, getGatherOptions } from '@ai-village/ai-engine';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
@@ -356,8 +356,12 @@ export class AgentController {
               void this.doPlan(time);
             }
           } else if (!this.thinkInProgress) {
-            // Think before acting — enqueue cold-path think
-            if (this.decisionQueue) {
+            // Check if next intention is a clean action verb — skip think, act immediately
+            const nextIntention = this.intentions[this.currentIntentionIndex];
+            if (nextIntention && AgentController.VERB_PREFIX.test(nextIntention.trim())) {
+              void this.followNextIntention();
+            } else if (this.decisionQueue) {
+              // Think before acting — enqueue cold-path think
               this.decisionQueue.enqueue({
                 id: crypto.randomUUID(),
                 agentId: this.agent.id,
@@ -610,7 +614,12 @@ export class AgentController {
       this.startMoveTo(targetPos);
     }
 
-    this.broadcaster.agentAction(this.agent.id, intention);
+    // Only broadcast talk intention if an actual agent was matched
+    if (talkTargetAgent) {
+      this.broadcaster.agentAction(this.agent.id, `talk to ${talkTargetAgent.config.name}`);
+    } else {
+      this.broadcaster.agentAction(this.agent.id, intention);
+    }
   }
 
   private pendingActivity: { activity: string; duration: number; areaId: string } | null = null;
@@ -666,27 +675,62 @@ export class AgentController {
     this.broadcaster.agentMove(this.agent.id, from, to);
   }
 
+  private static readonly PHYSICAL_ACTION = /^(gather|craft|build|eat|repair|fish|harvest|cook|bake|rest|sleep)\b/i;
+
   startPerforming(activity: string, duration: number, areaId?: string): void {
     // Guard: don't start performing if we entered a conversation during movement
     if (this.state === 'conversing') return;
 
-    // Attempt intentional conversation before doing anything else
-    if (this.pendingConversationTarget && this.soloActionExecutor) {
-      const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
-      if (started) {
-        this.pendingConversationTarget = null;
-        this.pendingConversationPurpose = null;
-        return; // Controller is now in 'conversing' state
-      }
-      // Target not available — proceed with activity, try again later
-    }
-    this.pendingConversationTarget = null;
-    this.pendingConversationPurpose = null;
+    const isPhysical = AgentController.PHYSICAL_ACTION.test(activity.trim());
 
-    this.state = 'performing';
-    this.currentPerformingActivity = activity;
-    this.world.updateAgentState(this.agent.id, 'active', activity);
-    this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
+    // Physical actions execute FIRST — then check conversations.
+    // This prevents "gather wheat" from being eaten by a nearby chat.
+    if (isPhysical) {
+      this.state = 'performing';
+      this.currentPerformingActivity = activity;
+      this.world.updateAgentState(this.agent.id, 'active', activity);
+      this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
+
+      if (this.soloActionExecutor) {
+        void this.soloActionExecutor.executeSocialAction(
+          this.agent.id, this.agent.config.name, '', activity, this.cognition
+        );
+      }
+      this.activityTimer = 10;
+
+      // After the action fires, check if there's a pending conversation
+      if (this.pendingConversationTarget && this.soloActionExecutor) {
+        const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
+        if (started) {
+          this.pendingConversationTarget = null;
+          this.pendingConversationPurpose = null;
+        }
+      }
+    } else {
+      // Non-physical: attempt conversation first (existing behavior)
+      if (this.pendingConversationTarget && this.soloActionExecutor) {
+        const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
+        if (started) {
+          this.pendingConversationTarget = null;
+          this.pendingConversationPurpose = null;
+          return; // Controller is now in 'conversing' state
+        }
+      }
+      this.pendingConversationTarget = null;
+      this.pendingConversationPurpose = null;
+
+      this.state = 'performing';
+      this.currentPerformingActivity = activity;
+      this.world.updateAgentState(this.agent.id, 'active', activity);
+      this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
+
+      if (this.soloActionExecutor) {
+        void this.soloActionExecutor.executeSocialAction(
+          this.agent.id, this.agent.config.name, '', activity, this.cognition
+        );
+      }
+      this.activityTimer = 10;
+    }
 
     // Auto-drop lowest-value non-food item when inventory is full
     if (this.agent.inventory.length >= 30) {
@@ -701,16 +745,6 @@ export class AgentController {
         console.log(`[Agent] ${this.agent.config.name} auto-dropped ${dropped.name} — inventory was full`);
       }
     }
-
-    // Route ALL activities through the action executor — no keyword filtering
-    if (this.soloActionExecutor) {
-      void this.soloActionExecutor.executeSocialAction(
-        this.agent.id, this.agent.config.name, '', activity, this.cognition
-      );
-    }
-
-    // Brief pause then move on
-    this.activityTimer = 10;
 
     // Think is now handled by thinkThenAct (before) and thinkAfterOutcome (after)
 
@@ -791,10 +825,15 @@ export class AgentController {
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
       const currentSeason = SEASON_ORDER[seasonIdx];
 
+      const gatherOpts = getGatherOptions(area?.id ?? '');
+      const availableStr = gatherOpts.length > 0
+        ? ` Available to gather here: ${gatherOpts.map(g => g.yields.map(y => y.resource).join('/')).join(', ')}.`
+        : '';
+
       const ledgerCtx = this.buildLedgerContext();
       const output = await this.cognition.think(
         `You're about to: ${intention}`,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}${ledgerCtx}`
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}${availableStr}${ledgerCtx}`
       );
       this.handleApiSuccess();
 
@@ -860,8 +899,7 @@ export class AgentController {
     if (activity && this.lastOutcomeDescription) {
       let outcomeContent = this.lastOutcomeDescription
         .replace(/^SUCCESS:\s*/i, '')
-        .replace(/^FAILED:\s*/i, 'Failed: ')
-        .replace(/\s*NEXT STEP:.*$/i, '');
+        .replace(/^FAILED:\s*/i, 'Failed: ');
       if (outcomeContent.length > 0) {
         outcomeMemoryId = crypto.randomUUID();
         void this.cognition.addLinkedMemory({
@@ -920,10 +958,15 @@ export class AgentController {
         : `You just finished: ${activity}.`;
       this.lastOutcomeDescription = '';
 
+      const gatherOpts2 = getGatherOptions(area?.id ?? '');
+      const availableStr2 = gatherOpts2.length > 0
+        ? ` Available to gather here: ${gatherOpts2.map(g => g.yields.map(y => y.resource).join('/')).join(', ')}.`
+        : '';
+
       const ledgerCtx = this.buildLedgerContext();
       const output = await this.cognition.think(
         trigger,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}. Inventory: ${invStr}.${ledgerCtx}`
+        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}. Inventory: ${invStr}.${availableStr2}${ledgerCtx}`
       );
       this.handleApiSuccess();
 
@@ -1029,8 +1072,13 @@ export class AgentController {
       const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, institutionContext || undefined);
       this.handleApiSuccess();
 
-      // Replace remaining intentions with new ones
-      this.intentions = plan;
+      // Preserve remaining physical-action intentions (gather/craft/build/eat etc.)
+      // so conversations don't wipe queued gather steps from the decomposer
+      const remaining = this.intentions.slice(this.currentIntentionIndex);
+      const physicalRemaining = remaining.filter(i =>
+        AgentController.PHYSICAL_ACTION.test(i.trim())
+      );
+      this.intentions = [...physicalRemaining, ...plan];
       this.currentIntentionIndex = 0;
       this.lastReplanTick = this.world.time.totalMinutes;
 

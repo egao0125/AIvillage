@@ -116,6 +116,12 @@ ${this.myExperience}`;
     }
   }
 
+  /** Reset the MY EXPERIENCE section to default starting text.
+   * Called on simulation load to prevent stale worldView from previous runs. */
+  resetExperience(defaultExperience: string): void {
+    this.myExperience = defaultExperience;
+  }
+
   /** Resolve agent ID to display name, falling back to truncated ID */
   private resolveName(id: string): string {
     return this.nameMap.get(id) || id.slice(0, 8);
@@ -500,8 +506,13 @@ There are no NPCs, shopkeepers, or background characters. Every person in this v
 
 1-3 sentences. First person. Private.
 
-If you decide to act: [ACTION: what you do]
-Describe it naturally. Physical actions like gathering and crafting might fail if you lack materials or skill — you'll be told why.
+IMPORTANT: Describing an action in your thoughts does NOT make it happen in the world. Only [ACTION: ...] tags trigger real changes. If you want to pick up wood, you MUST write [ACTION: gather wood]. Just writing "I pick up the branch" changes nothing.
+
+  [ACTION: gather wheat] — tries to gather
+  [ACTION: eat bread] — tries to eat
+  [ACTION: go to farm] — moves to farm
+
+Actions might fail — you'll be told why.
 Anything you say out loud — declarations, promises, threats — will be heard by people nearby.
 
 If your feelings shifted: MOOD: how you feel now`;
@@ -519,6 +530,26 @@ Trigger: ${trigger}
 Context: ${context}`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
+
+    // Sanitize: detect meta-contamination (agent breaking character)
+    const META_PATTERNS = [
+      /the state.*(?:contradictory|incoherent|impossible)/i,
+      /I (?:need|cannot|can't) (?:proceed|continue|play|roleplay)/i,
+      /internally (?:contradictory|incoherent|inconsistent)/i,
+      /honest roleplay (?:impossible|isn't possible)/i,
+      /as a (?:character|language model|AI)/i,
+      /the prompt (?:says|shows|indicates|lists)/i,
+      /timestamp (?:conflict|mismatch)/i,
+      /state (?:file|information) (?:is|contains)/i,
+    ];
+    if (META_PATTERNS.some(p => p.test(response))) {
+      console.warn(`[Sanitize] Meta-contamination in ${this.agent.config.name}'s think: "${response.substring(0, 80)}..."`);
+      return {
+        thought: "Something feels off, but I can't put my finger on it.",
+        actions: undefined,
+        mood: undefined,
+      };
+    }
 
     // Parse structured output
     const actions = AgentCognition.parseActions(response);
@@ -1355,8 +1386,10 @@ Output a JSON array ONLY, no other text:
 
     if (observations.length === 0) return observations;
 
-    // Dedup: skip if nothing changed since last perception
-    const perceptionKey = observations.sort().join('|');
+    // Dedup: skip if nearby agent NAMES haven't changed (ignore action text churn)
+    const nearbyNames = nearbyAgents.map(a => a.config.name).sort().join(',');
+    const areaNames = nearbyAreas.map(a => a.id).sort().join(',');
+    const perceptionKey = `${nearbyNames}|${areaNames}`;
     if (perceptionKey === this.lastPerceptionKey) return observations;
     this.lastPerceptionKey = perceptionKey;
 
