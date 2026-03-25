@@ -680,7 +680,19 @@ export class SimulationEngine {
       });
     }
 
-    // Recreate cognition
+    // Clear old memories so resurrected agents start fresh
+    if (this.persistence) {
+      this.persistence.client
+        .from('memories')
+        .delete()
+        .eq('agent_id', id)
+        .then(({ error }) => {
+          if (error) console.error(`[Engine] Failed to clear memories for ${agent.config.name}:`, error.message);
+          else console.log(`[Engine] Cleared memories for ${agent.config.name} on resurrection`);
+        });
+    }
+
+    // Recreate cognition with fresh worldView — no stale knowledge from past life
     const keyData = this.agentApiKeys.get(id);
     const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
     const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
@@ -689,9 +701,11 @@ export class SimulationEngine {
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
-    // Preserve worldViewParts — resurrection keeps knowledge
-    const oldCognition = this.cognitions.get(id);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
+    const spawnArea = SimulationEngine.SPAWN_AREAS[
+      Math.floor(Math.random() * SimulationEngine.SPAWN_AREAS.length)
+    ];
+    const startingParts = buildStartingWorldViewParts(spawnArea);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
     this.wireTieredMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
