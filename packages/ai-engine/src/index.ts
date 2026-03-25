@@ -551,7 +551,7 @@ ${situation.trigger}
 
 WHAT'S POSSIBLE:
 ${situation.availableActions.map(a => a.id + ' — ' + a.label).join('\n')}
-custom — Do something not listed (describe it in customAction)
+Every action above is real and has consequences. Pick the one YOUR CHARACTER would do.
 
 Now — what do you actually WANT to do?
 
@@ -570,7 +570,7 @@ ${situation.nearbyAgents.length > 0 ? 'People here RIGHT NOW: ' + situation.near
 ${!situation.socialPressure && !situation.commitments ? 'You have NO promises, NO unfinished business, NO relationships yet.' : ''}
 Your sayAloud MUST only reference people present and items you own. If alone, say nothing or mutter to yourself about your surroundings.
 
-Your actionId MUST be one of the IDs listed above, or "custom". Don't invent action IDs.
+Your actionId MUST be one of the IDs listed above. Do NOT invent action IDs.
 
 Reply with ONLY valid JSON, no other text:
 {"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel","sayAloud":"what you say out loud, or null if alone"}`;
