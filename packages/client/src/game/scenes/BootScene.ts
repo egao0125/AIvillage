@@ -251,6 +251,7 @@ export class BootScene extends Phaser.Scene {
     this.generateForestFloorTile();
     this.generateFlowerTile();
     this.generateBridgeTile();
+    this.generateCropTile();
   }
 
   // ── Grass ──────────────────────────────────────────────────
@@ -817,6 +818,79 @@ export class BootScene extends Phaser.Scene {
     }
 
     g.generateTexture('tile_bridge', T, T);
+    g.destroy();
+  }
+
+  // ── Crop (farm soil with planted rows) ─────────────────────
+  private generateCropTile(): void {
+    const g = this.add.graphics();
+    const rng = seeded(555);
+
+    const SOIL_BASE = 0x5a3e1e;
+    const SOIL_DARK = 0x4a3018;
+    const SOIL_LIGHT = 0x6a4e2e;
+    const CROP_GREEN = 0x3a8a28;
+    const CROP_LIGHT = 0x4ca838;
+    const CROP_DARK = 0x2a6a1a;
+    const WHEAT_TOP = 0xc8a840;
+
+    // Base soil fill
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const noise = rng() * 0.3;
+        const c = noise > 0.2 ? SOIL_LIGHT : noise > 0.1 ? SOIL_BASE : SOIL_DARK;
+        px(g, x, y, c);
+      }
+    }
+
+    // Furrow lines (horizontal dark grooves every 8px)
+    for (let row = 0; row < 4; row++) {
+      const fy = row * 8 + 3;
+      for (let x = 0; x < T; x++) {
+        px(g, x, fy, SOIL_DARK);
+        px(g, x, fy + 1, darken(SOIL_DARK, 0.1));
+      }
+    }
+
+    // Crop sprouts growing from furrows
+    for (let row = 0; row < 4; row++) {
+      const baseY = row * 8 + 2; // just above furrow
+      for (let cx = 2; cx < T - 1; cx += 3 + Math.floor(rng() * 2)) {
+        const height = 2 + Math.floor(rng() * 3);
+        const isWheat = rng() > 0.4;
+
+        // Stem
+        for (let h = 0; h < height; h++) {
+          const lean = h === height - 1 && rng() > 0.6 ? (rng() > 0.5 ? 1 : -1) : 0;
+          const sx = cx + lean;
+          const sy = baseY - h;
+          if (sy >= 0 && sy < T && sx >= 0 && sx < T) {
+            px(g, sx, sy, h === 0 ? CROP_DARK : CROP_GREEN);
+          }
+        }
+
+        // Top — wheat grain or leaf
+        const topY = baseY - height;
+        if (topY >= 0 && topY < T) {
+          if (isWheat) {
+            px(g, cx, topY, WHEAT_TOP);
+            if (cx + 1 < T) px(g, cx + 1, topY, darken(WHEAT_TOP, 0.1));
+          } else {
+            px(g, cx, topY, CROP_LIGHT);
+            if (cx - 1 >= 0) px(g, cx - 1, topY + 1, CROP_LIGHT);
+          }
+        }
+      }
+    }
+
+    // Scattered soil crumbs for texture
+    for (let i = 0; i < 8; i++) {
+      const sx = Math.floor(rng() * 30) + 1;
+      const sy = Math.floor(rng() * 30) + 1;
+      px(g, sx, sy, lighten(SOIL_BASE, 0.15));
+    }
+
+    g.generateTexture('tile_crop', T, T);
     g.destroy();
   }
 

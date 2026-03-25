@@ -26,6 +26,7 @@ const TILE_TEXTURE_MAP: Record<number, string> = {
   [TILE_TYPES.FLOWERS]: 'tile_flowers',
   [TILE_TYPES.BRIDGE]: 'tile_bridge',
   [TILE_TYPES.FLOOR_DARK]: 'tile_floor_dark',
+  [TILE_TYPES.CROP]: 'tile_crop',
 };
 
 export class VillageScene extends Phaser.Scene {
