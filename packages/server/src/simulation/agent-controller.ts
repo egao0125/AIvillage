@@ -1742,7 +1742,7 @@ export class AgentController {
           console.warn(`[Sanitize] ${this.agent.config.name} sayAloud references absent person: "${decision.sayAloud.substring(0, 60)}..."`);
           // Don't broadcast confabulated speech
         } else {
-          this.broadcaster.agentAction(this.agent.id, `says: "${decision.sayAloud}"`);
+          this.broadcaster.agentSpeak(this.agent.id, this.agent.config.name, decision.sayAloud, '');
         }
       }
 
