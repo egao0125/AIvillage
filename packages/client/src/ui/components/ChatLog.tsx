@@ -93,10 +93,14 @@ export const ChatLog: React.FC = () => {
               <span style={{ color: p1Color, fontWeight: 'bold' }}>
                 {group.participants[0] || '?'}
               </span>
-              <span style={{ color: COLORS.textDim }}>&</span>
-              <span style={{ color: p2Color, fontWeight: 'bold' }}>
-                {group.participants[1] || '?'}
-              </span>
+              {group.participants[1] && (
+                <>
+                  <span style={{ color: COLORS.textDim }}>&</span>
+                  <span style={{ color: p2Color, fontWeight: 'bold' }}>
+                    {group.participants[1]}
+                  </span>
+                </>
+              )}
             </div>
 
             {/* Messages */}

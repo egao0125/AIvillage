@@ -1031,7 +1031,7 @@ export class AgentController {
     const active = ledger.filter(e => e.status === 'proposed' || e.status === 'accepted');
     if (active.length === 0) return '';
     const lines = active.map(e => {
-      const others = e.targetIds.map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
+      const others = (e.targetIds ?? []).map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
       const tag = e.source === 'secondhand' ? ' (secondhand)' : '';
       return `- [${e.status}] ${e.description}${tag}`;
     });
@@ -1044,7 +1044,7 @@ export class AgentController {
     const today = ledger.filter(e => e.day === this.world.time.day || e.status === 'accepted');
     if (today.length === 0) return '';
     const lines = today.map(e => {
-      const others = e.targetIds.map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
+      const others = (e.targetIds ?? []).map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
       return `- [${e.status}] ${e.description} (with ${others})`;
     });
     return `\nSOCIAL COMMITMENTS TODAY:\n${lines.join('\n')}`;
@@ -1987,30 +1987,7 @@ export class AgentController {
       // Broadcast thought
       this.broadcaster.agentThought(this.agent.id, decision.reason);
 
-      // Execute the decision FIRST — then broadcast sayAloud only if action succeeded
       await this.executeDecision(decision, situation);
-
-      // Say aloud AFTER execution — only block direct address to dead/unknown agents
-      if (decision.sayAloud) {
-        let suppress = false;
-        const addressPattern = /^(hey|hi|hello|excuse me|listen)\s+(\w+)/i;
-        const addressMatch = decision.sayAloud.match(addressPattern);
-        if (addressMatch) {
-          const addressedName = addressMatch[2].toLowerCase();
-          const nearbyIds = new Set(
-            this.world.getNearbyAgents(this.agent.position, 5).map(a => a.id)
-          );
-          const addressedAgent = Array.from(this.world.agents.values())
-            .find(a => a.config.name.split(' ')[0].toLowerCase() === addressedName);
-          if (addressedAgent && !nearbyIds.has(addressedAgent.id) && addressedAgent.alive === false) {
-            console.log(`[Sanitize] ${this.agent.config.name} tried to address dead agent ${addressedName}`);
-            suppress = true;
-          }
-        }
-        if (!suppress) {
-          this.broadcaster.agentSpeak(this.agent.id, this.agent.config.name, decision.sayAloud, '');
-        }
-      }
 
     } catch (err) {
       this.handleApiFailure(err);
