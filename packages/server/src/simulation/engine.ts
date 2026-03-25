@@ -753,6 +753,19 @@ export class SimulationEngine {
     controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
+    // Seed fresh-start memories so first decide() has grounding
+    const identityText = agent.config.soul || agent.config.backstory || '';
+    void cognition.addMemory({
+      id: crypto.randomUUID(), agentId: id, type: 'reflection',
+      content: `I am ${agent.config.name}. ${identityText}`,
+      importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+    });
+    void cognition.addMemory({
+      id: crypto.randomUUID(), agentId: id, type: 'observation',
+      content: 'I just arrived at the village plaza. I have some bread and nothing else. I should look around and figure out what to do.',
+      importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+    });
+
     // Place at plaza
     const spawnPos = getAreaEntrance('plaza');
     this.world.updateAgentPosition(id, spawnPos);

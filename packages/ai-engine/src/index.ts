@@ -565,6 +565,10 @@ Think about:
 - Have you been doing the same thing too long? Are you bored?
 - Is someone nearby you care about — or don't trust?
 
+IMPORTANT: Only reference what is REAL. Your inventory is listed above — if wheat isn't listed, you don't have wheat. The people nearby are listed above — if someone isn't listed, they aren't here. Don't narrate actions you haven't done. Don't reference promises or relationships you have no memory of. If you just arrived and your memories are blank, that's your reality — you're new here.
+
+Your actionId MUST be one of the IDs listed above, or "custom". Don't invent action IDs.
+
 Reply with ONLY valid JSON, no other text:
 {"actionId":"...","reason":"2-3 sentences. Be honest with yourself. First person. This is your inner voice — nobody hears this. What's REALLY driving this choice? Not just 'I need food' but what else is going on — who are you thinking about, what are you avoiding, what do you wish would happen?","mood":"how you actually feel","sayAloud":"what you say out loud, if anything (optional — others nearby WILL hear this and remember it)"}`;
 
