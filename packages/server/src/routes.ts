@@ -435,7 +435,7 @@ Relationships: ${mentalModels}`;
     '/api/agents/:id/resurrect',
     rateLimit(10, 60_000),
     requireAuth,
-    (req, res) => {
+    async (req, res) => {
       const id = req.params.id as string;
       const snapshot = engine.getSnapshot();
       const agent = snapshot.agents.find(a => a.id === id);
@@ -447,7 +447,7 @@ Relationships: ${mentalModels}`;
         res.status(403).json({ error: 'You can only resurrect your own agents' });
         return;
       }
-      const success = engine.resurrectAgent(id);
+      const success = await engine.resurrectAgent(id);
       if (!success) {
         res.status(400).json({ error: 'Agent is not dead' });
         return;
@@ -461,8 +461,8 @@ Relationships: ${mentalModels}`;
     '/api/admin/resurrect-all',
     rateLimit(3, 60_000),
     requireAuth,
-    (_req, res) => {
-      const resurrected = engine.resurrectAllAgents();
+    async (_req, res) => {
+      const resurrected = await engine.resurrectAllAgents();
       res.json({ success: true, resurrected });
     },
   );

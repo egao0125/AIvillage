@@ -43,6 +43,7 @@ export class AgentController {
   path: Position[] = [];
   pathIndex: number = 0;
   private moveTick: number = 0;
+  private lastHungerHour: number = -1; // guard against double hunger tick
   activityTimer: number = 0;
   idleTimer: number = 0;
   private planningInProgress: boolean = false;
@@ -597,12 +598,20 @@ export class AgentController {
       }
     }
 
+    // Body actions (eat/rest/sleep) use inventory — execute in place, don't walk somewhere
+    const IN_PLACE = /^(eat|rest|sleep|consume|drink)\b/i;
+    const inPlace = !talkTargetAgent && IN_PLACE.test(currentStep.trim());
+
     // Path toward target agent's actual position for talk intentions,
     // otherwise infer location from step text
-    const areaId = this.resolveLocation(currentStep);
+    const areaId = inPlace
+      ? (getAreaAt(this.agent.position)?.id ?? 'plaza')
+      : this.resolveLocation(currentStep);
     const targetPos = talkTargetAgent
       ? { ...talkTargetAgent.position }
-      : getRandomPositionInArea(areaId);
+      : inPlace
+        ? { ...this.agent.position }
+        : getRandomPositionInArea(areaId);
 
     console.log(`[Agent] ${this.agent.config.name} → ${currentStep}${steps.length > 1 ? ` (${steps.length} steps from: "${intention}")` : ''}`);
 
@@ -1173,42 +1182,16 @@ export class AgentController {
     const v = this.agent.vitals;
     if (!v) return;
 
-    // Hunger increases every game hour
-    if (this.world.time.minute === 0) {
+    // --- Hourly effects (guard: engine ticks 2x per game minute,
+    // so minute===0 is true for 2 consecutive ticks — only apply once per hour)
+    const currentHour = this.world.time.day * 24 + this.world.time.hour;
+    if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
+      this.lastHungerHour = currentHour;
+
+      // Hunger increases every game hour
       v.hunger = Math.min(100, v.hunger + 1.0);
-    }
 
-    // Energy depletes during activity, restores during sleep/rest
-    if (this.state === 'performing' || this.state === 'moving') {
-      const lower = this.currentPerformingActivity.toLowerCase();
-      const isResting = lower.includes('rest') || lower.includes('relax') || lower.includes('nap') || lower.includes('sit') || lower.includes('meditat');
-      if (isResting) {
-        v.energy = Math.min(100, v.energy + 0.1);
-      } else {
-        v.energy = Math.max(0, v.energy - 0.03);
-      }
-    } else if (this.state === 'idle') {
-      v.energy = Math.min(100, v.energy + 0.02);
-    } else if (this.state === 'sleeping') {
-      v.energy = Math.min(100, v.energy + 0.5);
-    }
-
-    // Vitals affect health — starvation and exhaustion can kill
-    if (v.hunger >= 85) {
-      v.health = Math.max(0, v.health - 0.05);
-    } else if (v.hunger >= 70) {
-      v.health = Math.max(0, v.health - 0.02);
-    }
-    if (v.energy <= 5) {
-      v.health = Math.max(0, v.health - 0.03);
-    }
-    // Passive health regen when not starving/exhausted
-    if (v.hunger < 70 && v.energy > 20) {
-      v.health = Math.min(100, v.health + 0.02);
-    }
-
-    // Cold damage + building effects (once per game hour)
-    if (this.world.time.minute === 0) {
+      // Cold damage + building effects
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
       const currentSeason = SEASON_ORDER[seasonIdx];
       const seasonDef = SEASONS[currentSeason];
@@ -1259,6 +1242,35 @@ export class AgentController {
           }
         }
       }
+    }
+
+    // Energy depletes during activity, restores during sleep/rest
+    if (this.state === 'performing' || this.state === 'moving') {
+      const lower = this.currentPerformingActivity.toLowerCase();
+      const isResting = lower.includes('rest') || lower.includes('relax') || lower.includes('nap') || lower.includes('sit') || lower.includes('meditat');
+      if (isResting) {
+        v.energy = Math.min(100, v.energy + 0.1);
+      } else {
+        v.energy = Math.max(0, v.energy - 0.03);
+      }
+    } else if (this.state === 'idle') {
+      v.energy = Math.min(100, v.energy + 0.02);
+    } else if (this.state === 'sleeping') {
+      v.energy = Math.min(100, v.energy + 0.5);
+    }
+
+    // Vitals affect health — starvation and exhaustion can kill
+    if (v.hunger >= 85) {
+      v.health = Math.max(0, v.health - 0.05);
+    } else if (v.hunger >= 70) {
+      v.health = Math.max(0, v.health - 0.02);
+    }
+    if (v.energy <= 5) {
+      v.health = Math.max(0, v.health - 0.03);
+    }
+    // Passive health regen when not starving/exhausted
+    if (v.hunger < 70 && v.energy > 20) {
+      v.health = Math.min(100, v.health + 0.02);
     }
 
     // Death check — health reaching 0 is fatal
