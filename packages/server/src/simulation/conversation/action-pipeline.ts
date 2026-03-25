@@ -261,7 +261,7 @@ export class ActionPipeline {
           };
           this.world.addBoardPost(post);
           this.broadcaster.boardPost(post);
-          this.broadcastToFeed(actorId, `posted: "${(data.content || '').slice(0, 60)}"`, '\u{1F4CB}');
+          this.broadcaster.agentAction(actorId, `posted: "${(data.content || '').slice(0, 60)}"`, '\u{1F4CB}');
         }
         else if (type === 'item') {
           const item: Item = {
@@ -272,7 +272,7 @@ export class ActionPipeline {
           };
           this.world.addItem(item);
           this.broadcaster.agentInventory(actorId, actor.inventory);
-          this.broadcastToFeed(actorId, `created ${item.name}`, '\u{1F528}');
+          this.broadcaster.agentAction(actorId, `created ${item.name}`, '\u{1F528}');
         }
         else if (type === 'artifact') {
           const artifact: Artifact = {
@@ -286,7 +286,7 @@ export class ActionPipeline {
           };
           this.world.addArtifact(artifact);
           this.broadcaster.artifactCreated(artifact);
-          this.broadcastToFeed(actorId, `created ${data.artifactType || 'artifact'}: "${data.title}"`, '\u{270D}\uFE0F');
+          this.broadcaster.agentAction(actorId, `created ${data.artifactType || 'artifact'}: "${data.title}"`, '\u{270D}\uFE0F');
         }
         else if (type === 'building') {
           const materialItem = actor.inventory.find(i => i.type === 'material');
@@ -307,7 +307,7 @@ export class ActionPipeline {
             };
             this.world.addBuilding(building);
             this.broadcaster.buildingUpdate(building);
-            this.broadcastToFeed(actorId, `built ${building.name}`, '\u{1F3D7}\uFE0F');
+            this.broadcaster.agentAction(actorId, `built ${building.name}`, '\u{1F3D7}\uFE0F');
           }
         }
         else if (type === 'world_object') {
@@ -324,7 +324,7 @@ export class ActionPipeline {
             lastInteractedAt: this.world.time.totalMinutes,
           };
           this.world.addWorldObject(worldObj);
-          this.broadcastToFeed(actorId, `created ${worldObj.name}`, '✨');
+          this.broadcaster.agentAction(actorId, `created ${worldObj.name}`, '✨');
         }
         else if (type === 'institution') {
           const inst: Institution = {
@@ -336,7 +336,7 @@ export class ActionPipeline {
           };
           this.world.addInstitution(inst);
           this.broadcaster.institutionUpdate(inst);
-          this.broadcastToFeed(actorId, `founded ${inst.name}`, '\u{1F3DB}\uFE0F');
+          this.broadcaster.agentAction(actorId, `founded ${inst.name}`, '\u{1F3DB}\uFE0F');
         }
         else if (type === 'secret') {
           const aboutAgent = data.about ? findAgentByName(this.world, data.about) : undefined;
@@ -355,7 +355,7 @@ export class ActionPipeline {
           };
           this.world.startElection(election);
           this.broadcaster.electionUpdate(election);
-          this.broadcastToFeed(actorId, `called election for ${data.position}`, '\u{1F5F3}\uFE0F');
+          this.broadcaster.agentAction(actorId, `called election for ${data.position}`, '\u{1F5F3}\uFE0F');
         }
 
         void cognition.addMemory({
@@ -389,7 +389,7 @@ export class ActionPipeline {
           if (obj) {
             if (op.description) obj.description = op.description;
             obj.lastInteractedAt = this.world.time.totalMinutes;
-            this.broadcastToFeed(actorId, `modified ${obj.name}`, '🔧');
+            this.broadcaster.agentAction(actorId, `modified ${obj.name}`, '🔧');
           }
           break;
         }
@@ -489,7 +489,7 @@ export class ActionPipeline {
             const toBal = this.world.updateAgentCurrency(toAgent.id, amount);
             this.broadcaster.agentCurrency(fromAgent.id, fromBal, -amount, op.reason || `transferred to ${toAgent.config.name}`);
             this.broadcaster.agentCurrency(toAgent.id, toBal, amount, op.reason || `received from ${fromAgent.config.name}`);
-            this.broadcastToFeed(actorId, `${fromAgent.id === actorId ? 'gave' : 'took'} ${amount}G ${fromAgent.id === actorId ? 'to' : 'from'} ${toAgent.config.name}`, '\u{1F4B0}');
+            this.broadcaster.agentAction(actorId, `${fromAgent.id === actorId ? 'gave' : 'took'} ${amount}G ${fromAgent.id === actorId ? 'to' : 'from'} ${toAgent.config.name}`, '\u{1F4B0}');
           }
         }
         else if (what === 'item') {
@@ -509,7 +509,7 @@ export class ActionPipeline {
             }
             this.broadcaster.agentInventory(fromAgent.id, fromAgent.inventory);
             this.broadcaster.agentInventory(toAgent.id, toAgent.inventory);
-            this.broadcastToFeed(actorId, `transferred ${item.name} to ${toAgent.config.name}`, '\u{1F4E6}');
+            this.broadcaster.agentAction(actorId, `transferred ${item.name} to ${toAgent.config.name}`, '\u{1F4E6}');
           } else {
             void cognition.addMemory({
               id: crypto.randomUUID(), agentId: actorId, type: 'observation',
@@ -562,12 +562,8 @@ export class ActionPipeline {
       }
 
       case 'observe': {
-        const observation = op.observation || op.content || 'Observed surroundings.';
-        void cognition.addMemory({
-          id: crypto.randomUUID(), agentId: actorId, type: 'observation',
-          content: observation, importance: 5, timestamp: Date.now(), relatedAgentIds: [],
-        });
-        this.broadcastToFeed(actorId, observation.slice(0, 80), '\u{1F441}\uFE0F');
+        // Disabled — agents can't actually observe body language/expressions on a 2D map.
+        // Storing fabricated observations as memories pollutes future decisions.
         break;
       }
 
@@ -826,7 +822,7 @@ export class ActionPipeline {
               };
               this.world.addBuilding(building);
             }
-            this.broadcastToFeed(actorId, `finished building ${buildDef?.name ?? 'structure'}!`, '🏗️');
+            this.broadcaster.agentAction(actorId, `finished building ${buildDef?.name ?? 'structure'}!`, '🏗️');
           }
         }
       }
@@ -888,7 +884,7 @@ export class ActionPipeline {
         };
         this.world.addBoardPost(post);
         this.broadcaster.boardPost(post);
-        this.broadcastToFeed(actorId, `posted: "${messageMatch[1].slice(0, 60)}"`, '📋');
+        this.broadcaster.agentAction(actorId, `posted: "${messageMatch[1].slice(0, 60)}"`, '📋');
       }
     }
 
@@ -961,7 +957,7 @@ export class ActionPipeline {
         actionSuccess: true,
       });
 
-      // Broadcast to feed (not status) — conversation outcomes go to chat feed
+      // Broadcast to feed (not status) — speech acts go to chat feed
       this.broadcastToFeed(actorId, outcome.description.slice(0, 80));
 
       // Store observation memory + trigger think() for each hearer
@@ -1097,7 +1093,7 @@ export class ActionPipeline {
             building.durability = Math.max(0, building.durability - damage);
             if (building.durability <= 0) {
               this.world.buildings.delete(id);
-              this.broadcastToFeed(actorId, `destroyed ${building.name}`, '💥');
+              this.broadcaster.agentAction(actorId, `destroyed ${building.name}`, '💥');
             } else {
               this.broadcaster.buildingUpdate(building);
             }
@@ -1152,7 +1148,7 @@ export class ActionPipeline {
     const emoji = outcome.success
       ? (outcome.type === 'gather' ? '🌾' : outcome.type === 'craft' ? '🔨' : outcome.type === 'build' ? '🏗️' : outcome.type === 'eat' ? '🍽️' : outcome.type === 'rest' ? '💤' : outcome.type === 'sleep' ? '😴' : outcome.type === 'trade_offer' || outcome.type === 'trade_accept' ? '🤝' : outcome.type === 'teach' ? '📚' : outcome.type === 'give' ? '🎁' : outcome.type === 'steal' ? '🫣' : outcome.type === 'fight' ? '⚔️' : outcome.type === 'destroy' ? '💥' : outcome.type === 'repair' ? '🔧' : '✅')
       : '❌';
-    this.broadcastToFeed(actorId, outcome.description.slice(0, 80), emoji);
+    this.broadcaster.agentAction(actorId, outcome.description.slice(0, 80), emoji);
 
     // --- Store structured feedback as memory ---
     const inventorySummary = actor.inventory.length > 0
