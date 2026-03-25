@@ -484,10 +484,10 @@ export class SimulationEngine {
     );
 
     // Save agent to Supabase FIRST, then seed memories (FK: memories.agent_id → agents.id)
-    const seedMemories = () => {
+    const seedMemories = async () => {
       // Use soul (rich character text) when backstory is empty
       const identityText = config.soul || config.backstory || '';
-      void cognition.addMemory({
+      await cognition.addMemory({
         id: crypto.randomUUID(), agentId: id, type: 'reflection',
         content: `I am ${config.name}. ${identityText}`,
         importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
@@ -495,13 +495,13 @@ export class SimulationEngine {
       // Seed goal from explicit goal field, or first desire as fallback
       const effectiveGoal = config.goal || (config.desires?.length ? config.desires[0] : '');
       if (effectiveGoal) {
-        void cognition.addMemory({
+        await cognition.addMemory({
           id: crypto.randomUUID(), agentId: id, type: 'reflection',
           content: `My goal: ${effectiveGoal}`,
           importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
         });
       }
-      void cognition.addMemory({
+      await cognition.addMemory({
         id: crypto.randomUUID(), agentId: id, type: 'observation',
         content: `I just arrived at the ${spawnArea}. I should explore to discover what else is in this village.`,
         importance: 5, timestamp: Date.now(), relatedAgentIds: [],
@@ -509,14 +509,15 @@ export class SimulationEngine {
     };
 
     if (this.persistence) {
+      // Await save + seed so memories exist in Supabase before first decide()
       void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
         .then(() => seedMemories())
         .catch(err => {
           console.error('[Persistence] Save after addAgent failed:', err);
-          seedMemories(); // still seed in-memory even if DB fails
+          return seedMemories(); // still seed in-memory even if DB fails
         });
     } else {
-      seedMemories();
+      void seedMemories();
     }
 
     this.refreshNameMaps();
@@ -753,14 +754,14 @@ export class SimulationEngine {
     controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
-    // Seed fresh-start memories so first decide() has grounding
+    // Seed fresh-start memories — MUST await so first decide() has grounding in Supabase
     const identityText = agent.config.soul || agent.config.backstory || '';
-    void cognition.addMemory({
+    await cognition.addMemory({
       id: crypto.randomUUID(), agentId: id, type: 'reflection',
       content: `I am ${agent.config.name}. ${identityText}`,
       importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
     });
-    void cognition.addMemory({
+    await cognition.addMemory({
       id: crypto.randomUUID(), agentId: id, type: 'observation',
       content: 'I just arrived at the village plaza. I have some bread and nothing else. I should look around and figure out what to do.',
       importance: 5, timestamp: Date.now(), relatedAgentIds: [],
@@ -1644,22 +1645,22 @@ export class SimulationEngine {
       this.wireTieredMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
-      // Seed identity memories
+      // Seed identity memories — await so they exist in Supabase before first decide()
       const identityText = agent.config.soul || agent.config.backstory || '';
-      void cognition.addMemory({
+      await cognition.addMemory({
         id: crypto.randomUUID(), agentId: agent.id, type: 'reflection',
         content: `I am ${agent.config.name}. ${identityText}`,
         importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
       });
       const effectiveGoal = agent.config.goal || (agent.config.desires?.length ? agent.config.desires[0] : '');
       if (effectiveGoal) {
-        void cognition.addMemory({
+        await cognition.addMemory({
           id: crypto.randomUUID(), agentId: agent.id, type: 'reflection',
           content: `My goal: ${effectiveGoal}`,
           importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
         });
       }
-      void cognition.addMemory({
+      await cognition.addMemory({
         id: crypto.randomUUID(), agentId: agent.id, type: 'observation',
         content: `I just arrived at the ${spawnArea}. I should explore to discover what else is in this village.`,
         importance: 5, timestamp: Date.now(), relatedAgentIds: [],

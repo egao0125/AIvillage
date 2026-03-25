@@ -1722,9 +1722,28 @@ export class AgentController {
       // Execute the decision FIRST — then broadcast sayAloud only if action succeeded
       await this.executeDecision(decision, situation);
 
-      // Say aloud AFTER execution (so agent only announces things that actually happened)
+      // Say aloud AFTER execution — but validate against reality first
       if (decision.sayAloud) {
-        this.broadcaster.agentAction(this.agent.id, `says: "${decision.sayAloud}"`);
+        const nearby = this.world.getNearbyAgents(this.agent.position, 5)
+          .filter(a => a.id !== this.agent.id && a.alive !== false);
+        const nearbyNames = new Set(nearby.map(a => a.config.name.split(' ')[0].toLowerCase()));
+        const allAgentNames = new Set(
+          Array.from(this.world.agents.values()).map(a => a.config.name.split(' ')[0].toLowerCase())
+        );
+        const invNames = new Set(this.agent.inventory.map(i => i.name.toLowerCase()));
+
+        // Check for references to people not nearby or items not owned
+        const words = decision.sayAloud.toLowerCase().split(/[\s,!?.'"—]+/);
+        const mentionsMissingPerson = words.some(w => w.length > 2 && allAgentNames.has(w) && !nearbyNames.has(w));
+        const mentionsUnknownName = /\b[A-Z][a-z]{2,}\b/.test(decision.sayAloud) &&
+          nearby.length === 0 && (this.agent.mentalModels?.length ?? 0) === 0;
+
+        if (mentionsMissingPerson || mentionsUnknownName) {
+          console.warn(`[Sanitize] ${this.agent.config.name} sayAloud references absent person: "${decision.sayAloud.substring(0, 60)}..."`);
+          // Don't broadcast confabulated speech
+        } else {
+          this.broadcaster.agentAction(this.agent.id, `says: "${decision.sayAloud}"`);
+        }
       }
 
     } catch (err) {
