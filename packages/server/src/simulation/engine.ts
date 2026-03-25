@@ -698,6 +698,16 @@ export class SimulationEngine {
     agent.inventory = [];
     agent.skills = [];
 
+    // Erase narrative texts that reference previous-life relationships/events
+    agent.config.soul = '';
+    agent.config.backstory = '';
+    agent.config.goal = '';
+    agent.config.fears = [];
+    agent.config.desires = [];
+    agent.config.contradictions = undefined;
+    agent.config.secretShames = undefined;
+    agent.config.startingRelationships = undefined;
+
     // Give starting food so they don't immediately starve again
     for (let i = 0; i < 3; i++) {
       this.world.addItem({
@@ -1632,8 +1642,19 @@ export class SimulationEngine {
       agent.inventory = [];
       agent.skills = [];
       agent.mentalModels = [];
+      agent.socialLedger = [];
       agent.institutionIds = [];
       agent.joinedDay = 1;
+
+      // Erase narrative texts that reference previous-life relationships/events
+      agent.config.soul = '';
+      agent.config.backstory = '';
+      agent.config.goal = '';
+      agent.config.fears = [];
+      agent.config.desires = [];
+      agent.config.contradictions = undefined;
+      agent.config.secretShames = undefined;
+      agent.config.startingRelationships = undefined;
 
       // Recreate cognition with fresh worldView
       const keyData = this.agentApiKeys.get(agent.id);
