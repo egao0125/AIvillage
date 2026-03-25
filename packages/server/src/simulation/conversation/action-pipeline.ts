@@ -953,8 +953,8 @@ export class ActionPipeline {
         actionSuccess: true,
       });
 
-      // Broadcast the action (UI shows it, but only nearby agents actually "heard" it)
-      this.broadcaster.agentAction(actorId, outcome.description.slice(0, 80), '💬');
+      // Broadcast to feed (not status) — conversation outcomes go to chat feed
+      this.broadcaster.agentSpeak(actorId, actor.config.name, outcome.description.slice(0, 80), convInfo?.conversationId ?? '');
 
       // Store observation memory + trigger think() for each hearer
       if (cognitions) {
