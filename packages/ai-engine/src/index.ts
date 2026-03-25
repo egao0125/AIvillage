@@ -545,6 +545,17 @@ Inventory: ${invStr}
 ${nearbyStr}
 ${situation.goals?.length ? '\nYOUR PRIORITIES TODAY:\n' + situation.goals.map((g, i) => (i + 1) + '. ' + g).join('\n') : ''}
 ${situation.commitments || ''}${situation.socialPressure || ''}
+${situation.nearbyAgents.length > 0 ? `
+WHAT YOU NOTICE:
+${situation.nearbyAgents.map(a => {
+  const parts = [a.name + ' is here'];
+  if (a.activity.includes('[carrying:')) {
+    parts.push('— you can see what they have');
+  }
+  return parts.join(' ');
+}).join('\n')}
+
+People are complicated. They help when it suits them and take when they think you won't notice. What someone carries tells you about their priorities. What they say and what they do are often different things.` : ''}
 
 ${situation.recentOutcome ? 'JUST HAPPENED: ' + situation.recentOutcome + '\n' : ''}HERE'S WHAT'S GOING ON:
 ${situation.trigger}
@@ -557,12 +568,17 @@ Now — what do you actually WANT to do?
 
 Not what's optimal. Not what's safe. What does YOUR CHARACTER want right now?
 ${situation.nearbyAgents.length > 0 || situation.socialPressure || situation.commitments ? `
-The interesting choice is rarely the smart choice.
+The interesting choice is rarely the safe choice.
 
 Think about:
-- Is there anyone nearby you have unfinished business with?
-- Is there something eating at you that isn't about food or energy?
-- Have you been doing the same thing too long? Are you bored?` : `You're still getting settled. Explore, meet people, take care of your basic needs.`}
+- Does someone here have something you need?
+- Does someone here owe you something?
+- Is someone here getting more than their share?
+- Would an alliance with someone here change your position?
+- Is someone here a threat to you? To someone you care about?
+- What would happen if you confronted someone right now?
+
+You don't have to be good. You don't have to be bad. You have to be YOU — with all your specific fears, grudges, hungers, and calculations.` : `You're still getting settled. Explore, meet people, take care of your basic needs.`}
 
 FACTS:
 You have EXACTLY these items: ${invStr}. Nothing else. No wheat, no tools, no materials unless listed above.
