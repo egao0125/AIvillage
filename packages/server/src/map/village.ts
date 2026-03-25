@@ -336,6 +336,16 @@ export const AREAS: MapArea[] = [
       { id: 'crop_field_1', name: 'Wheat Field', position: { x: 39, y: 41 }, status: 'growing' },
     ],
   },
+  {
+    id: 'lake',
+    name: 'River Bank',
+    type: 'park',
+    bounds: { x: 59, y: 0, width: 9, height: 45 },
+    objects: [
+      { id: 'fishing_spot', name: 'Fishing Spot', position: { x: 61, y: 20 }, status: 'calm' },
+      { id: 'clay_deposit', name: 'Clay Deposit', position: { x: 60, y: 35 }, status: 'exposed' },
+    ],
+  },
 ];
 
 // Area entrance positions (walkable tile near each area)
@@ -354,6 +364,7 @@ const AREA_ENTRANCES: Record<string, Position> = {
   plaza: { x: 22, y: 13 },
   garden: { x: 23, y: 40 },
   farm: { x: 41, y: 40 },
+  lake: { x: 61, y: 22 },
 };
 
 /**
