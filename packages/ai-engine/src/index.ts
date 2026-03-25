@@ -186,7 +186,8 @@ ${this.myExperience}`;
    * Single LLM call replaces the old transcript storage + separate extractFacts approach.
    */
   async summarizeConversation(transcript: string, othersLabel: string): Promise<string> {
-    const prompt = `You are ${this.agent.config.name}. You just talked with ${othersLabel}.
+    const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.`;
+    const userPrompt = `You just talked with ${othersLabel}.
 
 Here's what was said:
 ${transcript}
@@ -199,7 +200,7 @@ Summarize in JSON:
   "tension": "any unresolved conflict, distrust, or worry (or null if none)"
 }
 JSON ONLY.`;
-    return this.llm.complete(prompt, '');
+    return this.llm.complete(systemPrompt, userPrompt);
   }
 
   /**
@@ -592,17 +593,16 @@ Now — what do you actually WANT to do?
 
 Not what's optimal. Not what's safe. What does YOUR CHARACTER want right now?
 ${situation.nearbyAgents.length > 0 || situation.socialPressure || situation.commitments ? `
-The interesting choice is rarely the safe choice.
+Before you talk to anyone, ask yourself:
+- Have I eaten today? Do I have food for tomorrow?
+- Have I gathered or built anything useful recently?
+- Am I just talking to avoid doing something harder?
 
-Think about:
-- Does someone here have something you need?
-- Does someone here owe you something?
-- Is someone here getting more than their share?
-- Would an alliance with someone here change your position?
-- Is someone here a threat to you? To someone you care about?
-- What would happen if you confronted someone right now?
+Then ask:
+- Is there someone here I have real business with?
+- Not small talk — real business. A trade, a debt, an accusation, an alliance that changes something.
 
-You don't have to be good. You don't have to be bad. You have to be YOU — with all your specific fears, grudges, hungers, and calculations.` : `You're still getting settled. Explore, meet people, take care of your basic needs.`}
+Talk is cheap. Actions keep you alive. If you've been talking all day and your inventory is empty, that's a problem.` : `You're still getting settled. Explore, take care of your basic needs, gather resources.`}
 
 FACTS:
 You have EXACTLY these items: ${invStr}. Nothing else. No wheat, no tools, no materials unless listed above.

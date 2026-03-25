@@ -62,6 +62,7 @@ export class AgentController {
   private lastHungerBand: number = 0;
   private lastEnergyBand: number = 0;
   private lastHealthBand: number = 0;
+  private lastHungerConcernBand: number = 0;
   public lastOutcomeDescription: string = '';
   decisionQueue?: DecisionQueue;  // Infra 3: injected by engine
   // Refactor v2: structured decision system
@@ -680,8 +681,8 @@ export class AgentController {
     if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
       this.lastHungerHour = currentHour;
 
-      // Hunger increases every game hour (0.5 per hour — agents last longer)
-      v.hunger = Math.min(100, v.hunger + 0.5);
+      // Hunger increases every game hour (1.0 per hour — provisions gone by Day 2, desperate by Day 4-5)
+      v.hunger = Math.min(100, v.hunger + 1.0);
 
       // Cold damage + building effects
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
@@ -824,17 +825,24 @@ export class AgentController {
     }
 
     // Four Stream: add vitals as concerns at threshold crossings
+    // At 1 hunger/hour: band 1 ~Day 1, band 2 ~Day 2-3, band 3 ~Day 3-4 (desperate enough to steal)
     if (this.cognition.fourStream) {
-      if (hungerBand > this.lastHungerBand && hungerBand >= 1) {
+      const hungerConcernBand = v.hunger >= 85 ? 3 : v.hunger >= 60 ? 2 : v.hunger >= 35 ? 1 : 0;
+      if (hungerConcernBand > this.lastHungerConcernBand) {
+        const urgency = hungerConcernBand === 3 ? 'I\'m starving. I need food NOW — I\'d do anything to eat.'
+          : hungerConcernBand === 2 ? 'I\'m really hungry. I need to find food urgently.'
+          : 'I\'m getting hungry. I should look for food.';
         this.cognition.fourStream.addConcern({
           id: crypto.randomUUID(),
-          content: hungerBand === 2 ? 'I\'m starving. I need food NOW or I\'ll die.' : 'I\'m getting hungry. I need to find food.',
+          content: urgency,
           category: 'need',
           relatedAgentIds: [],
           createdAt: this.world.time.totalMinutes,
           expiresAt: this.world.time.totalMinutes + 480,
         });
       }
+      this.lastHungerConcernBand = hungerConcernBand;
+
       if (energyBand > this.lastEnergyBand && energyBand >= 1) {
         this.cognition.fourStream.addConcern({
           id: crypto.randomUUID(),
@@ -1357,10 +1365,11 @@ export class AgentController {
       });
     }
 
-    // 4. SOCIAL actions
+    // 4. SOCIAL actions — limited per nearby agent to avoid drowning out physical options
     const nearby = this.world.getNearbyAgents(this.agent.position, 5)
       .filter(a => a.id !== this.agent.id && a.alive !== false && a.state !== 'sleeping');
     const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
+    const myHunger = this.agent.vitals?.hunger ?? 0;
     for (const a of nearby) {
       // Show what nearby agents have — creates envy, trade motivation, steal temptation
       const otherInv = a.inventory.length > 0
@@ -1375,37 +1384,48 @@ export class AgentController {
       nearbyForSituation.push({ name: a.config.name, activity: (a.currentAction || 'idle') + otherInvStr, id: a.id });
       const firstName = a.config.name.split(' ')[0].toLowerCase();
 
-      // Talk
+      const model = this.agent.mentalModels?.find(m => m.targetId === a.id);
+      const trust = model?.trust ?? 0;
+      const otherHasItems = a.inventory.length > 0;
+
+      // Talk — always available
       if (this.conversationCooldown <= 0) {
         actions.push({ id: 'talk_' + firstName, label: 'Talk to ' + a.config.name, category: 'social' });
       }
 
-      // Give / Trade (if agent has items)
-      if (this.agent.inventory.length > 0) {
+      // Give or Trade — only if agent has items, pick one based on trust
+      if (this.agent.inventory.length > 0 && otherHasItems) {
+        if (trust > 20) {
+          actions.push({ id: 'give_to_' + firstName, label: 'Give something to ' + a.config.name, category: 'social' });
+        } else if (trust >= 0) {
+          actions.push({ id: 'trade_with_' + firstName, label: 'Propose a trade with ' + a.config.name, category: 'social' });
+        }
+      } else if (this.agent.inventory.length > 0 && trust > 20) {
         actions.push({ id: 'give_to_' + firstName, label: 'Give something to ' + a.config.name, category: 'social' });
-        actions.push({ id: 'trade_with_' + firstName, label: 'Propose a trade with ' + a.config.name, category: 'social' });
       }
 
-      // Teach (if agent has a skill)
-      const teachableSkills = this.agent.skills?.filter(s => s.level >= 1) ?? [];
-      if (teachableSkills.length > 0) {
-        actions.push({ id: 'teach_' + firstName, label: 'Teach ' + teachableSkills[0].name + ' to ' + a.config.name, category: 'social' });
+      // Steal — only if other has items AND (hungry or distrusted)
+      if (otherHasItems && (myHunger >= 40 || trust < -10)) {
+        actions.push({ id: 'steal_from_' + firstName, label: 'Steal from ' + a.config.name + ' — risky', category: 'social' });
       }
 
-      // Confront (if trust is negative)
-      const model = this.agent.mentalModels?.find(m => m.targetId === a.id);
-      if (model && model.trust < 0) {
+      // Confront — only if trust is negative
+      if (trust < 0) {
         actions.push({ id: 'confront_' + firstName, label: 'Confront ' + a.config.name, category: 'social' });
       }
-    }
 
-    // Steal / Fight / Alliance — available for ANY nearby agent, shown once to reduce prompt bloat
-    // The LLM uses steal_from_<firstname>, fight_<firstname>, ally_with_<firstname> as actionIds
-    if (nearby.length > 0) {
-      const names = nearby.map(a => a.config.name.split(' ')[0].toLowerCase()).join(', ');
-      actions.push({ id: 'steal_from_<name>', label: `Steal from someone nearby (${names}) — risky`, category: 'social' });
-      actions.push({ id: 'fight_<name>', label: `Attack someone nearby (${names}) — both take damage, everyone remembers`, category: 'social' });
-      actions.push({ id: 'ally_with_<name>', label: `Propose alliance with someone nearby (${names})`, category: 'social' });
+      // Ally — only if trust >= 0 and no existing alliance
+      const hasAlliance = this.agent.socialLedger?.some(e =>
+        e.type === 'alliance' && e.status === 'accepted' && e.targetIds.includes(a.id)
+      );
+      if (trust >= 0 && !hasAlliance) {
+        actions.push({ id: 'ally_with_' + firstName, label: 'Propose alliance with ' + a.config.name, category: 'social' });
+      }
+
+      // Fight — only if trust < -20 or recently wronged
+      if (trust < -20) {
+        actions.push({ id: 'fight_' + firstName, label: 'Attack ' + a.config.name + ' — both take damage, everyone remembers', category: 'social' });
+      }
     }
 
     // Group actions (3+ agents nearby including self)
@@ -1428,16 +1448,20 @@ export class AgentController {
     // 6. ALWAYS available
     actions.push({ id: 'rest', label: 'Rest and recover energy', category: 'rest' });
 
-    // Evening rhythm: put social actions FIRST (before physical) to create natural social time
+    // Action ordering: physical first during daytime, social first in evening
     const hour = this.world.time.hour;
+    const physical = actions.filter(a => a.category === 'physical');
+    const social = actions.filter(a => a.category === 'social');
+    const movement = actions.filter(a => a.category === 'movement');
+    const creative = actions.filter(a => a.category === 'creative');
+    const rest = actions.filter(a => a.category === 'rest');
     let orderedActions: AvailableAction[];
     if (hour >= 19 && hour <= 22) {
-      const social = actions.filter(a => a.category === 'social');
-      const movement = actions.filter(a => a.category === 'movement');
-      const rest = actions.filter(a => a.category === 'rest');
-      const physical = actions.filter(a => a.category === 'physical');
-      const creative = actions.filter(a => a.category === 'creative');
-      orderedActions = [...social, ...movement, ...rest, ...physical, ...creative];
+      // Evening: social time
+      orderedActions = [...social, ...creative, ...physical, ...movement, ...rest];
+    } else if (hour >= 6 && hour < 19) {
+      // Daytime: productive actions first
+      orderedActions = [...physical, ...movement, ...social, ...creative, ...rest];
     } else {
       orderedActions = actions;
     }
@@ -1456,6 +1480,22 @@ export class AgentController {
       || trigger === 'What now?'
       ? trigger + ' ' + this.getTimeOfDayTrigger(hour)
       : trigger;
+
+    // Productivity signal — tell agent if they've been all talk and no action
+    let productivityHint = '';
+    if (this.cognition.fourStream) {
+      const recentTimeline = this.cognition.fourStream.getRecentTimeline(10);
+      const recentGathers = recentTimeline.filter(m =>
+        m.content.includes('Gathered') || m.content.includes('Crafted') || m.content.includes('gathered') || m.content.includes('crafted'));
+      const recentTalks = recentTimeline.filter(m =>
+        m.content.includes('talked') || m.content.includes('Talked'));
+
+      if (recentGathers.length === 0 && this.agent.inventory.length === 0) {
+        productivityHint = 'You have nothing. No food, no materials, no tools. Talking won\'t change that.';
+      } else if (recentGathers.length === 0 && recentTalks.length >= 3) {
+        productivityHint = 'You\'ve been talking a lot but haven\'t gathered or built anything recently. Your inventory won\'t fill itself.';
+      }
+    }
 
     // Social pressure and commitments — use fourStream concerns if available
     let socialPressure: string;
@@ -1494,7 +1534,7 @@ export class AgentController {
       nearbyAgents: nearbyForSituation,
       availableActions: orderedActions,
       recentOutcome,
-      trigger: enrichedTrigger,
+      trigger: enrichedTrigger + (productivityHint ? ' ' + productivityHint : ''),
       goals: this.currentGoals.length > 0 ? this.currentGoals : undefined,
       socialPressure: socialPressure || undefined,
       commitments: commitments || undefined,

@@ -215,11 +215,9 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
   // --- STREAM 3: ACTIVE CONCERNS ---
 
   addConcern(concern: ActiveConcern): void {
-    // Deduplicate by similar content
+    // Deduplicate by exact content only — category+person was too aggressive
     const existing = this.concerns.find(c =>
-      c.content.toLowerCase() === concern.content.toLowerCase() ||
-      (c.category === concern.category &&
-       c.relatedAgentIds.some(id => concern.relatedAgentIds.includes(id)))
+      c.content.toLowerCase() === concern.content.toLowerCase()
     );
     if (existing) return;
 
