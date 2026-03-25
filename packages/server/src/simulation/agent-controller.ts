@@ -67,7 +67,7 @@ export class AgentController {
   // Refactor v2: structured decision system
   public currentGoals: string[] = [];
   private decidingInProgress: boolean = false;
-  private lastTrigger: string = 'You just arrived. Look around and decide what to do.';
+  lastTrigger: string = 'You just arrived. Look around and decide what to do.';
   private lastOutcome: string | undefined;
 
   readonly wakeHour: number;
@@ -1326,7 +1326,17 @@ export class AgentController {
       .filter(a => a.id !== this.agent.id && a.alive !== false && a.state !== 'sleeping');
     const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
     for (const a of nearby) {
-      nearbyForSituation.push({ name: a.config.name, activity: a.currentAction || 'idle', id: a.id });
+      // Show what nearby agents have — creates envy, trade motivation, steal temptation
+      const otherInv = a.inventory.length > 0
+        ? a.inventory.reduce((acc: Record<string, number>, item) => {
+            acc[item.name] = (acc[item.name] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>)
+        : {};
+      const otherInvStr = Object.entries(otherInv).length > 0
+        ? ' [carrying: ' + Object.entries(otherInv).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') + ']'
+        : ' [carrying nothing]';
+      nearbyForSituation.push({ name: a.config.name, activity: (a.currentAction || 'idle') + otherInvStr, id: a.id });
       const firstName = a.config.name.split(' ')[0].toLowerCase();
 
       // Talk
@@ -1354,6 +1364,9 @@ export class AgentController {
 
       // Steal (always available as dark option)
       actions.push({ id: 'steal_from_' + firstName, label: 'Steal from ' + a.config.name + ' (risky)', category: 'social' });
+
+      // Fight — available when nearby, shows risk
+      actions.push({ id: 'fight_' + firstName, label: 'Attack ' + a.config.name + ' (both take damage, everyone remembers)', category: 'social' });
 
       // Alliance
       actions.push({ id: 'ally_with_' + firstName, label: 'Propose alliance with ' + a.config.name, category: 'social' });
@@ -1821,6 +1834,113 @@ export class AgentController {
       return;
     }
 
+    // --- Fight ---
+    if (actionId.startsWith('fight_')) {
+      const firstName = actionId.replace('fight_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to fight but the target wasn\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'fight' as const, targetAgent: target.config.name, raw: 'fight ' + target.config.name };
+      const outcome = executeAction(intent, agentState, worldState);
+
+      // Apply effects to SELF (health loss from retaliation, energy spent)
+      this.applyOutcomeToWorld(outcome);
+
+      // Apply effects to TARGET (health damage)
+      if (outcome.success && outcome.targetAgentId) {
+        const targetAgent = this.world.getAgent(outcome.targetAgentId);
+        if (targetAgent && targetAgent.vitals && outcome.targetHealthChange) {
+          targetAgent.vitals.health = Math.max(0, Math.min(100,
+            targetAgent.vitals.health + outcome.targetHealthChange));
+
+          // Check if target died from the fight
+          if (targetAgent.vitals.health <= 0) {
+            console.log(`[Fight] ${target.config.name} health dropped to 0 from fight with ${this.agent.config.name}`);
+          }
+        }
+
+        // Target gets a memory of being attacked
+        const targetCog = (this as any).world?.cognitions?.get?.(outcome.targetAgentId);
+        if (targetCog) {
+          void targetCog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: outcome.targetAgentId,
+            type: 'observation',
+            content: this.agent.config.name + ' attacked me! I took ' + Math.abs(outcome.targetHealthChange ?? 0) + ' damage.',
+            importance: 9,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+        }
+
+        // Force target to react immediately
+        const targetCtrl = (this.world as any).controllers?.get?.(outcome.targetAgentId) as AgentController | undefined;
+        if (targetCtrl && targetAgent) {
+          targetCtrl.lastTrigger = this.agent.config.name + ' just attacked you! Health: ' + Math.round(targetAgent.vitals?.health ?? 0) + '/100. What do you do?';
+          targetCtrl.idleTimer = 7;
+        }
+      }
+
+      // ALL nearby agents witness the fight
+      const witnesses = this.world.getNearbyAgents(this.agent.position, 5)
+        .filter(a => a.id !== this.agent.id && a.id !== target.id && a.alive !== false);
+      for (const w of witnesses) {
+        const wCog = (this as any).world?.cognitions?.get?.(w.id);
+        if (wCog) {
+          void wCog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: w.id,
+            type: 'observation',
+            content: 'I saw ' + this.agent.config.name + ' attack ' + target.config.name + '! ' + outcome.description,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id, target.id],
+          });
+        }
+        // Force witnesses to react
+        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        if (wCtrl) {
+          wCtrl.lastTrigger = this.agent.config.name + ' just attacked ' + target.config.name + ' right in front of you! What do you do?';
+          wCtrl.idleTimer = 7;
+        }
+      }
+
+      // Trust destruction — fighting destroys trust for everyone who saw
+      this.adjustTrust(this.agent, target, -40);
+      this.adjustTrust(target, this.agent, -40);
+      // Witnesses lose trust in the attacker
+      for (const w of witnesses) {
+        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        if (wCtrl) {
+          wCtrl.adjustTrust(w, this.agent, -20);
+        }
+      }
+
+      // Emit fight event for engine-level handling
+      if (this.bus) {
+        this.bus.emit({
+          type: 'fight_occurred',
+          attackerId: this.agent.id,
+          defenderId: target.id,
+          outcome: outcome.description,
+          location: this.agent.position,
+        });
+      }
+
+      this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '!', '⚔️');
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.success
+        ? 'You just fought ' + target.config.name + '. You took damage too. Everyone saw.'
+        : 'Fight failed: ' + (outcome.reason || 'too exhausted');
+      this.state = 'performing'; this.activityTimer = 10;
+      this.world.updateAgentState(this.agent.id, 'active', `fighting ${target.config.name}`);
+      return;
+    }
+
     // --- Alliance ---
     if (actionId.startsWith('ally_with_')) {
       const firstName = actionId.replace('ally_with_', '');
@@ -2040,7 +2160,7 @@ export class AgentController {
   }
 
   /** Adjust one agent's mental model trust toward another */
-  private adjustTrust(agent: Agent, toward: Agent, delta: number): void {
+  adjustTrust(agent: Agent, toward: Agent, delta: number): void {
     if (!agent.mentalModels) agent.mentalModels = [];
     const existing = agent.mentalModels.find(m => m.targetId === toward.id);
     if (existing) {

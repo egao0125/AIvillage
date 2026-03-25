@@ -112,7 +112,7 @@ export const GATHERING: GatherDef[] = [
   { id: 'farm_wheat',    location: 'farm', skill: 'farming', minSkillLevel: 0, baseDuration: 45, energyCost: 8,
     baseSuccessChance: 0.6, yields: [{ resource: 'wheat', minQty: 1, maxQty: 3 }],
     toolBonus: 'hoe', seasonModifier: { spring: 0.8, summer: 1.2, autumn: 1.0, winter: 0.0 },
-    dailyStock: 12, description: 'Harvest wheat from the fields' },
+    dailyStock: 6, description: 'Harvest wheat from the fields' },
 
   { id: 'farm_veg',      location: 'farm', skill: 'farming', minSkillLevel: 1, baseDuration: 40, energyCost: 7,
     baseSuccessChance: 0.5, yields: [{ resource: 'vegetables', minQty: 1, maxQty: 2 }],
@@ -123,7 +123,7 @@ export const GATHERING: GatherDef[] = [
   { id: 'lake_fish',     location: 'lake', skill: 'fishing', minSkillLevel: 0, baseDuration: 60, energyCost: 10,
     baseSuccessChance: 0.4, yields: [{ resource: 'fish', minQty: 0, maxQty: 2 }],
     toolBonus: 'fishing_rod', seasonModifier: { spring: 1.0, summer: 1.0, autumn: 0.8, winter: 0.1 },
-    dailyStock: 10, description: 'Fish in the lake' },
+    dailyStock: 4, description: 'Fish in the lake' },
 
   { id: 'lake_clay',     location: 'lake', skill: 'foraging', minSkillLevel: 0, baseDuration: 30, energyCost: 6,
     baseSuccessChance: 0.7, yields: [{ resource: 'clay', minQty: 1, maxQty: 2 }],
@@ -138,12 +138,12 @@ export const GATHERING: GatherDef[] = [
   { id: 'forest_wood',   location: 'forest', skill: 'woodwork', minSkillLevel: 0, baseDuration: 50, energyCost: 12,
     baseSuccessChance: 0.7, yields: [{ resource: 'wood', minQty: 1, maxQty: 2 }],
     toolBonus: 'axe', seasonModifier: { spring: 1.0, summer: 1.0, autumn: 1.0, winter: 0.6 },
-    dailyStock: 15, description: 'Chop wood in the forest' },
+    dailyStock: 8, description: 'Chop wood in the forest' },
 
   { id: 'forest_mushroom', location: 'forest', skill: 'foraging', minSkillLevel: 0, baseDuration: 35, energyCost: 5,
     baseSuccessChance: 0.5, yields: [{ resource: 'mushrooms', minQty: 1, maxQty: 3 }],
     seasonModifier: { spring: 0.8, summer: 0.6, autumn: 1.5, winter: 0.2 },
-    dailyStock: 8, description: 'Forage for mushrooms' },
+    dailyStock: 4, description: 'Forage for mushrooms' },
 
   // --- Southern Woods (same as forest but riskier, slightly more yield) ---
   { id: 'south_wood',    location: 'forest_south', skill: 'woodwork', minSkillLevel: 0, baseDuration: 50, energyCost: 14,
@@ -155,7 +155,7 @@ export const GATHERING: GatherDef[] = [
   { id: 'garden_herbs',  location: 'garden', skill: 'foraging', minSkillLevel: 0, baseDuration: 30, energyCost: 4,
     baseSuccessChance: 0.6, yields: [{ resource: 'herbs', minQty: 1, maxQty: 2 }],
     seasonModifier: { spring: 1.2, summer: 1.0, autumn: 0.8, winter: 0.1 },
-    dailyStock: 6, description: 'Gather medicinal herbs' },
+    dailyStock: 3, description: 'Gather medicinal herbs' },
 
   { id: 'garden_flowers', location: 'garden', skill: 'foraging', minSkillLevel: 0, baseDuration: 20, energyCost: 3,
     baseSuccessChance: 0.8, yields: [{ resource: 'flowers', minQty: 1, maxQty: 3 }],
