@@ -300,19 +300,32 @@ export class SimulationEngine {
 
       const globalKey = process.env.ANTHROPIC_API_KEY;
       const globalKey2 = process.env.ANTHROPIC_API_KEY_2;
-      const forcedModel = 'claude-haiku-4-5-20251001';
+      const defaultModel = 'claude-haiku-4-5-20251001';
       const sharedMemoryStore = new SupabaseMemoryStore(this.persistence.client);
 
       for (let i = 0; i < agents.length; i++) {
         const agent = agents[i];
         this.world.addAgent(agent);
 
-        // Round-robin agents across two API keys; force Haiku for all existing agents
-        const useKey2 = globalKey2 && i % 2 === 1;
-        const effectiveKey = useKey2 ? globalKey2 : (globalKey || 'dummy-key');
-        const effectiveModel = forcedModel;
+        // Restore per-agent BYOK key from Supabase; fall back to env var round-robin
+        const ctrlDataForKey = controllerDataMap.get(agent.id);
+        const savedKey = (ctrlDataForKey as any)?.apiKey as string | undefined;
+        const savedModel = (ctrlDataForKey as any)?.model as string | undefined;
+
+        let effectiveKey: string;
+        let keyLabel: string;
+        if (savedKey && savedKey !== 'dummy-key') {
+          // BYOK key persisted — restore it
+          effectiveKey = savedKey;
+          keyLabel = 'BYOK';
+        } else {
+          // No saved key — round-robin across env var keys
+          const useKey2 = globalKey2 && i % 2 === 1;
+          effectiveKey = useKey2 ? globalKey2 : (globalKey || 'dummy-key');
+          keyLabel = useKey2 ? 'KEY_2' : 'KEY_1';
+        }
+        const effectiveModel = savedModel || defaultModel;
         this.agentApiKeys.set(agent.id, { apiKey: effectiveKey, model: effectiveModel });
-        const keyLabel = useKey2 ? 'KEY_2' : 'KEY_1';
         console.log(`[Engine] Agent ${agent.config.name} → ${keyLabel} / ${effectiveModel}`);
 
         // Away agents persist but don't get controller/cognition (no LLM calls)
@@ -359,9 +372,7 @@ export class SimulationEngine {
           controller.state = (restoredState === 'moving' || restoredState === 'performing' || restoredState === 'conversing' || restoredState === 'deciding')
             ? 'idle'
             : restoredState;
-          controller.intentions = (ctrlData as any).intentions ??
-            (ctrlData as any).dayPlan?.items?.map((i: any) => i.activity) ?? [];
-          controller.currentIntentionIndex = (ctrlData as any).currentIntentionIndex ?? (ctrlData as any).currentPlanIndex ?? 0;
+          controller.currentGoals = (ctrlData as any).currentGoals ?? [];
           controller.activityTimer = ctrlData.activityTimer ?? 0;
           controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
         }
@@ -419,6 +430,19 @@ export class SimulationEngine {
     agent.institutionIds = [];
 
     this.world.addAgent(agent);
+
+    // Starting provisions — 5 bread so new agents don't starve immediately
+    for (let i = 0; i < 5; i++) {
+      this.world.addItem({
+        id: crypto.randomUUID(),
+        name: 'Bread',
+        description: 'A loaf of bread',
+        ownerId: agent.id,
+        createdBy: 'starting_provisions',
+        value: 3,
+        type: 'food',
+      });
+    }
 
     // Create cognition stack with per-agent API key (falls back to global env)
     const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
@@ -660,12 +684,18 @@ export class SimulationEngine {
     const agent = this.world.getAgent(id);
     if (!agent || agent.alive !== false) return false;
 
-    // Revive agent state
+    // Revive agent state — full reset to prevent stale data from previous life
     agent.alive = true;
     agent.causeOfDeath = undefined;
     agent.state = 'idle';
+    agent.currentAction = 'arriving';
+    agent.mood = 'neutral';
     agent.vitals = { health: 100, hunger: 0, energy: 100 };
     agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
+    agent.mentalModels = [];
+    agent.socialLedger = [];
+    agent.inventory = [];
+    agent.skills = [];
 
     // Give starting food so they don't immediately starve again
     for (let i = 0; i < 3; i++) {
@@ -1106,11 +1136,10 @@ export class SimulationEngine {
               `overheard ${lastMessage.agentName} say: "${snippet}"`,
               `You weren't part of the conversation — you just caught a snippet.`
             ).then(output => {
-              const joinActions = output.actions?.some(a => {
-                const lower = a.toLowerCase();
-                return lower.includes('approach') || lower.includes('join') || lower.includes('confront');
-              });
-              if (joinActions && controller.isAvailable) {
+              // Check if the thought suggests joining the conversation
+              const lower = output.thought.toLowerCase();
+              const wantsToJoin = lower.includes('approach') || lower.includes('join') || lower.includes('confront') || lower.includes('talk to') || lower.includes('speak to');
+              if (wantsToJoin && controller.isAvailable) {
                 this.conversationManager.addParticipant(conv.id, agent.id);
                 controller.enterConversation();
                 console.log(`[Engine] ${agent.config.name} overheard and decided to join conversation`);

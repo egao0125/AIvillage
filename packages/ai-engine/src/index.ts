@@ -5,7 +5,7 @@
 // ============================================================================
 
 import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput } from "@ai-village/shared";
-import { GATHERING } from './world-rules.js';
+// (GATHERING import removed — validatePlanIntentions removed in refactor v2)
 import type { TieredMemory } from './memory/tiered-store.js';
 import { ActionCache } from './action-cache.js';
 
@@ -37,6 +37,7 @@ export interface LLMProvider {
 const FROZEN_REALITY = `REALITY:
 You have a body. It gets hungry, tired, and sick.
 If you don't eat, you starve. If you starve long enough, you die. Death is permanent.
+Avoid death at all costs. Eat when hungry. Make sure you always have food. Your survival is your first priority.
 Food comes from the land. You work for what you need.
 Weather changes. Seasons change. Winter is hard.
 
@@ -52,6 +53,37 @@ Destructive: destroy, sabotage, hoard, deceive
 To act: [ACTION: describe what you do naturally]
 You're not choosing from a menu — you're living a life.
 Do what makes sense for who you are.`;
+
+// --- Structured Decision Types ---
+
+export interface AgentSituation {
+  location: string;           // "Village Farm"
+  areaId: string;             // "farm"
+  time: { day: number; hour: number };
+  vitals: { hunger: number; energy: number; health: number };
+  inventory: { name: string; type: string; qty: number }[];
+  nearbyAgents: { name: string; activity: string; id: string }[];
+  availableActions: AvailableAction[];
+  recentOutcome?: string;
+  trigger: string;
+  goals?: string[];
+  socialPressure?: string;    // unresolved tensions, bonds, isolation
+  commitments?: string;       // active ledger entries
+}
+
+export interface AvailableAction {
+  id: string;                 // "gather_wheat", "eat_bread", "go_lake"
+  label: string;              // "Gather wheat (48% chance)"
+  category: 'physical' | 'movement' | 'social' | 'rest' | 'creative';
+}
+
+export interface AgentDecision {
+  actionId: string;           // matches AvailableAction.id, or "custom"
+  customAction?: string;      // free text if actionId === "custom"
+  reason: string;             // 1-2 sentences, first person, in character
+  mood?: string;
+  sayAloud?: string;          // spoken aloud, others can hear
+}
 
 // --- Agent Cognition ---
 
@@ -481,6 +513,112 @@ If nothing notable was exchanged, return []`;
     return parts.join('\n');
   }
 
+  // --- Structured Decision ---
+
+  /**
+   * decide() — One LLM call to pick an action from a dynamically generated menu.
+   * Replaces the prose → translate → parse pipeline.
+   */
+  async decide(situation: AgentSituation): Promise<AgentDecision> {
+    const invGroups: Record<string, number> = {};
+    for (const item of situation.inventory) {
+      invGroups[item.name] = (invGroups[item.name] || 0) + item.qty;
+    }
+    const invStr = Object.entries(invGroups).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') || 'nothing';
+
+    const nearbyStr = situation.nearbyAgents.length > 0
+      ? 'Nearby: ' + situation.nearbyAgents.map(a => `${a.name} (${a.activity || 'idle'})`).join(', ')
+      : 'Nobody else is here.';
+
+    const systemPrompt = `${this.worldView}
+
+${this.buildIdentityBlock()}
+
+You are ${this.agent.config.name}. Day ${situation.time.day}, hour ${situation.time.hour}.
+
+YOUR SITUATION:
+Location: ${situation.location}
+Health: ${Math.round(situation.vitals.health)}/100
+Hunger: ${Math.round(situation.vitals.hunger)}/100${situation.vitals.hunger >= 60 ? ' ⚠ HUNGRY' : situation.vitals.hunger >= 40 ? ' — getting hungry' : ''}
+Energy: ${Math.round(situation.vitals.energy)}/100
+Inventory: ${invStr}
+${nearbyStr}
+${situation.goals?.length ? '\nYOUR PRIORITIES TODAY:\n' + situation.goals.map((g, i) => (i + 1) + '. ' + g).join('\n') : ''}
+${situation.commitments || ''}${situation.socialPressure || ''}
+
+${situation.recentOutcome ? 'JUST HAPPENED: ' + situation.recentOutcome + '\n' : ''}HERE'S WHAT'S GOING ON:
+${situation.trigger}
+
+WHAT'S POSSIBLE:
+${situation.availableActions.map(a => a.id + ' — ' + a.label).join('\n')}
+custom — Do something not listed (describe it in customAction)
+
+Now — what do you actually WANT to do?
+
+Not what's optimal. Not what's safe. What does YOUR CHARACTER want right now? Maybe you're hungry but you're also angry at someone. Maybe you should gather but you're too proud to work alongside someone who wronged you. Maybe you promised to bring food to someone and you're deciding whether to keep that promise or eat it yourself.
+
+The interesting choice is rarely the smart choice.
+
+Think about:
+- Is there anyone nearby you have unfinished business with? (confront, avoid, thank, apologize to, check on)
+- Is there something eating at you that isn't about food or energy?
+- Have you been doing the same thing too long? Are you bored?
+- Is someone nearby you care about — or don't trust?
+
+Reply with ONLY valid JSON, no other text:
+{"actionId":"...","reason":"2-3 sentences. Be honest with yourself. First person. This is your inner voice — nobody hears this. What's REALLY driving this choice? Not just 'I need food' but what else is going on — who are you thinking about, what are you avoiding, what do you wish would happen?","mood":"how you actually feel","sayAloud":"what you say out loud, if anything (optional — others nearby WILL hear this and remember it)"}`;
+
+    const memories = this.tieredMemory
+      ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
+      : await this.memory.retrieve(this.agent.id, situation.trigger, 5);
+    const memoryText = memories.length > 0
+      ? 'Your recent memories:\n' + memories.map(m => m.content).join('\n')
+      : '';
+
+    const userPrompt = memoryText;
+
+    const response = await this.llm.complete(systemPrompt, userPrompt);
+
+    // Meta-contamination check
+    const META_PATTERNS = [
+      /the state.*(?:contradictory|incoherent|impossible)/i,
+      /I (?:need|cannot|can't) (?:proceed|continue|play|roleplay)/i,
+      /internally (?:contradictory|incoherent|inconsistent)/i,
+      /honest roleplay (?:impossible|isn't possible)/i,
+      /as a (?:character|language model|AI)/i,
+      /the prompt (?:says|shows|indicates|lists)/i,
+      /timestamp (?:conflict|mismatch)/i,
+      /state (?:file|information) (?:is|contains)/i,
+    ];
+    if (META_PATTERNS.some(p => p.test(response))) {
+      console.warn(`[Sanitize] Meta-contamination in ${this.agent.config.name}'s decide: "${response.substring(0, 80)}..."`);
+      return {
+        actionId: situation.availableActions.find(a => a.category === 'physical')?.id || 'rest',
+        reason: 'Something feels off.',
+        mood: undefined,
+        sayAloud: undefined,
+      };
+    }
+
+    // Parse JSON
+    try {
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleaned) as AgentDecision;
+      if (parsed.actionId && parsed.reason) {
+        return parsed;
+      }
+    } catch {}
+
+    // Parse failure — safe default
+    console.warn(`[AgentCognition] ${this.agent.config.name} decide() parse failure: "${response.substring(0, 100)}..."`);
+    return {
+      actionId: situation.availableActions.find(a => a.category === 'physical')?.id || 'rest',
+      reason: 'I need to think about this.',
+      mood: undefined,
+      sayAloud: undefined,
+    };
+  }
+
   // --- The Six Prompts ---
 
   /**
@@ -505,15 +643,6 @@ IMPORTANT: Only respond to what is real. The people near you, the place you're a
 There are no NPCs, shopkeepers, or background characters. Every person in this village is named in your context. Locations may be empty.
 
 1-3 sentences. First person. Private.
-
-IMPORTANT: Describing an action in your thoughts does NOT make it happen in the world. Only [ACTION: ...] tags trigger real changes. If you want to pick up wood, you MUST write [ACTION: gather wood]. Just writing "I pick up the branch" changes nothing.
-
-  [ACTION: gather wheat] — tries to gather
-  [ACTION: eat bread] — tries to eat
-  [ACTION: go to farm] — moves to farm
-
-Actions might fail — you'll be told why.
-Anything you say out loud — declarations, promises, threats — will be heard by people nearby.
 
 If your feelings shifted: MOOD: how you feel now`;
 
@@ -546,31 +675,20 @@ Context: ${context}`;
       console.warn(`[Sanitize] Meta-contamination in ${this.agent.config.name}'s think: "${response.substring(0, 80)}..."`);
       return {
         thought: "Something feels off, but I can't put my finger on it.",
-        actions: undefined,
         mood: undefined,
       };
     }
 
-    // Parse structured output
-    const actions = AgentCognition.parseActions(response);
-    // Fallback: LLM sometimes writes "ACTION: ..." without brackets
-    if (actions.length === 0) {
-      const actionLine = response.match(/^ACTION:\s*(.+)$/mi);
-      if (actionLine) {
-        actions.push(actionLine[1].trim());
-      }
-    }
     const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
     const mood: Mood | undefined = moodMatch ? moodMatch[1].trim() : undefined;
 
-    // Clean thought text: strip action tags, mood lines
+    // Clean thought text: strip mood lines and any stray action tags
     const thought = response
       .replace(/\s*\[ACTION:\s*.+?\]/gi, '')
       .replace(/^\s*MOOD:\s*.+$/mi, '')
       .trim();
 
-    // Variable importance: actions/mood = 5, passive = 3
-    const importance = (actions.length > 0 || mood) ? 5 : 3;
+    const importance = mood ? 5 : 3;
     await this.addMemory({
       id: crypto.randomUUID(),
       agentId: this.agent.id,
@@ -584,7 +702,6 @@ Context: ${context}`;
 
     return {
       thought,
-      actions: actions.length > 0 ? actions : undefined,
       mood,
     };
   }
@@ -682,45 +799,10 @@ Action: "${rawAction}"`;
     return command;
   }
 
-  /**
-   * intentionToSteps() — Translate a narrative intention into 1-3 executable action steps.
-   * Used when parseIntent can't handle prose like "I walk toward the Farm, looking for anything edible".
-   */
-  async intentionToSteps(intention: string, location: string): Promise<string[]> {
-    const systemPrompt = `You translate narrative intentions into 1-3 short action steps.
-
-Each step must be a short command: "go to [place]", "gather [resource]", "eat [food]", "craft [item]", "build [structure]", "talk to [name]", "trade [item] with [name]", "rest", "sleep", "explore [place]", "give [item] to [name]", "post [message]", "teach [name] [skill]".
-
-If the intention requires going somewhere AND doing something there, output TWO steps: the movement first, then the action.
-
-Current location: ${location}
-If the action can be done at the current location, skip the movement step.
-
-Return a JSON array of strings ONLY. No explanation.
-
-Examples:
-"I walk toward the Farm, looking for anything edible" → ["go to farm", "gather wheat"]
-"I search the bakery carefully for bread or flour" → ["go to bakery", "gather wheat"]
-"Check if Mei Lin is at the plaza and talk to her" → ["go to plaza", "talk to Mei Lin"]
-"Rest at the tavern before heading out" → ["go to tavern", "rest"]
-"I need to eat something, anything" → ["eat food"]
-"gather wheat at the farm" → ["go to farm", "gather wheat"]
-"talk to Tomas" → ["talk to Tomas"]`;
-
-    const response = await this.llm.complete(systemPrompt, `Intention: "${intention}"`);
-    try {
-      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleaned);
-      if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((s: unknown) => typeof s === 'string')) {
-        return parsed;
-      }
-    } catch {}
-    // Fallback: return original intention unchanged
-    return [intention];
-  }
+  // (intentionToSteps removed in refactor v2 — replaced by structured decide())
 
   /**
-   * plan() — Morning intention-setting. Returns a JSON array of intention strings.
+   * plan() — Morning goal-setting. Returns a JSON array of goal strings.
    * Each intention names what the agent wants to do and where.
    * Replaces planDay() — no timed schedule, just prioritized intentions.
    */
@@ -760,19 +842,11 @@ ${memoryContext || 'No recent memories yet.'}
 
 IMPORTANT: Only plan interactions with real people listed above. There are no shopkeepers, bartenders, or unnamed villagers.
 
-Before you plan your day, think about the bigger picture:
-- What's your situation? Are you safe? Fed? Connected?
-- What's changed since yesterday? Did anything surprise you?
-- Is anyone expecting something from you?
-- Is there anything you've been avoiding?
+What are your priorities today? Not specific actions — what MATTERS to you. Think about survival, relationships, unfinished business, fears, ambitions. 1-3 priorities, honest and personal.
 
-Look at your inventory and hunger above. What will you actually do today? Include both survival and social plans.
+Examples: "Get food — I'm running out", "Figure out why Felix disappeared", "Build trust with someone", "Stay away from Egao".
 
-Someone conscientious makes a careful plan. Someone impulsive follows their gut. Someone afraid plays it safe. Someone angry settles scores.
-
-Write 1-5 intentions. Each is something specific your body does at a real place. Include social plans (meet someone, avoid someone, confront someone) alongside physical tasks.
-
-JSON array of strings ONLY.`;
+JSON array of strings.`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
@@ -780,7 +854,7 @@ JSON array of strings ONLY.`;
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-        return this.validatePlanIntentions(parsed);
+        return parsed.slice(0, 3);
       }
     } catch {}
 
@@ -793,49 +867,7 @@ JSON array of strings ONLY.`;
    * but the agent doesn't know any location where that resource spawns,
    * rewrite the intention to explore/ask instead.
    */
-  private validatePlanIntentions(intentions: string[]): string[] {
-    // Build resource → location mapping from GATHERING rules
-    const resourceLocations = new Map<string, string[]>();
-    for (const g of GATHERING) {
-      for (const y of g.yields) {
-        const locs = resourceLocations.get(y.resource) || [];
-        if (!locs.includes(g.location)) locs.push(g.location);
-        resourceLocations.set(y.resource, locs);
-      }
-    }
-
-    const knownAreaKeys = new Set(this.knownPlaces.keys());
-
-    const validated = intentions.map(intention => {
-      const lower = intention.toLowerCase();
-      // Check if this intention involves gathering
-      const gatherMatch = lower.match(/\b(?:gather|harvest|collect|pick|forage|fish|chop|dig)\s+(\w+)/);
-      if (!gatherMatch) return intention;
-
-      const resource = gatherMatch[1];
-      const locations = resourceLocations.get(resource);
-
-      if (!locations) return intention; // unknown resource, let it fail naturally
-
-      // Check if agent knows any location where this resource spawns
-      const knownLocations = locations.filter(loc => knownAreaKeys.has(loc));
-
-      if (knownLocations.length > 0) {
-        // Agent knows where to go — check if the intention already mentions the location
-        const mentionsLocation = knownLocations.some(loc => lower.includes(loc));
-        if (!mentionsLocation) {
-          // Add location hint
-          return `${intention} (at the ${knownLocations[0]})`;
-        }
-        return intention;
-      }
-
-      // Agent doesn't know where this resource is — rewrite
-      return `Find where ${resource} grows — explore new areas or ask someone`;
-    });
-
-    return validated;
-  }
+  // (validatePlanIntentions removed in refactor v2 — plan now produces goals, not specific actions)
 
   /**
    * talk() — Conversation turn. Uses worldView + buildIdentityBlock().
@@ -1526,13 +1558,7 @@ Output a JSON array ONLY, no other text:
     return text.replace(/\s*\[ACTION:\s*.+?\]/gi, '').trim();
   }
 
-  /**
-   * Parse ACTION tags from text, returning an array of action strings.
-   */
-  static parseActions(text: string): string[] {
-    const matches = text.matchAll(/\[ACTION:\s*(.+?)\]/gi);
-    return Array.from(matches, m => m[1].trim());
-  }
+  // (parseActions removed in refactor v2 — think() no longer produces [ACTION:] tags)
 
   /**
    * Strip narration from LLM talk() output, keeping only spoken dialogue.

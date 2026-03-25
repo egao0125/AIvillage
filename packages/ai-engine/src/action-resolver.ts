@@ -180,7 +180,7 @@ const POST_PATTERNS = [
   /post\s+["""](.+?)["""](?:\s+on\s+(?:the\s+)?board)?/i,
   /post\s+(?:on\s+(?:the\s+)?board\s+)?["""](.+?)["""]/i,
   /write\s+(?:on\s+(?:the\s+)?board)\s+["""](.+?)["""]/i,
-  /post\s+(.+)/i,
+  /(?:post|write|announce|declare)\s+(?:on\s+(?:the\s+)?(?:village\s+)?board\s*:?\s*)["'""](.+?)["'""]$/i,
 ];
 
 const REST_PATTERNS = [

@@ -542,7 +542,6 @@ export interface DayPlan {
 
 export interface ThinkOutput {
   thought: string;
-  actions?: string[];   // parsed [ACTION: ...] tags
   mood?: Mood;          // parsed MOOD: <word>
 }
 
