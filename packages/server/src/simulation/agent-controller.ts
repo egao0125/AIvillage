@@ -1719,13 +1719,13 @@ export class AgentController {
       // Broadcast thought
       this.broadcaster.agentThought(this.agent.id, decision.reason);
 
-      // Say aloud (nearby agents can hear)
+      // Execute the decision FIRST — then broadcast sayAloud only if action succeeded
+      await this.executeDecision(decision, situation);
+
+      // Say aloud AFTER execution (so agent only announces things that actually happened)
       if (decision.sayAloud) {
         this.broadcaster.agentAction(this.agent.id, `says: "${decision.sayAloud}"`);
       }
-
-      // Execute the decision
-      await this.executeDecision(decision, situation);
 
     } catch (err) {
       this.handleApiFailure(err);
