@@ -9,6 +9,7 @@ export const TILE_TYPES = {
   FLOWERS: 7,
   BRIDGE: 8,
   FLOOR_DARK: 9,
+  CROP: 10,
 } as const;
 
 // Must match server/src/map/village.ts exactly
@@ -93,11 +94,26 @@ function buildTileMap(): number[][] {
   for (const [fx, fy] of topFlowers) set(fx, fy, 7);
 
   // Bottom outdoor flowers (rows 39-44) — uses set() with auto-offset
+  // Skip the farm area (x:31-55, y:39-44)
   for (let y = 39; y < MAP_HEIGHT; y++)
     for (let x = 2; x < 55; x++) {
+      if (x >= 31 && x <= 55 && y >= 39 && y <= 44) continue; // farm area
       const hash = (x * 7 + y * 13) % 13;
       if (hash === 0 || hash === 4 || hash === 9) set(x, y, 7);
     }
+
+  // ═══ Farm (rows 39-44, cols 31-55) ═══
+  // Fence perimeter (path tiles)
+  for (let x = 31; x <= 55; x++) { set(x, 39, 1); set(x, 44, 1); }
+  for (let y = 39; y <= 44; y++) { set(31, y, 1); set(55, y, 1); }
+  // Crop rows inside fence
+  for (let y = 40; y <= 43; y++)
+    for (let x = 32; x <= 54; x++)
+      set(x, y, 10);
+  // Walkway down the middle
+  for (let y = 40; y <= 43; y++) set(43, y, 1);
+  // Entrance gap (matches server entrance at x:41, y:40)
+  set(41, 39, 1); // already path, but ensures continuity
 
   // Scattered flowers along N-S path edges for color
   for (let y = 2; y < 39; y++) {
@@ -231,6 +247,7 @@ export const BUILDINGS: {
   { x: 6,  y: 28, w: 13, h: 10, type: 'house', label: 'Clinic' },
   { x: 24, y: 28, w: 17, h: 10, type: 'cafe',  label: 'Tavern' },
   { x: 43, y: 28, w: 17, h: 11, type: 'shop',  label: 'Market' },
+  { x: 35, y: 39, w: 25, h: 6,  type: 'shop',  label: 'Farm' },
 ];
 
 // ~22 trees — perimeter + accents
@@ -250,13 +267,10 @@ export const TREES: { x: number; y: number; type: 'oak' | 'pine' | 'cherry' }[] 
   { x: 32, y: 1, type: 'oak' },
   { x: 52, y: 0, type: 'cherry' },
 
-  // Southern outdoor
+  // Southern outdoor (skip trees inside farm area x:35-59, y:39-44)
   { x: 9, y: 40, type: 'cherry' },
   { x: 19, y: 42, type: 'oak' },
   { x: 29, y: 41, type: 'cherry' },
-  { x: 39, y: 40, type: 'cherry' },
-  { x: 49, y: 42, type: 'oak' },
-  { x: 56, y: 43, type: 'cherry' },
 
   // River buffer
   { x: 60, y: 5, type: 'oak' },
@@ -306,19 +320,13 @@ export const DECORATIONS: {
   { x: 13, y: 0, type: 'flower_blue' },
   { x: 34, y: 1, type: 'flower_red' },
 
-  // Bottom outdoor flowers (dense, colorful)
+  // Bottom outdoor flowers (skip those inside farm area x:35-59, y:39-44)
   { x: 8, y: 39, type: 'flower_red' },
   { x: 14, y: 40, type: 'flower_blue' },
   { x: 20, y: 41, type: 'flower_red' },
   { x: 26, y: 39, type: 'flower_blue' },
-  { x: 34, y: 40, type: 'flower_red' },
-  { x: 42, y: 41, type: 'flower_blue' },
-  { x: 48, y: 39, type: 'flower_red' },
-  { x: 52, y: 42, type: 'flower_blue' },
   { x: 12, y: 43, type: 'flower_red' },
   { x: 24, y: 44, type: 'flower_blue' },
-  { x: 38, y: 43, type: 'flower_red' },
-  { x: 50, y: 44, type: 'flower_blue' },
 
   // Forest border (absolute positions)
   { x: 2, y: 10, type: 'mushroom' },
