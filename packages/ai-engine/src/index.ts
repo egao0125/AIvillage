@@ -624,6 +624,7 @@ Reply with ONLY valid JSON, no other text:
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
       if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
       memoryText = sections.join('\n\n');
+      console.log(`[FourStream] ${this.agent.config.name} decide() working memory (${memoryText.length} chars):\n${memoryText.slice(0, 600)}`);
     } else {
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
