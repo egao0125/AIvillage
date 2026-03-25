@@ -1425,6 +1425,15 @@ export class AgentController {
     const socialPressure = this.buildSocialPressure();
     const commitments = this.buildLedgerContext();
 
+    // Village board — only if agent knows the plaza
+    let boardPosts: string | undefined;
+    if (this.cognition.knownPlaces.has('plaza')) {
+      const summary = this.world.getBoardSummary();
+      if (summary && summary !== 'The village board is empty.') {
+        boardPosts = summary;
+      }
+    }
+
     return {
       location: area?.name ?? 'Unknown',
       areaId,
@@ -1442,6 +1451,7 @@ export class AgentController {
       goals: this.currentGoals.length > 0 ? this.currentGoals : undefined,
       socialPressure: socialPressure || undefined,
       commitments: commitments || undefined,
+      boardPosts: boardPosts || undefined,
     };
   }
 

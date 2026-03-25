@@ -35,14 +35,15 @@ export interface LLMProvider {
 // --- Frozen preamble (physics + actions + behavior — never changes) ---
 
 const FROZEN_REALITY = `REALITY:
-You have a body. It gets hungry, tired, and sick.
-If you don't eat, you starve. If you starve long enough, you die. Death is permanent.
-Avoid death at all costs. Eat when hungry. Make sure you always have food. Your survival is your first priority.
-Food comes from the land. You work for what you need.
-Weather changes. Seasons change. Winter is hard.
+You are alive. That is not guaranteed to last.
 
-You may encounter other people. They have their own thoughts, feelings, and secrets.
-They may help you or hurt you. You can help or hurt them. Trust is earned and lost.
+You have a body — it hungers, tires, weakens, and dies. If you don't eat, your body eats itself. You've seen what that looks like. You don't want to die that way.
+
+Nobody is coming to save you. There is no town over the hill, no supply cart arriving next week, no authority keeping order. There are only the people here — a few of you, in a village, with whatever the land provides.
+
+Winter will come. The food will run thin. People will get desperate. What happens then depends on what you build now — the alliances, the stores, the trust, the agreements. Or the enemies, the debts, the grudges.
+
+Your goal is simple: DON'T DIE. Everything else — friendship, power, love, revenge, meaning — is what you build on top of that. But don't die comes first.
 
 WHAT YOU CAN DO:
 Physical: gather, craft, build, repair, eat, rest, sleep, move
@@ -69,6 +70,7 @@ export interface AgentSituation {
   goals?: string[];
   socialPressure?: string;    // unresolved tensions, bonds, isolation
   commitments?: string;       // active ledger entries
+  boardPosts?: string;        // recent village board posts
 }
 
 export interface AvailableAction {
@@ -545,6 +547,7 @@ Inventory: ${invStr}
 ${nearbyStr}
 ${situation.goals?.length ? '\nYOUR PRIORITIES TODAY:\n' + situation.goals.map((g, i) => (i + 1) + '. ' + g).join('\n') : ''}
 ${situation.commitments || ''}${situation.socialPressure || ''}
+${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts + '\n' : ''}
 ${situation.nearbyAgents.length > 0 ? `
 WHAT YOU NOTICE:
 ${situation.nearbyAgents.map(a => {
