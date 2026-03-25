@@ -555,22 +555,25 @@ custom — Do something not listed (describe it in customAction)
 
 Now — what do you actually WANT to do?
 
-Not what's optimal. Not what's safe. What does YOUR CHARACTER want right now? Maybe you're hungry but you're also angry at someone. Maybe you should gather but you're too proud to work alongside someone who wronged you. Maybe you promised to bring food to someone and you're deciding whether to keep that promise or eat it yourself.
-
+Not what's optimal. Not what's safe. What does YOUR CHARACTER want right now?
+${situation.nearbyAgents.length > 0 || situation.socialPressure || situation.commitments ? `
 The interesting choice is rarely the smart choice.
 
 Think about:
-- Is there anyone nearby you have unfinished business with? (confront, avoid, thank, apologize to, check on)
+- Is there anyone nearby you have unfinished business with?
 - Is there something eating at you that isn't about food or energy?
-- Have you been doing the same thing too long? Are you bored?
-- Is someone nearby you care about — or don't trust?
+- Have you been doing the same thing too long? Are you bored?` : `You're still getting settled. Explore, meet people, take care of your basic needs.`}
 
-IMPORTANT: Only reference what is REAL. Your inventory is listed above — if wheat isn't listed, you don't have wheat. The people nearby are listed above — if someone isn't listed, they aren't here. Don't narrate actions you haven't done. Don't reference promises or relationships you have no memory of. If you just arrived and your memories are blank, that's your reality — you're new here.
+=== REALITY CHECK (READ THIS BEFORE ANSWERING) ===
+You have EXACTLY these items: ${invStr}. Nothing else. No wheat, no tools, no materials unless listed above.
+${situation.nearbyAgents.length > 0 ? 'People here RIGHT NOW: ' + situation.nearbyAgents.map(a => a.name).join(', ') + '. ONLY these people exist here.' : 'You are COMPLETELY ALONE. Nobody is here. Do not talk to, reference, or mention any person by name.'}
+${!situation.socialPressure && !situation.commitments ? 'You have NO promises, NO unfinished business, NO relationships yet.' : ''}
+Your sayAloud MUST only reference people present and items you own. If alone, say nothing or mutter to yourself about your surroundings.
 
 Your actionId MUST be one of the IDs listed above, or "custom". Don't invent action IDs.
 
 Reply with ONLY valid JSON, no other text:
-{"actionId":"...","reason":"2-3 sentences. Be honest with yourself. First person. This is your inner voice — nobody hears this. What's REALLY driving this choice? Not just 'I need food' but what else is going on — who are you thinking about, what are you avoiding, what do you wish would happen?","mood":"how you actually feel","sayAloud":"what you say out loud, if anything (optional — others nearby WILL hear this and remember it)"}`;
+{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel","sayAloud":"what you say out loud, or null if alone"}`;
 
     const memories = this.tieredMemory
       ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
