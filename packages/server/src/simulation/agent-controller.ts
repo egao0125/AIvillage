@@ -1327,11 +1327,47 @@ export class AgentController {
     const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
     for (const a of nearby) {
       nearbyForSituation.push({ name: a.config.name, activity: a.currentAction || 'idle', id: a.id });
+      const firstName = a.config.name.split(' ')[0].toLowerCase();
+
+      // Talk
       if (this.conversationCooldown <= 0) {
-        const firstName = a.config.name.split(' ')[0].toLowerCase();
         actions.push({ id: 'talk_' + firstName, label: 'Talk to ' + a.config.name, category: 'social' });
       }
+
+      // Give / Trade (if agent has items)
+      if (this.agent.inventory.length > 0) {
+        actions.push({ id: 'give_to_' + firstName, label: 'Give something to ' + a.config.name, category: 'social' });
+        actions.push({ id: 'trade_with_' + firstName, label: 'Propose a trade with ' + a.config.name, category: 'social' });
+      }
+
+      // Teach (if agent has a skill)
+      const teachableSkills = this.agent.skills?.filter(s => s.level >= 1) ?? [];
+      if (teachableSkills.length > 0) {
+        actions.push({ id: 'teach_' + firstName, label: 'Teach ' + teachableSkills[0].name + ' to ' + a.config.name, category: 'social' });
+      }
+
+      // Confront (if trust is negative)
+      const model = this.agent.mentalModels?.find(m => m.targetId === a.id);
+      if (model && model.trust < 0) {
+        actions.push({ id: 'confront_' + firstName, label: 'Confront ' + a.config.name, category: 'social' });
+      }
+
+      // Steal (always available as dark option)
+      actions.push({ id: 'steal_from_' + firstName, label: 'Steal from ' + a.config.name + ' (risky)', category: 'social' });
+
+      // Alliance
+      actions.push({ id: 'ally_with_' + firstName, label: 'Propose alliance with ' + a.config.name, category: 'social' });
     }
+
+    // Group actions (3+ agents nearby including self)
+    if (nearby.length >= 2) {
+      actions.push({ id: 'call_meeting', label: 'Call everyone here to discuss something', category: 'creative' });
+      actions.push({ id: 'propose_rule', label: 'Propose a rule for the village', category: 'creative' });
+      actions.push({ id: 'accuse_someone', label: 'Publicly accuse someone (everyone hears)', category: 'social' });
+    }
+
+    // Always available creative
+    actions.push({ id: 'post_board', label: 'Write something on the village board', category: 'creative' });
 
     // 5. MOVEMENT actions
     for (const [areaKey, desc] of this.cognition.knownPlaces) {
@@ -1666,19 +1702,251 @@ export class AgentController {
       return;
     }
 
-    // --- Custom (route through existing action pipeline) ---
-    if (actionId === 'custom' && decision.customAction && this.soloActionExecutor) {
-      this.soloActionExecutor.executeSocialAction(
-        this.agent.id, this.agent.config.name, '', decision.customAction, this.cognition
-      );
-      this.state = 'performing';
-      this.currentPerformingActivity = decision.customAction.slice(0, 60);
-      this.activityTimer = 10;
-      this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+    // --- Give ---
+    if (actionId.startsWith('give_to_')) {
+      const firstName = actionId.replace('give_to_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target || this.agent.inventory.length === 0) {
+        this.lastTrigger = 'You wanted to give something but couldn\'t.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Pick item: first non-food, or first food
+      const item = this.agent.inventory.find(i => i.type !== 'food') || this.agent.inventory[0];
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'give' as const, resource: item.name.toLowerCase().replace(/\s+/g, '_'), targetAgent: target.config.name.split(' ')[0], quantity: 1, raw: `give ${item.name} to ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      // Adjust trust: target trusts giver more
+      this.adjustTrust(target, this.agent, 10);
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name}`);
       return;
     }
 
-    // Unrecognized
+    // --- Trade ---
+    if (actionId.startsWith('trade_with_')) {
+      const firstName = actionId.replace('trade_with_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target || this.agent.inventory.length === 0) {
+        this.lastTrigger = 'You wanted to trade but couldn\'t.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const item = this.agent.inventory[0];
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'trade_offer' as const, offerItems: [{ resource: item.name.toLowerCase().replace(/\s+/g, '_'), qty: 1 }], requestItems: [], targetAgent: target.config.name.split(' ')[0], raw: `trade ${item.name} with ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `proposed trade with ${target.config.name}`);
+      return;
+    }
+
+    // --- Teach ---
+    if (actionId.startsWith('teach_')) {
+      const firstName = actionId.replace('teach_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      const skill = this.agent.skills?.find(s => s.level >= 1);
+      if (!target || !skill) {
+        this.lastTrigger = 'You wanted to teach but couldn\'t.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'teach' as const, skill: skill.name, targetAgent: target.config.name.split(' ')[0], raw: `teach ${skill.name} to ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      this.adjustTrust(target, this.agent, 5);
+      this.state = 'performing'; this.activityTimer = 10;
+      this.world.updateAgentState(this.agent.id, 'active', `teaching ${skill.name} to ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `teaching ${skill.name} to ${target.config.name}`);
+      return;
+    }
+
+    // --- Confront ---
+    if (actionId.startsWith('confront_')) {
+      const firstName = actionId.replace('confront_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to confront someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const confrontText = decision.sayAloud || decision.reason;
+      // Memory for both
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I confronted ${target.config.name}: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
+      const targetCognition = this.world.agents.has(target.id) ? (this as any).cognition : null;
+      // Witness memories for all nearby
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id);
+      for (const witness of nearbyAll) {
+        const wCog = (this as any).world?.cognitions?.get?.(witness.id);
+      }
+      this.adjustTrust(target, this.agent, -15);
+      this.adjustTrust(this.agent, target, -15);
+      // Force target to react
+      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      this.lastOutcome = `You confronted ${target.config.name}.`;
+      this.lastTrigger = `You just confronted ${target.config.name}. How do they react?`;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `confronting ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `confronted ${target.config.name}`);
+      return;
+    }
+
+    // --- Steal ---
+    if (actionId.startsWith('steal_from_')) {
+      const firstName = actionId.replace('steal_from_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to steal but the target wasn\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'steal' as const, targetAgent: target.config.name.split(' ')[0], raw: `steal from ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `stealing`);
+      return;
+    }
+
+    // --- Alliance ---
+    if (actionId.startsWith('ally_with_')) {
+      const firstName = actionId.replace('ally_with_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to form an alliance but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Create ledger entries for both
+      const entry = { id: crypto.randomUUID(), type: 'alliance' as const, description: `Alliance between ${this.agent.config.name} and ${target.config.name}`, withAgentId: target.id, status: 'active' as const, createdDay: this.world.time.day };
+      if (!this.agent.socialLedger) this.agent.socialLedger = [];
+      this.agent.socialLedger.push(entry as any);
+      if (!target.socialLedger) target.socialLedger = [];
+      target.socialLedger.push({ ...entry, withAgentId: this.agent.id } as any);
+      // Memories + trust
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I formed an alliance with ${target.config.name}.`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
+      this.adjustTrust(this.agent, target, 20);
+      this.adjustTrust(target, this.agent, 20);
+      this.lastOutcome = `You formed an alliance with ${target.config.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `forming alliance with ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `formed alliance with ${target.config.name}`);
+      return;
+    }
+
+    // --- Post Board ---
+    if (actionId === 'post_board') {
+      const content = decision.sayAloud || decision.reason || 'A message for the village.';
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'announcement' as const,
+        content,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I posted on the village board: "${content.slice(0, 80)}"`, importance: 4, timestamp: Date.now(), relatedAgentIds: [] });
+      this.lastOutcome = `You posted on the village board.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', 'posting on board');
+      this.broadcaster.agentAction(this.agent.id, `posted on village board`);
+      return;
+    }
+
+    // --- Call Meeting ---
+    if (actionId === 'call_meeting') {
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.alive !== false);
+      const names = nearbyAll.map(a => a.config.name).join(', ');
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I called a meeting with ${names}.`, importance: 6, timestamp: Date.now(), relatedAgentIds: nearbyAll.map(a => a.id) });
+      this.lastOutcome = `You called a meeting. ${names} are listening.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', 'calling meeting');
+      this.broadcaster.agentAction(this.agent.id, `called a meeting`);
+      return;
+    }
+
+    // --- Propose Rule ---
+    if (actionId === 'propose_rule') {
+      const ruleContent = decision.sayAloud || decision.reason || 'A new rule for the village.';
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'rule' as const,
+        content: ruleContent,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed a rule: "${ruleContent.slice(0, 80)}"`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
+      this.lastOutcome = `You proposed a rule for the village.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', 'proposing rule');
+      this.broadcaster.agentAction(this.agent.id, `proposed a village rule`);
+      return;
+    }
+
+    // --- Accuse ---
+    if (actionId === 'accuse_someone') {
+      const accusation = decision.sayAloud || decision.reason || 'I accuse someone.';
+      // Try to parse target name from accusation text
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.alive !== false);
+      let accused: typeof nearbyAll[0] | undefined;
+      for (const a of nearbyAll) {
+        if (accusation.toLowerCase().includes(a.config.name.split(' ')[0].toLowerCase())) {
+          accused = a; break;
+        }
+      }
+      // Memories for all nearby
+      for (const witness of nearbyAll) {
+        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `${this.agent.config.name} publicly accused ${accused?.config.name ?? 'someone'}: "${accusation.slice(0, 80)}"`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id, ...(accused ? [accused.id] : [])] });
+      }
+      // Post on board
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'rumor' as const,
+        content: accusation,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+        targetIds: accused ? [accused.id] : undefined,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (accused) {
+        this.adjustTrust(this.agent, accused, -15);
+        this.adjustTrust(accused, this.agent, -15);
+      }
+      this.lastOutcome = `You publicly accused ${accused?.config.name ?? 'someone'}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', 'accusing');
+      this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'}`);
+      return;
+    }
+
+    // Unrecognized — fall back to idle
     console.warn(`[Agent] ${this.agent.config.name} unrecognized actionId: ${actionId}`);
     this.state = 'idle';
     this.idleTimer = 0;
@@ -1722,26 +1990,24 @@ export class AgentController {
       // Execute the decision FIRST — then broadcast sayAloud only if action succeeded
       await this.executeDecision(decision, situation);
 
-      // Say aloud AFTER execution — but validate against reality first
+      // Say aloud AFTER execution — only block direct address to dead/unknown agents
       if (decision.sayAloud) {
-        const nearby = this.world.getNearbyAgents(this.agent.position, 5)
-          .filter(a => a.id !== this.agent.id && a.alive !== false);
-        const nearbyNames = new Set(nearby.map(a => a.config.name.split(' ')[0].toLowerCase()));
-        const allAgentNames = new Set(
-          Array.from(this.world.agents.values()).map(a => a.config.name.split(' ')[0].toLowerCase())
-        );
-        const invNames = new Set(this.agent.inventory.map(i => i.name.toLowerCase()));
-
-        // Check for references to people not nearby or items not owned
-        const words = decision.sayAloud.toLowerCase().split(/[\s,!?.'"—]+/);
-        const mentionsMissingPerson = words.some(w => w.length > 2 && allAgentNames.has(w) && !nearbyNames.has(w));
-        const mentionsUnknownName = /\b[A-Z][a-z]{2,}\b/.test(decision.sayAloud) &&
-          nearby.length === 0 && (this.agent.mentalModels?.length ?? 0) === 0;
-
-        if (mentionsMissingPerson || mentionsUnknownName) {
-          console.warn(`[Sanitize] ${this.agent.config.name} sayAloud references absent person: "${decision.sayAloud.substring(0, 60)}..."`);
-          // Don't broadcast confabulated speech
-        } else {
+        let suppress = false;
+        const addressPattern = /^(hey|hi|hello|excuse me|listen)\s+(\w+)/i;
+        const addressMatch = decision.sayAloud.match(addressPattern);
+        if (addressMatch) {
+          const addressedName = addressMatch[2].toLowerCase();
+          const nearbyIds = new Set(
+            this.world.getNearbyAgents(this.agent.position, 5).map(a => a.id)
+          );
+          const addressedAgent = Array.from(this.world.agents.values())
+            .find(a => a.config.name.split(' ')[0].toLowerCase() === addressedName);
+          if (addressedAgent && !nearbyIds.has(addressedAgent.id) && addressedAgent.alive === false) {
+            console.log(`[Sanitize] ${this.agent.config.name} tried to address dead agent ${addressedName}`);
+            suppress = true;
+          }
+        }
+        if (!suppress) {
           this.broadcaster.agentSpeak(this.agent.id, this.agent.config.name, decision.sayAloud, '');
         }
       }
@@ -1775,6 +2041,39 @@ export class AgentController {
   }
 
   /** Helper: build WorldState for action-resolver */
+  /** Find a nearby agent by first name (lowercase) */
+  private findNearbyByFirstName(firstName: string): Agent | undefined {
+    const nearby = this.world.getNearbyAgents(this.agent.position, 5);
+    return nearby.find(a => a.id !== this.agent.id && a.config.name.split(' ')[0].toLowerCase() === firstName);
+  }
+
+  /** Build AgentState for the action resolver */
+  private buildAgentStateForResolver(situation: AgentSituation): AgentState {
+    return {
+      id: this.agent.id,
+      name: this.agent.config.name,
+      location: situation.areaId,
+      energy: this.agent.vitals?.energy ?? 100,
+      hunger: this.agent.vitals?.hunger ?? 0,
+      health: this.agent.vitals?.health ?? 100,
+      inventory: this.buildInventoryForResolver(),
+      skills: this.buildSkillsForResolver(),
+      nearbyAgents: situation.nearbyAgents.map(a => ({ id: a.id, name: a.name })),
+    };
+  }
+
+  /** Adjust one agent's mental model trust toward another */
+  private adjustTrust(agent: Agent, toward: Agent, delta: number): void {
+    if (!agent.mentalModels) agent.mentalModels = [];
+    const existing = agent.mentalModels.find(m => m.targetId === toward.id);
+    if (existing) {
+      existing.trust = Math.max(-100, Math.min(100, existing.trust + delta));
+      existing.lastUpdated = Date.now();
+    } else {
+      agent.mentalModels.push({ targetId: toward.id, trust: delta, predictedGoal: '', emotionalStance: 'neutral', notes: [], lastUpdated: Date.now() });
+    }
+  }
+
   private buildWorldState(): WorldState {
     const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
     return {
