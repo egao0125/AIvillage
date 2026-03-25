@@ -2084,7 +2084,28 @@ export class AgentController {
 
     // --- Post Board ---
     if (actionId === 'post_board') {
-      const content = decision.sayAloud || decision.reason || 'A message for the village.';
+      // Generate public post content via LLM — decision.reason is private inner thought
+      let content: string;
+      try {
+        const postPrompt = `You are ${this.agent.config.name}. You decided to write a message on the village board.
+
+Your reason for posting: ${decision.reason}
+
+Write the ACTUAL MESSAGE you would write on the board. This is a public notice — other villagers will read it. Not your inner thoughts — what you actually write down.
+
+Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
+        content = await this.cognition.llmProvider.complete(
+          'Write only the board message. No preamble.',
+          postPrompt,
+        );
+        content = content.replace(/^["']|["']$/g, '').trim();
+        if (content.length < 5 || content.length > 200) {
+          content = 'A message for the village.';
+        }
+      } catch {
+        content = 'A message for the village.';
+      }
+
       const post = {
         id: crypto.randomUUID(),
         authorId: this.agent.id,
@@ -2120,7 +2141,27 @@ export class AgentController {
 
     // --- Propose Rule ---
     if (actionId === 'propose_rule') {
-      const ruleContent = decision.sayAloud || decision.reason || 'A new rule for the village.';
+      let ruleContent: string;
+      try {
+        const rulePrompt = `You are ${this.agent.config.name}. You decided to propose a rule for the village.
+
+Your reason: ${decision.reason}
+
+Write the ACTUAL RULE you would propose on the village board. This is a public proposal — other villagers will read and vote on it. Not your inner thoughts — what you actually write down.
+
+Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
+        ruleContent = await this.cognition.llmProvider.complete(
+          'Write only the proposed rule. No preamble.',
+          rulePrompt,
+        );
+        ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
+        if (ruleContent.length < 5 || ruleContent.length > 200) {
+          ruleContent = 'A new rule for the village.';
+        }
+      } catch {
+        ruleContent = 'A new rule for the village.';
+      }
+
       const post = {
         id: crypto.randomUUID(),
         authorId: this.agent.id,
