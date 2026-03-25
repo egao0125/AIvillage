@@ -564,16 +564,15 @@ Think about:
 - Is there something eating at you that isn't about food or energy?
 - Have you been doing the same thing too long? Are you bored?` : `You're still getting settled. Explore, meet people, take care of your basic needs.`}
 
-=== REALITY CHECK (READ THIS BEFORE ANSWERING) ===
+FACTS:
 You have EXACTLY these items: ${invStr}. Nothing else. No wheat, no tools, no materials unless listed above.
 ${situation.nearbyAgents.length > 0 ? 'People here RIGHT NOW: ' + situation.nearbyAgents.map(a => a.name).join(', ') + '. ONLY these people exist here.' : 'You are COMPLETELY ALONE. Nobody is here. Do not talk to, reference, or mention any person by name.'}
 ${!situation.socialPressure && !situation.commitments ? 'You have NO promises, NO unfinished business, NO relationships yet.' : ''}
-Your sayAloud MUST only reference people present and items you own. If alone, say nothing or mutter to yourself about your surroundings.
-
+${situation.nearbyAgents.length > 0 ? `To have a real conversation where someone hears and responds, pick talk_<name> as your action.` : ''}
 Your actionId MUST be one of the IDs listed above. Do NOT invent action IDs.
 
 Reply with ONLY valid JSON, no other text:
-{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel","sayAloud":"what you say out loud, or null if alone"}`;
+{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel"}`;
 
     const memories = this.tieredMemory
       ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
@@ -613,6 +612,17 @@ Reply with ONLY valid JSON, no other text:
       const parsed = JSON.parse(cleaned) as AgentDecision;
       if (parsed.actionId && parsed.reason) {
         return parsed;
+      }
+    } catch {}
+
+    // Try extracting JSON from mixed prose+JSON output
+    try {
+      const jsonMatch = response.match(/\{[\s\S]*"actionId"[\s\S]*"reason"[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as AgentDecision;
+        if (parsed.actionId && parsed.reason) {
+          return parsed;
+        }
       }
     } catch {}
 

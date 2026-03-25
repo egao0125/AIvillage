@@ -227,7 +227,7 @@ export class ConversationManager {
       const myLedger = speakerAgent.socialLedger ?? [];
       const otherIdSet = new Set(otherIds);
       const sharedEntries = myLedger.filter(e =>
-        e.targetIds.some(id => otherIdSet.has(id))
+        e.targetIds?.some(id => otherIdSet.has(id))
       );
       let ledgerContext: string | undefined;
       if (sharedEntries.length > 0) {
