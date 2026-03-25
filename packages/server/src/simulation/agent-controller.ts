@@ -677,13 +677,15 @@ export class AgentController {
 
   private static readonly PHYSICAL_ACTION = /^(gather|craft|build|eat|repair|fish|harvest|cook|bake|rest|sleep)\b/i;
   private static readonly MOVE_ONLY = /^(go\s+to|head\s+to|walk\s+to|travel\s+to|move\s+to|visit|return\s+to|head\s+toward|walk\s+toward)\b/i;
+  private static readonly HAS_ACTION_VERB = /\b(gather|craft|build|eat|repair|fish|harvest|cook|bake|rest|sleep|talk|speak|meet|find|trade|buy|sell|give|take|collect|pick|forage|plant|tend|brew|chop|mine|dig)\b/i;
 
   startPerforming(activity: string, duration: number, areaId?: string): void {
     // Guard: don't start performing if we entered a conversation during movement
     if (this.state === 'conversing') return;
 
     // Pure movement intentions — the walk already happened. Go idle so next intention runs.
-    if (AgentController.MOVE_ONLY.test(activity.trim())) {
+    // But NOT if the intention also contains an action verb (e.g. "go to farm and gather wheat").
+    if (AgentController.MOVE_ONLY.test(activity.trim()) && !AgentController.HAS_ACTION_VERB.test(activity)) {
       const area = getAreaAt(this.agent.position);
       console.log(`[Agent] ${this.agent.config.name} arrived at ${area?.name ?? areaId ?? 'destination'} (move-only, skipping action)`);
       this.state = 'idle';
