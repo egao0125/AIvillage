@@ -431,8 +431,8 @@ export class SimulationEngine {
 
     this.world.addAgent(agent);
 
-    // Starting provisions — 5 bread so new agents don't starve immediately
-    for (let i = 0; i < 5; i++) {
+    // Starting provisions — 2 bread; at 1 hunger/hour they run out by Day 2
+    for (let i = 0; i < 2; i++) {
       this.world.addItem({
         id: crypto.randomUUID(),
         name: 'Bread',
