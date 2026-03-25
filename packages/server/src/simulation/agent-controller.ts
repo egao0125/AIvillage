@@ -676,10 +676,21 @@ export class AgentController {
   }
 
   private static readonly PHYSICAL_ACTION = /^(gather|craft|build|eat|repair|fish|harvest|cook|bake|rest|sleep)\b/i;
+  private static readonly MOVE_ONLY = /^(go\s+to|head\s+to|walk\s+to|travel\s+to|move\s+to|visit|return\s+to|head\s+toward|walk\s+toward)\b/i;
 
   startPerforming(activity: string, duration: number, areaId?: string): void {
     // Guard: don't start performing if we entered a conversation during movement
     if (this.state === 'conversing') return;
+
+    // Pure movement intentions — the walk already happened. Go idle so next intention runs.
+    if (AgentController.MOVE_ONLY.test(activity.trim())) {
+      const area = getAreaAt(this.agent.position);
+      console.log(`[Agent] ${this.agent.config.name} arrived at ${area?.name ?? areaId ?? 'destination'} (move-only, skipping action)`);
+      this.state = 'idle';
+      this.idleTimer = 0;
+      this.world.updateAgentState(this.agent.id, 'idle', '');
+      return;
+    }
 
     const isPhysical = AgentController.PHYSICAL_ACTION.test(activity.trim());
 
