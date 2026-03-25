@@ -1644,6 +1644,21 @@ export class AgentController {
       altar: 'church',
       desk: 'town_hall',
       stalls: 'market',
+      // Resource names → gathering locations
+      wheat: 'farm',
+      grain: 'farm',
+      vegetables: 'farm',
+      fish: 'lake',
+      fishing: 'lake',
+      wood: 'forest',
+      lumber: 'forest',
+      mushrooms: 'forest',
+      mushroom: 'forest',
+      herbs: 'garden',
+      herb: 'garden',
+      flowers: 'garden',
+      clay: 'lake',
+      stone: 'lake',
     };
 
     // Sort by key length descending — prefer "herb garden" over "garden", "town hall" over "bar"
