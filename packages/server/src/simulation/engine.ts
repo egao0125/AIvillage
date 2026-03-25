@@ -685,6 +685,12 @@ export class SimulationEngine {
     const agent = this.world.getAgent(id);
     if (!agent || agent.alive !== false) return false;
 
+    // Kill old controller/cognition to stop in-flight writes, then let them settle
+    this.controllers.delete(id);
+    this.cognitions.delete(id);
+    if (this.decisionQueue) this.decisionQueue.removeAgent(id);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
     // Revive agent state — full reset to prevent stale data from previous life
     agent.alive = true;
     agent.causeOfDeath = undefined;
@@ -697,16 +703,6 @@ export class SimulationEngine {
     agent.socialLedger = [];
     agent.inventory = [];
     agent.skills = [];
-
-    // Erase narrative texts that reference previous-life relationships/events
-    agent.config.soul = '';
-    agent.config.backstory = '';
-    agent.config.goal = '';
-    agent.config.fears = [];
-    agent.config.desires = [];
-    agent.config.contradictions = undefined;
-    agent.config.secretShames = undefined;
-    agent.config.startingRelationships = undefined;
 
     // Give starting food so they don't immediately starve again
     for (let i = 0; i < 3; i++) {
@@ -1567,6 +1563,15 @@ export class SimulationEngine {
     this.pause();
     console.log('[Engine] Fresh start — wiping world state and memories');
 
+    // 0. Kill old controllers/cognitions FIRST to stop all in-flight writes
+    this.controllers.clear();
+    this.cognitions.clear();
+    if (this.decisionQueue) this.decisionQueue.clear();
+
+    // Let any in-flight Supabase writes from the old life settle
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log('[FreshStart] Old controllers cleared, in-flight writes settled');
+
     // 1. Wipe Supabase data (memories, world_state, agent_controllers) but keep agent rows
     if (this.persistence) {
       // Delete all memories
@@ -1646,16 +1651,6 @@ export class SimulationEngine {
       agent.institutionIds = [];
       agent.joinedDay = 1;
 
-      // Erase narrative texts that reference previous-life relationships/events
-      agent.config.soul = '';
-      agent.config.backstory = '';
-      agent.config.goal = '';
-      agent.config.fears = [];
-      agent.config.desires = [];
-      agent.config.contradictions = undefined;
-      agent.config.secretShames = undefined;
-      agent.config.startingRelationships = undefined;
-
       // Recreate cognition with fresh worldView
       const keyData = this.agentApiKeys.get(agent.id);
       const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
@@ -1712,7 +1707,33 @@ export class SimulationEngine {
       }
     }
 
-    // 5. Resume if was running
+    // 5. Final cleanup — delete any stale memories that landed after first wipe, then re-seed
+    if (this.persistence) {
+      // Nuke everything
+      await this.persistence.client
+        .from('memories')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      // Re-seed identity memories for all agents
+      for (const [agentId, cognition] of this.cognitions.entries()) {
+        const agent = this.world.getAgent(agentId);
+        if (!agent) continue;
+        const identityText = agent.config.soul || agent.config.backstory || '';
+        await cognition.addMemory({
+          id: crypto.randomUUID(), agentId, type: 'reflection',
+          content: `I am ${agent.config.name}. ${identityText}`,
+          importance: 9, isCore: true, timestamp: Date.now(), relatedAgentIds: [],
+        });
+        await cognition.addMemory({
+          id: crypto.randomUUID(), agentId, type: 'observation',
+          content: 'I just arrived at the village. I have some bread and nothing else. Time to explore.',
+          importance: 5, timestamp: Date.now(), relatedAgentIds: [],
+        });
+      }
+      console.log('[FreshStart] Final cleanup + re-seed complete');
+    }
+
+    // 6. Resume if was running
     if (wasRunning) {
       this.start();
     }

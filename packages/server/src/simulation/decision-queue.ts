@@ -63,6 +63,12 @@ export class DecisionQueue {
     this.inFlight.delete(agentId);
   }
 
+  /** Drop all pending decisions and clear in-flight tracking */
+  clear(): void {
+    this.queue = [];
+    this.inFlight.clear();
+  }
+
   get pending(): number { return this.queue.length; }
   get active(): number { return this.inFlight.size; }
 }
