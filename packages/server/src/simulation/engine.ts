@@ -1,7 +1,7 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, SEASONS } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
@@ -343,7 +343,7 @@ export class SimulationEngine {
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
         const freshParts = buildStartingWorldViewParts(spawnArea as any);
         cognition.resetExperience(freshParts.myExperience);
-        this.wireTieredMemory(cognition, agent, sharedMemoryStore);
+        this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
         this.cognitions.set(agent.id, cognition);
 
         // Restore controller
@@ -456,7 +456,7 @@ export class SimulationEngine {
     const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Broadcast spawn AFTER cognition is set so getSnapshot() can enrich with worldView
@@ -630,7 +630,7 @@ export class SimulationEngine {
     // Preserve worldViewParts from old cognition if available
     const oldCognition = this.cognitions.get(id);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Recreate controller with default wake/sleep hours
@@ -741,7 +741,7 @@ export class SimulationEngine {
     ];
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Recreate controller
@@ -1471,6 +1471,13 @@ export class SimulationEngine {
     cognition.tieredMemory = tiered;
   }
 
+  /** Four Stream Memory: categorical retrieval replacing TF-IDF flat pool */
+  private wireFourStreamMemory(cognition: AgentCognition, agent: Agent, memoryStore: import('@ai-village/ai-engine').MemoryStore): void {
+    const fourStream = new FourStreamMemory(agent.id, memoryStore, agent);
+    fourStream.seedIdentity(agent.config);
+    cognition.fourStream = fourStream;
+  }
+
   private createActionExecutor() {
     const requestConv = (initiatorId: string, targetId: string): boolean => {
         // Block self-conversations
@@ -1530,7 +1537,7 @@ export class SimulationEngine {
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(agentId, cognition);
 
     // Reset controller's API state
@@ -1659,7 +1666,7 @@ export class SimulationEngine {
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
       const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts);
-      this.wireTieredMemory(cognition, agent, sharedMemoryStore);
+      this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
       // Seed identity memories — await so they exist in Supabase before first decide()

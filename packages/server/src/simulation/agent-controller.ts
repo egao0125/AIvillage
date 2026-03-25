@@ -69,6 +69,9 @@ export class AgentController {
   private decidingInProgress: boolean = false;
   lastTrigger: string = 'You just arrived. Look around and decide what to do.';
   private lastOutcome: string | undefined;
+  // Four Stream Memory: importance accumulator for belief generation
+  private importanceAccum: number = 0;
+  private lastBeliefTick: number = 0;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -141,28 +144,14 @@ export class AgentController {
 
   private logTransitionMemory(from: ControllerState, to: ControllerState): void {
     if (from === to) return;
-    const skip: ControllerState[] = ['waking', 'planning', 'reflecting'];
-    if (skip.includes(from) || skip.includes(to)) return;
+    // Only log transitions that matter narratively — skip idle/moving/performing churn
+    if (to !== 'sleeping' && to !== 'conversing') return;
 
     const area = getAreaAt(this.agent.position);
     const location = area?.name ?? 'the village';
-    let content: string;
-
-    if (to === 'moving') {
-      content = `I'm heading somewhere.`;
-    } else if (to === 'performing') {
-      content = `I started ${this.shortActivity(this.currentPerformingActivity)} at ${location}.`;
-    } else if (to === 'idle' && from === 'performing') {
-      content = `I finished what I was doing at ${location}.`;
-    } else if (to === 'idle' && from === 'moving') {
-      content = `I arrived at ${location}.`;
-    } else if (to === 'conversing') {
-      content = `I started a conversation at ${location}.`;
-    } else if (to === 'idle' && from === 'conversing') {
-      content = `I finished talking at ${location}.`;
-    } else {
-      return;
-    }
+    const content = to === 'sleeping'
+      ? `I went to sleep at ${location}.`
+      : `I started a conversation at ${location}.`;
 
     void this.cognition.addMemory({
       id: crypto.randomUUID(),
@@ -343,6 +332,16 @@ export class AgentController {
         }
         break;
       }
+    }
+
+    // Four Stream: trigger belief generation when importance accumulates
+    if (this.cognition.fourStream &&
+        this.importanceAccum >= 100 &&
+        this.world.time.totalMinutes - this.lastBeliefTick > 480 &&
+        this.state === 'idle' && !this.decidingInProgress) {
+      this.importanceAccum = 0;
+      this.lastBeliefTick = this.world.time.totalMinutes;
+      void this.cognition.fourStream.generateBeliefs(this.cognition.llmProvider);
     }
 
     // Log transition memories when state changes (zero LLM cost)
@@ -658,6 +657,10 @@ export class AgentController {
         this.broadcaster.agentMood(this.agent.id, mood);
         console.log(`[Agent] ${this.agent.config.name} mood: ${mood}`);
       }
+      // Four Stream: nightly compression — beliefs + prune timeline + prune concerns
+      if (this.cognition.fourStream) {
+        await this.cognition.fourStream.nightlyCompression(this.cognition.llmProvider);
+      }
     } catch (err) {
       console.error(`[Agent] ${this.agent.config.name} failed to reflect:`, err);
       this.handleApiFailure(err);
@@ -818,6 +821,39 @@ export class AgentController {
         `Health: ${Math.round(v.health)}/100.`,
         vitalsMemId,
       );
+    }
+
+    // Four Stream: add vitals as concerns at threshold crossings
+    if (this.cognition.fourStream) {
+      if (hungerBand > this.lastHungerBand && hungerBand >= 1) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: hungerBand === 2 ? 'I\'m starving. I need food NOW or I\'ll die.' : 'I\'m getting hungry. I need to find food.',
+          category: 'need',
+          relatedAgentIds: [],
+          createdAt: this.world.time.totalMinutes,
+          expiresAt: this.world.time.totalMinutes + 480,
+        });
+      }
+      if (energyBand > this.lastEnergyBand && energyBand >= 1) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: energyBand === 2 ? 'I can barely stand. I need rest desperately.' : 'I\'m getting tired. Should rest soon.',
+          category: 'need',
+          relatedAgentIds: [],
+          createdAt: this.world.time.totalMinutes,
+          expiresAt: this.world.time.totalMinutes + 480,
+        });
+      }
+      if (healthBand > this.lastHealthBand && healthBand >= 1) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: healthBand === 2 ? 'I\'m critically injured. I might die.' : 'I\'m hurt and need medicine or rest.',
+          category: 'threat',
+          relatedAgentIds: [],
+          createdAt: this.world.time.totalMinutes,
+        });
+      }
     }
 
     this.lastHungerBand = hungerBand;
@@ -1361,15 +1397,15 @@ export class AgentController {
       if (model && model.trust < 0) {
         actions.push({ id: 'confront_' + firstName, label: 'Confront ' + a.config.name, category: 'social' });
       }
+    }
 
-      // Steal (always available as dark option)
-      actions.push({ id: 'steal_from_' + firstName, label: 'Steal from ' + a.config.name + ' (risky)', category: 'social' });
-
-      // Fight — available when nearby, shows risk
-      actions.push({ id: 'fight_' + firstName, label: 'Attack ' + a.config.name + ' (both take damage, everyone remembers)', category: 'social' });
-
-      // Alliance
-      actions.push({ id: 'ally_with_' + firstName, label: 'Propose alliance with ' + a.config.name, category: 'social' });
+    // Steal / Fight / Alliance — available for ANY nearby agent, shown once to reduce prompt bloat
+    // The LLM uses steal_from_<firstname>, fight_<firstname>, ally_with_<firstname> as actionIds
+    if (nearby.length > 0) {
+      const names = nearby.map(a => a.config.name.split(' ')[0].toLowerCase()).join(', ');
+      actions.push({ id: 'steal_from_<name>', label: `Steal from someone nearby (${names}) — risky`, category: 'social' });
+      actions.push({ id: 'fight_<name>', label: `Attack someone nearby (${names}) — both take damage, everyone remembers`, category: 'social' });
+      actions.push({ id: 'ally_with_<name>', label: `Propose alliance with someone nearby (${names})`, category: 'social' });
     }
 
     // Group actions (3+ agents nearby including self)
@@ -1421,9 +1457,20 @@ export class AgentController {
       ? trigger + ' ' + this.getTimeOfDayTrigger(hour)
       : trigger;
 
-    // Social pressure and commitments
-    const socialPressure = this.buildSocialPressure();
-    const commitments = this.buildLedgerContext();
+    // Social pressure and commitments — use fourStream concerns if available
+    let socialPressure: string;
+    let commitments: string;
+    if (this.cognition.fourStream) {
+      const concerns = this.cognition.fourStream.getAllConcerns();
+      const concernsText = concerns.length > 0
+        ? '\nWHAT\'S ON YOUR MIND:\n' + concerns.map(c => `- ${c.content}`).join('\n')
+        : '';
+      socialPressure = concernsText;
+      commitments = '';
+    } else {
+      socialPressure = this.buildSocialPressure();
+      commitments = this.buildLedgerContext();
+    }
 
     // Village board — only if agent knows the plaza
     let boardPosts: string | undefined;
@@ -1559,15 +1606,18 @@ export class AgentController {
     }
 
     // Store outcome as memory
+    const outcomeImportance = outcome.success ? 4 : 6;
     void this.cognition.addMemory({
       id: crypto.randomUUID(),
       agentId: actor.id,
       type: 'observation',
       content: outcome.description,
-      importance: outcome.success ? 4 : 6,
+      importance: outcomeImportance,
       timestamp: Date.now(),
       relatedAgentIds: [],
     });
+    // Four Stream: accumulate importance for belief generation
+    this.importanceAccum += outcomeImportance;
 
     // Broadcast
     this.broadcaster.agentAction(actor.id, outcome.description);
@@ -1744,6 +1794,9 @@ export class AgentController {
       this.lastTrigger = outcome.description;
       // Adjust trust: target trusts giver more
       this.adjustTrust(target, this.agent, 10);
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider);
+      }
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name}`);
@@ -1814,6 +1867,9 @@ export class AgentController {
       }
       this.adjustTrust(target, this.agent, -15);
       this.adjustTrust(this.agent, target, -15);
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I confronted ${target.config.name}: ${confrontText}`, this.cognition.llmProvider);
+      }
       // Force target to react
       const targetCtrl = (this.world as any).controllers?.get?.(target.id);
       this.lastOutcome = `You confronted ${target.config.name}.`;
@@ -1839,6 +1895,9 @@ export class AgentController {
       this.applyOutcomeToWorld(outcome);
       this.lastOutcome = outcome.description;
       this.lastTrigger = outcome.description;
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+      }
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `stealing`);
       return;
@@ -1929,6 +1988,9 @@ export class AgentController {
           wCtrl.adjustTrust(w, this.agent, -20);
         }
       }
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+      }
 
       // Emit fight event for engine-level handling
       if (this.bus) {
@@ -1969,6 +2031,9 @@ export class AgentController {
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I formed an alliance with ${target.config.name}.`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
       this.adjustTrust(this.agent, target, 20);
       this.adjustTrust(target, this.agent, 20);
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I formed an alliance with ${target.config.name}.`, this.cognition.llmProvider);
+      }
       this.lastOutcome = `You formed an alliance with ${target.config.name}.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 5;
@@ -2178,6 +2243,10 @@ export class AgentController {
       existing.lastUpdated = Date.now();
     } else {
       agent.mentalModels.push({ targetId: toward.id, trust: delta, predictedGoal: '', emotionalStance: 'neutral', notes: [], lastUpdated: Date.now() });
+    }
+    // Four Stream: sync trust to dossier (only for this controller's agent)
+    if (agent.id === this.agent.id) {
+      this.cognition.fourStream?.adjustTrust(toward.id, delta);
     }
   }
 

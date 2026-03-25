@@ -7,6 +7,7 @@
 import type { Agent, Memory, Position, MapArea, Mood, MentalModel, ThinkOutput } from "@ai-village/shared";
 // (GATHERING import removed — validatePlanIntentions removed in refactor v2)
 import type { TieredMemory } from './memory/tiered-store.js';
+import type { FourStreamMemory } from './memory/four-stream.js';
 import { ActionCache } from './action-cache.js';
 
 // --- World Rules + Action Resolver (deterministic physics) ---
@@ -137,6 +138,9 @@ ${this.myExperience}`;
   /** Infra 5: Tiered memory — when set, buildWorkingMemory() is used for prompt assembly */
   public tieredMemory?: TieredMemory;
 
+  /** Four Stream Memory — categorical retrieval replacing TF-IDF flat pool */
+  public fourStream?: FourStreamMemory;
+
   constructor(
     private agent: Agent,
     private memory: MemoryStore,
@@ -149,6 +153,9 @@ ${this.myExperience}`;
       this.knowsPlaza = parts.knowsPlaza ?? false;
     }
   }
+
+  /** Public accessor for the LLM provider (used by FourStreamMemory for dossier/belief generation) */
+  get llmProvider(): LLMProvider { return this.llm; }
 
   /** Reset the MY EXPERIENCE section to default starting text.
    * Called on simulation load to prevent stale worldView from previous runs. */
@@ -175,8 +182,30 @@ ${this.myExperience}`;
   }
 
   /**
+   * Summarize a conversation into structured JSON: summary + agreements + learned facts + tension.
+   * Single LLM call replaces the old transcript storage + separate extractFacts approach.
+   */
+  async summarizeConversation(transcript: string, othersLabel: string): Promise<string> {
+    const prompt = `You are ${this.agent.config.name}. You just talked with ${othersLabel}.
+
+Here's what was said:
+${transcript}
+
+Summarize in JSON:
+{
+  "summary": "2-3 sentences from YOUR perspective. What mattered? How did you feel? What changed?",
+  "agreements": ["things you both agreed to DO (max 2, skip trivial ones like 'see you later')"],
+  "learned": ["new facts you learned — about people, places, or resources (max 2, short)"],
+  "tension": "any unresolved conflict, distrust, or worry (or null if none)"
+}
+JSON ONLY.`;
+    return this.llm.complete(prompt, '');
+  }
+
+  /**
    * Extract structured facts from a conversation transcript using a cheap LLM call.
    * Returns categorized facts that become separate retrievable memories.
+   * @deprecated Use summarizeConversation() instead — combines summary + extraction in one call.
    */
   async extractFacts(transcript: string, myName: string, partnerNames: string[]): Promise<{
     category: 'place' | 'resource' | 'person' | 'agreement' | 'need' | 'skill';
@@ -316,7 +345,9 @@ If nothing notable was exchanged, return []`;
     if (memory.emotionalValence === undefined) {
       memory.emotionalValence = this.computeValence(memory.content);
     }
-    if (this.tieredMemory) {
+    if (this.fourStream) {
+      await this.fourStream.addEvent(memory);
+    } else if (this.tieredMemory) {
       await this.tieredMemory.addEpisodic(memory);
     } else {
       await this.memory.add(memory);
@@ -331,7 +362,9 @@ If nothing notable was exchanged, return []`;
     if (memory.emotionalValence === undefined) {
       memory.emotionalValence = this.computeValence(memory.content);
     }
-    if (this.tieredMemory) {
+    if (this.fourStream) {
+      await this.fourStream.addEvent(memory);
+    } else if (this.tieredMemory) {
       await this.tieredMemory.addEpisodic(memory);
     } else {
       await this.memory.add(memory);
@@ -548,18 +581,6 @@ ${nearbyStr}
 ${situation.goals?.length ? '\nYOUR PRIORITIES TODAY:\n' + situation.goals.map((g, i) => (i + 1) + '. ' + g).join('\n') : ''}
 ${situation.commitments || ''}${situation.socialPressure || ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts + '\n' : ''}
-${situation.nearbyAgents.length > 0 ? `
-WHAT YOU NOTICE:
-${situation.nearbyAgents.map(a => {
-  const parts = [a.name + ' is here'];
-  if (a.activity.includes('[carrying:')) {
-    parts.push('— you can see what they have');
-  }
-  return parts.join(' ');
-}).join('\n')}
-
-People are complicated. They help when it suits them and take when they think you won't notice. What someone carries tells you about their priorities. What they say and what they do are often different things.` : ''}
-
 ${situation.recentOutcome ? 'JUST HAPPENED: ' + situation.recentOutcome + '\n' : ''}HERE'S WHAT'S GOING ON:
 ${situation.trigger}
 
@@ -593,12 +614,24 @@ Your actionId MUST be one of the IDs listed above. Do NOT invent action IDs.
 Reply with ONLY valid JSON, no other text:
 {"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel"}`;
 
-    const memories = this.tieredMemory
-      ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
-      : await this.memory.retrieve(this.agent.id, situation.trigger, 5);
-    const memoryText = memories.length > 0
-      ? 'Your recent memories:\n' + memories.map(m => m.content).join('\n')
-      : '';
+    let memoryText: string;
+    if (this.fourStream) {
+      const nearbyIds = situation.nearbyAgents.map(a => a.id);
+      const wm = this.fourStream.buildWorkingMemory(nearbyIds.length > 0 ? nearbyIds : undefined);
+      const sections: string[] = [];
+      if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
+      if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+      if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+      if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+      memoryText = sections.join('\n\n');
+    } else {
+      const memories = this.tieredMemory
+        ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
+        : await this.memory.retrieve(this.agent.id, situation.trigger, 5);
+      memoryText = memories.length > 0
+        ? 'Your recent memories:\n' + memories.map(m => m.content).join('\n')
+        : '';
+    }
 
     const userPrompt = memoryText;
 
@@ -662,7 +695,7 @@ Reply with ONLY valid JSON, no other text:
    * Fires when agents perceive changes, arrive at locations, or encounter events.
    * Returns structured output: thought + optional actions, mood, replan directive.
    */
-  async think(trigger: string, context: string): Promise<ThinkOutput> {
+  async think(trigger: string, context: string, nearbyAgentIds?: string[]): Promise<ThinkOutput> {
     const systemPrompt = `${this.worldView}
 
 ${this.buildIdentityBlock()}
@@ -682,12 +715,23 @@ There are no NPCs, shopkeepers, or background characters. Every person in this v
 
 If your feelings shifted: MOOD: how you feel now`;
 
-    const memories = this.tieredMemory
-      ? await this.tieredMemory.buildWorkingMemory(trigger + ' ' + context)
-      : await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
-    const memoryContext = memories.length > 0
-      ? `\nRelevant memories:\n${memories.map(m => m.content).join('\n')}`
-      : '';
+    let memoryContext: string;
+    if (this.fourStream) {
+      const wm = this.fourStream.buildWorkingMemory(nearbyAgentIds);
+      const sections: string[] = [];
+      if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
+      if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+      if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+      if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+      memoryContext = sections.length > 0 ? '\n' + sections.join('\n\n') : '';
+    } else {
+      const memories = this.tieredMemory
+        ? await this.tieredMemory.buildWorkingMemory(trigger + ' ' + context)
+        : await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
+      memoryContext = memories.length > 0
+        ? `\nRelevant memories:\n${memories.map(m => m.content).join('\n')}`
+        : '';
+    }
 
     const userPrompt = `${this.buildContextBlock()}${memoryContext}
 
@@ -843,24 +887,35 @@ Action: "${rawAction}"`;
    * Replaces planDay() — no timed schedule, just prioritized intentions.
    */
   async plan(currentTime: { day: number; hour: number }, boardContext?: string, worldContext?: string): Promise<string[]> {
-    const recentMemories = await this.memory.getRecent(this.agent.id, 15);
-    // Also pull high-importance memories (commitments, reflections) that might not be recent
-    const importantMemories = await this.memory.getByImportance(this.agent.id, 7);
-    const allMemories = [...recentMemories];
-    for (const m of importantMemories) {
-      if (!allMemories.some(existing => existing.id === m.id)) {
-        allMemories.push(m);
-      }
-    }
-    const memoryContext = allMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
+    let memoryContext: string;
+    let outcomeSection = '';
 
-    // Freedom 3: Explicitly surface recent action outcomes so plan sees what worked/failed
-    const recentOutcomes = allMemories
-      .filter(m => m.type === 'observation' && (/\bSuccess/i.test(m.content) || /\bFailed/i.test(m.content)))
-      .slice(0, 5);
-    const outcomeSection = recentOutcomes.length > 0
-      ? `\n\nRECENT RESULTS:\n${recentOutcomes.map(m => `- ${m.content}`).join('\n')}`
-      : '';
+    if (this.fourStream) {
+      const wm = this.fourStream.buildWorkingMemory();
+      const sections: string[] = [];
+      if (wm.timeline) sections.push(wm.timeline);
+      if (wm.concerns) sections.push('On your mind:\n' + wm.concerns);
+      if (wm.beliefs) sections.push('Your beliefs:\n' + wm.beliefs);
+      memoryContext = sections.join('\n\n');
+    } else {
+      const recentMemories = await this.memory.getRecent(this.agent.id, 15);
+      const importantMemories = await this.memory.getByImportance(this.agent.id, 7);
+      const allMemories = [...recentMemories];
+      for (const m of importantMemories) {
+        if (!allMemories.some(existing => existing.id === m.id)) {
+          allMemories.push(m);
+        }
+      }
+      memoryContext = allMemories.map(m => `[${m.type}] ${m.content}`).join('\n');
+
+      // Freedom 3: Explicitly surface recent action outcomes so plan sees what worked/failed
+      const recentOutcomes = allMemories
+        .filter(m => m.type === 'observation' && (/\bSuccess/i.test(m.content) || /\bFailed/i.test(m.content)))
+        .slice(0, 5);
+      outcomeSection = recentOutcomes.length > 0
+        ? `\n\nRECENT RESULTS:\n${recentOutcomes.map(m => `- ${m.content}`).join('\n')}`
+        : '';
+    }
 
     const boardSection = boardContext ? `\n\nVILLAGE BOARD:\n${boardContext}` : '';
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
@@ -910,10 +965,16 @@ JSON array of strings.`;
    * Agenda param passed from outside (from think() output), not generated internally.
    */
   async talk(otherAgents: Agent[], conversationHistory: string[], boardContext?: string, worldContext?: string, artifactContext?: string, secretsContext?: string, agenda?: string, tradeContext?: string): Promise<string> {
-    const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
-    const memories = this.tieredMemory
-      ? await this.tieredMemory.buildWorkingMemory(memoryQuery)
-      : await this.memory.retrieve(this.agent.id, memoryQuery, 10);
+    const otherIds = otherAgents.map(a => a.id);
+    let memories: Memory[];
+    if (this.fourStream) {
+      memories = []; // fourStream path uses structured sections, not flat memories
+    } else {
+      const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
+      memories = this.tieredMemory
+        ? await this.tieredMemory.buildWorkingMemory(memoryQuery)
+        : await this.memory.retrieve(this.agent.id, memoryQuery, 10);
+    }
 
     const otherDescriptions = otherAgents.map(a => {
       return a.config.soul ? ` What you know about ${a.config.name}: age ${a.config.age}.` : '';
@@ -969,12 +1030,23 @@ INTERNAL STRATEGY (use to guide your response but NEVER output any of this):
 - What should you NOT say?
 Process this silently. Your output must contain ZERO reasoning, ZERO analysis, ZERO preamble — begin with spoken words immediately.`;
 
-    const memoryContext = memories.length > 0
-      ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => {
-          const tag = m.hearsayDepth ? '[hearsay] ' : '';
-          return `${tag}${m.content}`;
-        }).join('\n')}`
-      : '';
+    let memoryContext: string;
+    if (this.fourStream) {
+      const wm = this.fourStream.buildWorkingMemory(otherIds);
+      const sections: string[] = [];
+      if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
+      if (wm.dossiers) sections.push('WHAT YOU KNOW ABOUT THEM:\n' + wm.dossiers);
+      if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+      if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
+      memoryContext = sections.length > 0 ? '\n' + sections.join('\n\n') : '';
+    } else {
+      memoryContext = memories.length > 0
+        ? `\nYour memories involving ${otherAgents.map(a => a.config.name).join(', ')}:\n${memories.map(m => {
+            const tag = m.hearsayDepth ? '[hearsay] ' : '';
+            return `${tag}${m.content}`;
+          }).join('\n')}`
+        : '';
+    }
 
     // Build mental models section — private assessment of conversation partners
     let mentalModelsSection = '';
@@ -1018,7 +1090,13 @@ Your turn to speak (dialogue ONLY — just words spoken aloud):`;
    * Infra 7: Merged with updateWorldView() into a single LLM call.
    */
   async reflect(socialContext?: string): Promise<{ reflection: string; mood: Mood; mentalModels?: MentalModel[]; updatedWorldView?: string; commitmentUpdates?: { description: string; status: 'fulfilled' | 'broken' | 'pending' }[] }> {
-    const recentMemories = await this.memory.getRecent(this.agent.id, 20);
+    let recentMemories: Memory[];
+    if (this.fourStream) {
+      // Use timeline from four-stream (up to 20 recent events)
+      recentMemories = this.fourStream.getRecentTimeline(20);
+    } else {
+      recentMemories = await this.memory.getRecent(this.agent.id, 20);
+    }
 
     if (recentMemories.length < 3) {
       console.log(`[Reflect] ${this.agent.config.name} skipped — only ${recentMemories.length} memories`);
@@ -1474,7 +1552,7 @@ Output a JSON array ONLY, no other text:
       if (!this.knownPlaces.has(areaKey)) {
         this.addDiscovery(areaKey, `${area.name} — ${area.type} area`);
 
-        await this.memory.add({
+        await this.addMemory({
           id: crypto.randomUUID(),
           agentId: this.agent.id,
           type: "observation",
@@ -1486,20 +1564,22 @@ Output a JSON array ONLY, no other text:
       }
     }
 
-    // Combine all observations into a single memory instead of one per observation
-    const combined = observations.join(' ');
-    await this.memory.add({
-      id: crypto.randomUUID(),
-      agentId: this.agent.id,
-      type: "observation",
-      content: combined,
-      importance: 2,
-      timestamp: Date.now(),
-      relatedAgentIds: nearbyAgents.map((a) => a.id),
-    });
+    // Skip combined observation memory when fourStream is active (perception is in situation object)
+    if (!this.fourStream) {
+      const combined = observations.join(' ');
+      await this.memory.add({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: "observation",
+        content: combined,
+        importance: 2,
+        timestamp: Date.now(),
+        relatedAgentIds: nearbyAgents.map((a) => a.id),
+      });
 
-    // Hard-cap: prune old low-importance observations if memory is getting large
-    await this.pruneObservations();
+      // Hard-cap: prune old low-importance observations if memory is getting large
+      await this.pruneObservations();
+    }
 
     return observations;
   }
@@ -1650,6 +1730,7 @@ export { AgentCognition as default };
 export { InMemoryStore } from './memory/in-memory.js';
 export { SupabaseMemoryStore } from './memory/supabase-store.js';
 export { TieredMemory } from './memory/tiered-store.js';
+export { FourStreamMemory } from './memory/four-stream.js';
 export { AnthropicProvider } from './providers/anthropic.js';
 export { OpenAIProvider } from './providers/openai.js';
 export { ThrottledProvider } from './providers/throttled.js';

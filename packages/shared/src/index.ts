@@ -82,6 +82,10 @@ export interface Agent {
   partnerId?: string;
   parentIds?: string[];
   childIds?: string[];
+
+  // --- Four Stream Memory ---
+  dossiers?: RelationshipDossier[];
+  activeConcerns?: ActiveConcern[];
 }
 
 export type AgentState =
@@ -152,6 +156,31 @@ export interface MentalModel {
   emotionalStance: string; // "wary", "admiring", "resentful", "indifferent"
   notes: string[];         // Running log: "Lied to me on day 3", "Shared food when I was starving"
   lastUpdated: number;
+}
+
+// --- Four Stream Memory Types ---
+
+/** Per-person synthesized relationship profile */
+export interface RelationshipDossier {
+  agentId: string;        // who owns this dossier
+  targetId: string;       // who it's about
+  targetName: string;
+  summary: string;        // 3-5 sentences: who they are to me, history, trust
+  trust: number;          // -100 to 100
+  activeCommitments: string[];
+  lastInteraction: number;
+  lastUpdated: number;
+}
+
+/** Something on the agent's mind right now */
+export interface ActiveConcern {
+  id: string;
+  content: string;        // "I promised Wren 2 wheat by tomorrow"
+  category: 'commitment' | 'need' | 'threat' | 'unresolved' | 'goal';
+  relatedAgentIds: string[];
+  createdAt: number;
+  expiresAt?: number;
+  resolved?: boolean;
 }
 
 // --- Items & Materials ---

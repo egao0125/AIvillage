@@ -1199,52 +1199,6 @@ export class ActionPipeline {
       actionSuccess: outcome.success,
     });
 
-    // --- Deferred action (compound action handling) ---
-    if (outcome.deferredAction) {
-      if (outcome.type === 'move') {
-        // For moves: store high-importance thought so agent acts on it after arriving
-        void cognition.addMemory({
-          id: crypto.randomUUID(),
-          agentId: actorId,
-          type: 'thought',
-          content: `After arriving: ${outcome.deferredAction}`,
-          importance: 7,
-          timestamp: Date.now(),
-          relatedAgentIds: [],
-        });
-      } else {
-        // For non-moves: try to execute the deferred action immediately
-        const deferredAgentState: ResolverAgentState = {
-          id: actorId,
-          name: actorName,
-          location: this.world.getAreaAt(actor.position)?.id ?? 'unknown',
-          energy: actor.vitals?.energy ?? 100,
-          hunger: actor.vitals?.hunger ?? 0,
-          health: actor.vitals?.health ?? 100,
-          inventory: buildInventoryForResolver(actor),
-          skills: buildSkillsForResolver(actor),
-          nearbyAgents: this.world.getNearbyAgents(actor.position, 8)
-            .filter(a => a.id !== actorId && a.alive !== false)
-            .map(a => ({ id: a.id, name: a.config.name })),
-        };
-        const deferredIntent = parseIntent(outcome.deferredAction, deferredAgentState);
-        if (deferredIntent.type !== 'unknown' && deferredIntent.type !== 'intent') {
-          const deferredOutcome = executeAction(deferredIntent, deferredAgentState, buildWorldStateForResolver(this.world));
-          deferredOutcome.deferredAction = undefined; // prevent infinite recursion
-          this.applyOutcome(actorId, actorName, deferredOutcome, cognition, cognitions, requestConversation);
-        } else {
-          // Couldn't parse — store as intent thought
-          void cognition.addMemory({
-            id: crypto.randomUUID(),
-            agentId: actorId,
-            type: 'thought',
-            content: `I still want to: ${outcome.deferredAction}`,
-            importance: 6,
-            timestamp: Date.now(),
-            relatedAgentIds: [],
-          });
-        }
-      }
-    }
+    // Deferred actions removed — the refactored architecture uses atomic decisions via decide().
   }
 }
