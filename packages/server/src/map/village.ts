@@ -393,11 +393,15 @@ export function getRandomPositionInArea(areaId: string): Position {
     }
   }
 
-  // Also include tiles adjacent to the area (±2 tiles) for more spread
+  // Also include tiles adjacent to the area (±2 tiles) for more spread,
+  // but only if they don't belong to a different area
   for (let y = area.bounds.y - 2; y < area.bounds.y + area.bounds.height + 2; y++) {
     for (let x = area.bounds.x - 2; x < area.bounds.x + area.bounds.width + 2; x++) {
       if (getWalkable(x, y) && !walkable.some(p => p.x === x && p.y === y)) {
-        walkable.push({ x, y });
+        const posArea = getAreaAt({ x, y });
+        if (!posArea || posArea.id === areaId) {
+          walkable.push({ x, y });
+        }
       }
     }
   }
