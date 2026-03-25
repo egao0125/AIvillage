@@ -36,8 +36,14 @@ export class ThrottledProvider implements LLMProvider {
       this.inFlight++;
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      this.queue.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.queue.indexOf(wrappedResolve);
+        if (idx >= 0) this.queue.splice(idx, 1);
+        reject(new Error('LLM throttle queue timeout (60s)'));
+      }, 60_000);
+      const wrappedResolve = () => { clearTimeout(timer); resolve(); };
+      this.queue.push(wrappedResolve);
     });
   }
 

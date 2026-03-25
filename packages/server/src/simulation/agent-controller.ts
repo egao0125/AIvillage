@@ -1,6 +1,7 @@
 import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
-import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, getGatherOptions } from '@ai-village/ai-engine';
+import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
+import type { Item } from '@ai-village/shared';
 import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
@@ -38,8 +39,7 @@ export class AgentController {
   state: ControllerState = 'idle';
   agent: Agent;
   cognition: AgentCognition;
-  intentions: string[] = [];
-  currentIntentionIndex: number = 0;
+  // (intentions[] and currentIntentionIndex removed in refactor v2 — replaced by currentGoals)
   path: Position[] = [];
   pathIndex: number = 0;
   private moveTick: number = 0;
@@ -50,28 +50,25 @@ export class AgentController {
   private reflectingInProgress: boolean = false;
   private currentAreaId: string | null = null; // track where the agent is performing
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
-  private lastSoloActionTick: number = 0;
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
   apiExhausted: boolean = false;
   private apiRecoveryTimer: number = 0;
   private apiAuthDead: boolean = false; // true = 401/403, don't auto-recover
-  private lastReplanTick: number = 0;
   private currentPerformingActivity: string = '';
-  // Freedom 3: think budget — N reactive thinks per game-hour, resets on the hour
-  private reactiveThinkBudget: number = 4;
-  private lastBudgetResetHour: number = -1;
   onDeath?: (agentId: string, cause: string) => void;
   bus?: EventBus;  // Fix 4: event bus for gameplay events
-  private thinkInProgress: boolean = false;
   private lastHungerBand: number = 0;
   private lastEnergyBand: number = 0;
   private lastHealthBand: number = 0;
   public lastOutcomeDescription: string = '';
   decisionQueue?: DecisionQueue;  // Infra 3: injected by engine
-  // Freedom 4: track intention memory ID for causal chain linking
-  private currentIntentionMemoryId: string | undefined;
+  // Refactor v2: structured decision system
+  public currentGoals: string[] = [];
+  private decidingInProgress: boolean = false;
+  private lastTrigger: string = 'You just arrived. Look around and decide what to do.';
+  private lastOutcome: string | undefined;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -152,13 +149,11 @@ export class AgentController {
     let content: string;
 
     if (to === 'moving') {
-      const dest = this.pendingActivity?.areaId ?? 'somewhere';
-      const act = this.pendingActivity?.activity ? this.shortActivity(this.pendingActivity.activity) : 'do something';
-      content = `I'm heading to ${dest} to ${act}.`;
+      content = `I'm heading somewhere.`;
     } else if (to === 'performing') {
       content = `I started ${this.shortActivity(this.currentPerformingActivity)} at ${location}.`;
     } else if (to === 'idle' && from === 'performing') {
-      return; // handled directly in thinkAfterOutcome's goIdle where activity is available
+      content = `I finished what I was doing at ${location}.`;
     } else if (to === 'idle' && from === 'moving') {
       content = `I arrived at ${location}.`;
     } else if (to === 'conversing') {
@@ -193,12 +188,11 @@ export class AgentController {
   async executeQueuedDecision(type: string, context: { trigger: string; details: string }): Promise<void> {
     switch (type) {
       case 'think':
-        await this.thinkThenAct();
+        await this.decideAndAct();
         break;
       case 'plan':
         await this.doPlan(this.world.time);
         break;
-      // think_after_outcome is hot-path (fire-and-forget), never queued
       case 'reflect':
         await this.doReflect();
         break;
@@ -311,9 +305,10 @@ export class AgentController {
       case 'performing': {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
-          // HOT PATH — consequence reaction must be immediate while context is fresh.
-          // Never queue: agent just finished an activity and needs to react now.
-          void this.thinkAfterOutcome();
+          this.currentPerformingActivity = '';
+          this.state = 'idle';
+          this.idleTimer = 0;
+          this.world.updateAgentState(this.agent.id, 'idle', '');
         }
         break;
       }
@@ -337,45 +332,13 @@ export class AgentController {
 
       case 'idle': {
         this.idleTimer++;
-        if (this.idleTimer >= 10) {
+        if (this.idleTimer >= 8 && !this.decidingInProgress) {
           this.idleTimer = 0;
-          const allIntentionsDone = this.currentIntentionIndex >= this.intentions.length;
-          if ((this.intentions.length === 0 || allIntentionsDone) && !this.planningInProgress) {
-            // No plan or exhausted all intentions — enqueue replan
-            if (this.decisionQueue) {
-              this.decisionQueue.enqueue({
-                id: crypto.randomUUID(),
-                agentId: this.agent.id,
-                type: 'plan',
-                priority: 2, // high priority — agent has no plan
-                context: { trigger: 'no_plan', details: `day ${time.day} hour ${time.hour}` },
-                enqueuedAt: Date.now(),
-                expiresAt: Date.now() + 60000, // 60s — plans are important
-              });
-              this.state = 'deciding';
-            } else {
-              void this.doPlan(time);
-            }
-          } else if (!this.thinkInProgress) {
-            // Check if next intention is a clean action verb — skip think, act immediately
-            const nextIntention = this.intentions[this.currentIntentionIndex];
-            if (nextIntention && AgentController.VERB_PREFIX.test(nextIntention.trim())) {
-              void this.followNextIntention();
-            } else if (this.decisionQueue) {
-              // Think before acting — enqueue cold-path think
-              this.decisionQueue.enqueue({
-                id: crypto.randomUUID(),
-                agentId: this.agent.id,
-                type: 'think',
-                priority: 5, // low priority — idle thinking
-                context: { trigger: 'idle_cycle', details: this.agent.currentAction },
-                enqueuedAt: Date.now(),
-                expiresAt: Date.now() + 25000, // ~300 ticks
-              });
-              this.state = 'deciding';
-            } else {
-              void this.thinkThenAct();
-            }
+          // If no goals yet, plan first
+          if (this.currentGoals.length === 0 && !this.planningInProgress) {
+            void this.doPlan(time);
+          } else {
+            void this.decideAndAct();
           }
         }
         break;
@@ -497,14 +460,15 @@ export class AgentController {
 
       const ledgerCtx = this.buildLedgerContext();
       const worldCtx = (institutionContext + buildingContext + seasonContext + ledgerCtx + institutionRulesContext) || undefined;
-      const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx);
-      this.intentions = plan;
-      this.currentIntentionIndex = 0;
+      const goals = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, worldCtx);
+      this.currentGoals = goals;
       console.log(
-        `[Agent] ${this.agent.config.name} planned ${plan.length} intentions`,
+        `[Agent] ${this.agent.config.name} set ${goals.length} goals: ${goals.join('; ')}`,
       );
       this.handleApiSuccess();
-      await this.followNextIntention();
+      // Don't call followNextIntention — just go idle and let decideAndAct handle it
+      this.state = 'idle';
+      this.idleTimer = 0;
     } catch (err) {
       console.error(`[Agent] ${this.agent.config.name} failed to plan day:`, (err as Error).message || err);
       this.handleApiFailure(err);
@@ -514,149 +478,31 @@ export class AgentController {
     }
   }
 
-  private static readonly VERB_PREFIX = /^(gather|craft|build|eat|trade|talk|go|rest|sleep|explore|give|post|fish|bake|cook|repair|teach|steal|head|walk|move)\b/i;
-
-  /** Regex-based fast path: decompose simple "[verb] [object] at [location]" patterns */
-  private decomposeIntoSteps(intention: string): string[] {
-    const trimmed = intention.trim();
-    // "go to [location] and/then [action]"
-    const goAndMatch = trimmed.match(/^go\s+to\s+(?:the\s+)?(\w+)\s+(?:and|then)\s+(.+)$/i);
-    if (goAndMatch) return [`go to ${goAndMatch[1]}`, goAndMatch[2].trim()];
-    // "[verb] [object] at/in/from the [location]"
-    const atMatch = trimmed.match(/^(\w+\s+\w+(?:\s+\w+)?)\s+(?:at|in|from)\s+(?:the\s+)?(\w+)$/i);
-    if (atMatch) return [`go to ${atMatch[2]}`, atMatch[1].trim()];
-    // Already a clean command — return as-is
-    return [trimmed];
-  }
-
-  async followNextIntention(): Promise<void> {
-    if (this.followingIntention) return;
-    if (this.currentIntentionIndex >= this.intentions.length) {
-      this.state = 'idle';
-      this.world.updateAgentState(this.agent.id, 'idle', '');
-      return;
-    }
-
-    const intention = this.intentions[this.currentIntentionIndex];
-    this.currentIntentionIndex++;
-
-    // Freedom 4: Store intention as a memory so outcome can link back via causedBy
-    const intentionMemoryId = crypto.randomUUID();
-    this.currentIntentionMemoryId = intentionMemoryId;
-    void this.cognition.addMemory({
-      id: intentionMemoryId,
-      agentId: this.agent.id,
-      type: 'plan',
-      content: `I decided to: ${intention}`,
-      importance: 3,
-      timestamp: Date.now(),
-      relatedAgentIds: [],
-    });
-
-    // Translate narrative intention into executable steps
-    let steps: string[];
-    if (AgentController.VERB_PREFIX.test(intention.trim())) {
-      // Fast path: already starts with action verb — regex decompose
-      steps = this.decomposeIntoSteps(intention);
-    } else {
-      // Slow path: narrative prose — LLM translation
-      this.followingIntention = true;
-      try {
-        const area = getAreaAt(this.agent.position);
-        steps = await this.cognition.intentionToSteps(intention, area?.id ?? 'unknown');
-        this.handleApiSuccess();
-      } catch (err) {
-        this.handleApiFailure(err);
-        steps = [intention]; // fallback to original
-      } finally {
-        this.followingIntention = false;
-      }
-      // Guard: agent may have entered a conversation while we were awaiting the LLM
-      if (this.state === 'conversing') return;
-    }
-
-    // Queue extra steps after current position
-    if (steps.length > 1) {
-      this.intentions.splice(this.currentIntentionIndex, 0, ...steps.slice(1));
-    }
-
-    const currentStep = steps[0];
-
-    // Check if step mentions talking to a specific agent
-    let talkTargetAgent: Agent | null = null;
-    const talkMatch = currentStep.match(/(?:talk|speak|meet|find|converse|visit|see)\s+(?:to|with)?\s*(\w+)/i);
-    if (talkMatch) {
-      const targetName = talkMatch[1];
-      for (const agent of this.world.agents.values()) {
-        if (agent.id !== this.agent.id &&
-            agent.config.name.toLowerCase().includes(targetName.toLowerCase())) {
-          this.pendingConversationTarget = agent.id;
-          this.pendingConversationPurpose = intention; // original prose intention as purpose
-          talkTargetAgent = agent;
-          break;
-        }
-      }
-    }
-
-    // Body actions (eat/rest/sleep) use inventory — execute in place, don't walk somewhere
-    const IN_PLACE = /^(eat|rest|sleep|consume|drink)\b/i;
-    const inPlace = !talkTargetAgent && IN_PLACE.test(currentStep.trim());
-
-    // Path toward target agent's actual position for talk intentions,
-    // otherwise infer location from step text
-    const areaId = inPlace
-      ? (getAreaAt(this.agent.position)?.id ?? 'plaza')
-      : this.resolveLocation(currentStep);
-    const targetPos = talkTargetAgent
-      ? { ...talkTargetAgent.position }
-      : inPlace
-        ? { ...this.agent.position }
-        : getRandomPositionInArea(areaId);
-
-    console.log(`[Agent] ${this.agent.config.name} → ${currentStep}${steps.length > 1 ? ` (${steps.length} steps from: "${intention}")` : ''}`);
-
-    const dist = Math.abs(this.agent.position.x - targetPos.x) + Math.abs(this.agent.position.y - targetPos.y);
-    if (dist <= 1) {
-      this.startPerforming(currentStep, 60, areaId);
-    } else {
-      this.pendingActivity = { activity: currentStep, duration: 60, areaId };
-      this.startMoveTo(targetPos);
-    }
-
-    // Only broadcast talk intention if an actual agent was matched
-    if (talkTargetAgent) {
-      this.broadcaster.agentAction(this.agent.id, `talk to ${talkTargetAgent.config.name}`);
-    } else {
-      this.broadcaster.agentAction(this.agent.id, intention);
-    }
-  }
-
-  private pendingActivity: { activity: string; duration: number; areaId: string } | null = null;
+  // (followNextIntention, decomposeIntoSteps, VERB_PREFIX, pendingActivity removed in refactor v2)
   private pendingSleep: string | null = null; // sleep area name, set when walking to bed
   private sleepTriggered: boolean = false; // prevent re-triggering sleep check
   private windingDown: boolean = false; // waiting for current activity to finish before sleep
   private preSleepArea: string | null = null; // where the agent was before going to bed
   private preSleepActivity: string | null = null; // what the agent was doing before bed
-  private followingIntention: boolean = false; // guard against re-entry during async followNextIntention
+
 
   startMoveTo(target: Position): void {
     const path = findPath(this.agent.position, target, getWalkable, MAP_WIDTH, MAP_HEIGHT);
 
     if (path.length <= 1) {
-      // Already there or no path found
-      if (this.pendingActivity) {
-        this.startPerforming(this.pendingActivity.activity, this.pendingActivity.duration, this.pendingActivity.areaId);
-        this.pendingActivity = null;
-      } else {
-        this.state = 'idle';
-      }
+      // Already there or no path found — go idle so decideAndAct picks up
+      const area = getAreaAt(this.agent.position);
+      this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + '.';
+      this.state = 'idle';
+      this.idleTimer = 6;
+      this.world.updateAgentState(this.agent.id, 'idle', '');
       return;
     }
 
     this.path = path;
     this.pathIndex = 1; // Skip start position (already there)
     this.state = 'moving';
-    this.world.updateAgentState(this.agent.id, 'routine', this.pendingActivity?.activity || '');
+    this.world.updateAgentState(this.agent.id, 'routine', '');
   }
 
   private advanceMovement(): void {
@@ -665,11 +511,27 @@ export class AgentController {
       if (this.pendingSleep) {
         this.enterSleepState(this.pendingSleep);
         this.pendingSleep = null;
-      } else if (this.pendingActivity) {
-        this.startPerforming(this.pendingActivity.activity, this.pendingActivity.duration, this.pendingActivity.areaId);
-        this.pendingActivity = null;
-      } else {
+      } else if (this.pendingConversationTarget && this.soloActionExecutor) {
+        // Arrived to talk — try to start conversation
+        const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
+        if (started) {
+          this.pendingConversationTarget = null;
+          this.pendingConversationPurpose = null;
+          return;
+        }
+        // Target moved — go idle and re-decide
+        this.pendingConversationTarget = null;
+        this.pendingConversationPurpose = null;
+        const area = getAreaAt(this.agent.position);
+        this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + ' but couldn\'t find who you were looking for.';
         this.state = 'idle';
+        this.idleTimer = 6;
+        this.world.updateAgentState(this.agent.id, 'idle', '');
+      } else {
+        const area = getAreaAt(this.agent.position);
+        this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + '.';
+        this.state = 'idle';
+        this.idleTimer = 6;
         this.world.updateAgentState(this.agent.id, 'idle', '');
       }
       return;
@@ -684,112 +546,20 @@ export class AgentController {
     this.broadcaster.agentMove(this.agent.id, from, to);
   }
 
-  private static readonly PHYSICAL_ACTION = /^(gather|craft|build|eat|repair|fish|harvest|cook|bake|rest|sleep)\b/i;
-  private static readonly MOVE_ONLY = /^(go\s+to|head\s+to|walk\s+to|travel\s+to|move\s+to|visit|return\s+to|head\s+toward|walk\s+toward)\b/i;
-  private static readonly HAS_ACTION_VERB = /\b(gather|craft|build|eat|repair|fish|harvest|cook|bake|rest|sleep|talk|speak|meet|find|trade|buy|sell|give|take|collect|pick|forage|plant|tend|brew|chop|mine|dig)\b/i;
-
-  startPerforming(activity: string, duration: number, areaId?: string): void {
-    // Guard: don't start performing if we entered a conversation during movement
-    if (this.state === 'conversing') return;
-
-    // Pure movement intentions — the walk already happened. Go idle so next intention runs.
-    // But NOT if the intention also contains an action verb (e.g. "go to farm and gather wheat").
-    if (AgentController.MOVE_ONLY.test(activity.trim()) && !AgentController.HAS_ACTION_VERB.test(activity)) {
-      const area = getAreaAt(this.agent.position);
-      console.log(`[Agent] ${this.agent.config.name} arrived at ${area?.name ?? areaId ?? 'destination'} (move-only, skipping action)`);
-      this.state = 'idle';
-      this.idleTimer = 0;
-      this.world.updateAgentState(this.agent.id, 'idle', '');
-      return;
-    }
-
-    const isPhysical = AgentController.PHYSICAL_ACTION.test(activity.trim());
-
-    // Physical actions execute FIRST — then check conversations.
-    // This prevents "gather wheat" from being eaten by a nearby chat.
-    if (isPhysical) {
-      this.state = 'performing';
-      this.currentPerformingActivity = activity;
-      this.world.updateAgentState(this.agent.id, 'active', activity);
-      this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
-
-      if (this.soloActionExecutor) {
-        void this.soloActionExecutor.executeSocialAction(
-          this.agent.id, this.agent.config.name, '', activity, this.cognition
-        );
-      }
-      this.activityTimer = 10;
-
-      // After the action fires, check if there's a pending conversation
-      if (this.pendingConversationTarget && this.soloActionExecutor) {
-        const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
-        if (started) {
-          this.pendingConversationTarget = null;
-          this.pendingConversationPurpose = null;
-        }
-      }
-    } else {
-      // Non-physical: attempt conversation first (existing behavior)
-      if (this.pendingConversationTarget && this.soloActionExecutor) {
-        const started = this.soloActionExecutor.requestConversation(this.agent.id, this.pendingConversationTarget);
-        if (started) {
-          this.pendingConversationTarget = null;
-          this.pendingConversationPurpose = null;
-          return; // Controller is now in 'conversing' state
-        }
-      }
-      this.pendingConversationTarget = null;
-      this.pendingConversationPurpose = null;
-
-      this.state = 'performing';
-      this.currentPerformingActivity = activity;
-      this.world.updateAgentState(this.agent.id, 'active', activity);
-      this.currentAreaId = areaId ?? getAreaAt(this.agent.position)?.id ?? null;
-
-      if (this.soloActionExecutor) {
-        void this.soloActionExecutor.executeSocialAction(
-          this.agent.id, this.agent.config.name, '', activity, this.cognition
-        );
-      }
-      this.activityTimer = 10;
-    }
-
-    // Auto-drop lowest-value non-food item when inventory is full
-    if (this.agent.inventory.length >= 30) {
-      const droppable = this.agent.inventory
-        .filter(i => i.type !== 'food')
-        .sort((a, b) => a.value - b.value);
-      if (droppable.length > 0) {
-        const dropped = droppable[0];
-        this.world.removeItem(dropped.id);
-        this.broadcaster.agentAction(this.agent.id, `dropped ${dropped.name} (inventory full)`, '\u{1F5D1}\uFE0F');
-        this.broadcaster.agentInventory(this.agent.id, this.agent.inventory);
-        console.log(`[Agent] ${this.agent.config.name} auto-dropped ${dropped.name} — inventory was full`);
-      }
-    }
-
-    // Think is now handled by thinkThenAct (before) and thinkAfterOutcome (after)
-
-    console.log(
-      `[Agent] ${this.agent.config.name} starts: ${activity} (${duration} min)`,
-    );
-  }
+  // (startPerforming, PHYSICAL_ACTION, MOVE_ONLY, HAS_ACTION_VERB removed in refactor v2)
 
   /**
    * Enter conversing state (called externally by ConversationManager).
    */
   enterConversation(): void {
-    // Stop any movement and cancel pending activity — agent halts to talk
+    // Stop any movement — agent halts to talk
     this.path = [];
     this.pathIndex = 0;
-    this.pendingActivity = null;
     this.pendingSleep = null;
     this.activityTimer = 0;
     this.currentPerformingActivity = '';
     this.state = 'conversing';
     this.world.updateAgentState(this.agent.id, 'active', 'conversing');
-
-    // Agenda comes from think() output — no separate LLM call needed
   }
 
   /**
@@ -801,238 +571,12 @@ export class AgentController {
       this.state = 'idle';
       this.idleTimer = 0;
       this.conversationCooldown = 60; // ~5 seconds before this agent can talk again
+      this.lastTrigger = 'You just finished a conversation. What now?';
       this.world.updateAgentState(this.agent.id, 'idle', '');
-
-      // Think after conversation — process what was discussed (immediate, bypasses cooldown)
-      const area = getAreaAt(this.agent.position);
-      void this.thinkOnEvent(
-        'You just finished a conversation.',
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}.`
-      );
-
-      // After a conversation, replan the rest of the day based on new memories
-      // This allows agents to react to what was said (e.g. "meet me at the market")
-      void this.replanAfterConversation();
     }
   }
 
-  /**
-   * Think before acting — the agent considers the next intention and decides what to actually do.
-   * This is the core of the think-act-learn loop: plan sets intentions, think decides actions.
-   */
-  private async thinkThenAct(): Promise<void> {
-    if (this.thinkInProgress || this.apiExhausted) return;
-
-    const intention = this.intentions[this.currentIntentionIndex];
-    if (!intention) {
-      await this.followNextIntention();
-      return;
-    }
-
-    // 30 game-minute cooldown between regular thinks — stay idle if not met
-    const ticksSinceLast = this.world.time.totalMinutes - this.lastSoloActionTick;
-    if (ticksSinceLast < 30) {
-      return; // Wait for cooldown instead of burning through intentions
-    }
-
-    this.thinkInProgress = true;
-    this.lastSoloActionTick = this.world.time.totalMinutes;
-
-    try {
-      const area = getAreaAt(this.agent.position);
-      const nearby = this.world.getNearbyAgents(this.agent.position, 5)
-        .filter(a => a.id !== this.agent.id && a.alive !== false);
-      const nearbyNames = nearby.map(a => a.config.name).join(', ');
-
-      const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
-      const currentSeason = SEASON_ORDER[seasonIdx];
-
-      const gatherOpts = getGatherOptions(area?.id ?? '');
-      const availableStr = gatherOpts.length > 0
-        ? ` Available to gather here: ${gatherOpts.map(g => g.yields.map(y => y.resource).join('/')).join(', ')}.`
-        : '';
-
-      const ledgerCtx = this.buildLedgerContext();
-      const output = await this.cognition.think(
-        `You're about to: ${intention}`,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}.${nearbyNames ? ` Nearby: ${nearbyNames}.` : ''}${availableStr}${ledgerCtx}`
-      );
-      this.handleApiSuccess();
-
-      // Guard: agent may have entered a conversation while we were awaiting the LLM
-      if (this.state === 'conversing') return;
-
-      if (output.mood) {
-        this.agent.mood = output.mood;
-        this.broadcaster.agentMood(this.agent.id, output.mood);
-      }
-      this.broadcaster.agentThought(this.agent.id, output.thought);
-
-      if (output.actions && output.actions.length > 0) {
-        // think() produced specific actions — replace current intention and route through
-        // followNextIntention so the agent properly moves to the right location.
-        this.intentions.splice(this.currentIntentionIndex, 1, ...output.actions);
-        console.log(`[Agent] ${this.agent.config.name} thinkThenAct replaced intention with: ${output.actions.join(', ')}`);
-        await this.followNextIntention();
-      } else {
-        // No specific action from think — follow intention as planned
-        await this.followNextIntention();
-      }
-    } catch (err) {
-      this.handleApiFailure(err);
-      await this.followNextIntention();
-    } finally {
-      this.thinkInProgress = false;
-    }
-  }
-
-  /**
-   * Think after an action completes — process the outcome, update mood, decide next steps.
-   */
-  private async thinkAfterOutcome(): Promise<void> {
-    const activity = this.currentPerformingActivity;
-    this.currentPerformingActivity = '';
-
-    const goIdle = () => {
-      // Log finish-transition here where we still have the activity variable
-      if (activity) {
-        const area = getAreaAt(this.agent.position);
-        const location = area?.name ?? 'the village';
-        void this.cognition.addMemory({
-          id: crypto.randomUUID(),
-          agentId: this.agent.id,
-          type: 'observation',
-          content: `I finished ${this.shortActivity(activity)} at ${location}.`,
-          importance: 2,
-          timestamp: Date.now(),
-          relatedAgentIds: [],
-        });
-      }
-      this.state = 'idle';
-      this.idleTimer = 0;
-      const nextIdx = this.currentIntentionIndex;
-      const nextIntention = nextIdx < this.intentions.length ? this.intentions[nextIdx] : null;
-      this.world.updateAgentState(this.agent.id, 'idle', nextIntention || '');
-    };
-
-    // Micro-log: record factual outcome as memory even when think is skipped
-    // Freedom 4: Save the memory ID so subsequent think memories can link causedBy
-    let outcomeMemoryId: string | undefined;
-    if (activity && this.lastOutcomeDescription) {
-      let outcomeContent = this.lastOutcomeDescription
-        .replace(/^SUCCESS:\s*/i, '')
-        .replace(/^FAILED:\s*/i, 'Failed: ');
-      if (outcomeContent.length > 0) {
-        outcomeMemoryId = crypto.randomUUID();
-        void this.cognition.addLinkedMemory({
-          id: outcomeMemoryId,
-          agentId: this.agent.id,
-          type: 'observation',
-          content: outcomeContent,
-          importance: 3,
-          timestamp: Date.now(),
-          relatedAgentIds: [],
-          causedBy: this.currentIntentionMemoryId,  // Freedom 4: link outcome → intention
-        });
-      }
-    }
-
-    if (this.apiExhausted || !this.soloActionExecutor || !activity) {
-      goIdle();
-      return;
-    }
-
-    // Freedom 3: Budget-based reactive thinking — always fire thinkAfterOutcome,
-    // limited by N calls per game-hour (default 4). No time cooldown.
-    // Reset budget on the hour.
-    if (this.world.time.hour !== this.lastBudgetResetHour) {
-      this.reactiveThinkBudget = 4;
-      this.lastBudgetResetHour = this.world.time.hour;
-    }
-    if (this.reactiveThinkBudget <= 0) {
-      goIdle();
-      return;
-    }
-    this.reactiveThinkBudget--;
-    this.lastSoloActionTick = this.world.time.totalMinutes;
-
-    try {
-      const area = getAreaAt(this.agent.position);
-
-      // Season for context
-      const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
-      const currentSeason = SEASON_ORDER[seasonIdx];
-
-      // Inventory snapshot
-      const invItems = this.agent.inventory.length > 0
-        ? this.agent.inventory.reduce((acc, item) => {
-            acc[item.name] = (acc[item.name] || 0) + 1;
-            return acc;
-          }, {} as Record<string, number>)
-        : {};
-      const invStr = Object.keys(invItems).length > 0
-        ? Object.entries(invItems).map(([name, qty]) => `${name} ×${qty}`).join(', ')
-        : 'nothing';
-
-      // Use direct outcome if available, fall back to generic
-      const trigger = this.lastOutcomeDescription
-        ? `You just tried: ${activity}. Result: ${this.lastOutcomeDescription}`
-        : `You just finished: ${activity}.`;
-      this.lastOutcomeDescription = '';
-
-      const gatherOpts2 = getGatherOptions(area?.id ?? '');
-      const availableStr2 = gatherOpts2.length > 0
-        ? ` Available to gather here: ${gatherOpts2.map(g => g.yields.map(y => y.resource).join('/')).join(', ')}.`
-        : '';
-
-      const ledgerCtx = this.buildLedgerContext();
-      const output = await this.cognition.think(
-        trigger,
-        `Location: ${area?.name ?? 'unknown'}. Time: hour ${this.world.time.hour}. Season: ${currentSeason}. Inventory: ${invStr}.${availableStr2}${ledgerCtx}`
-      );
-      this.handleApiSuccess();
-
-      // Guard: agent may have entered a conversation while we were awaiting the LLM
-      if (this.state === 'conversing') return;
-
-      if (output.mood) {
-        this.agent.mood = output.mood;
-        this.broadcaster.agentMood(this.agent.id, output.mood);
-      }
-      this.broadcaster.agentThought(this.agent.id, output.thought);
-
-      if (output.actions && output.actions.length > 0) {
-        // Insert actions as new intentions so the agent properly moves to the right location.
-        // Firing in-place fails when the action needs a different area (e.g. "gather mushrooms" while at park).
-        this.intentions.splice(this.currentIntentionIndex, 0, ...output.actions);
-        console.log(`[Agent] ${this.agent.config.name} thinkAfterOutcome inserted ${output.actions.length} new intentions: ${output.actions.join(', ')}`);
-
-        // Freedom 4: Link new actions back to the outcome that caused them
-        if (outcomeMemoryId) {
-          for (const action of output.actions) {
-            void this.cognition.addLinkedMemory({
-              id: crypto.randomUUID(),
-              agentId: this.agent.id,
-              type: 'plan',
-              content: `I decided to: ${action}`,
-              importance: 4,
-              timestamp: Date.now(),
-              relatedAgentIds: [],
-              causedBy: outcomeMemoryId,
-            });
-          }
-        }
-
-        this.state = 'idle';
-        this.idleTimer = 25; // trigger followNextIntention quickly
-        return;
-      }
-    } catch (err) {
-      this.handleApiFailure(err);
-    }
-
-    goIdle();
-  }
+  // (thinkThenAct, thinkAfterOutcome removed in refactor v2 — replaced by decideAndAct)
 
   /**
    * Event-driven think — immediate, bypasses the 60-minute cooldown.
@@ -1046,7 +590,6 @@ export class AgentController {
       this.handleApiSuccess();
 
       // Guard: agent may have entered a conversation while we were awaiting the LLM
-      // (TypeScript narrows state above but can't see that `await` allows state mutation)
       if ((this.state as ControllerState) === 'conversing') return;
 
       if (output.mood) {
@@ -1055,69 +598,15 @@ export class AgentController {
       }
       this.broadcaster.agentThought(this.agent.id, output.thought);
 
-      if (output.actions && this.soloActionExecutor) {
-        for (const action of output.actions) {
-          this.soloActionExecutor.executeSocialAction(
-            this.agent.id, this.agent.config.name, '', action, this.cognition
-          );
-        }
-      }
+      // If the thought suggests urgency, trigger decideAndAct quickly
+      this.lastTrigger = trigger;
+      this.idleTimer = 6;
     } catch (err) {
       this.handleApiFailure(err);
     }
   }
 
-  /**
-   * Replan remaining activities after a conversation.
-   * The LLM sees recent memories (including the conversation that just ended)
-   * and generates new plan items for the rest of the day.
-   * Falls back to following the existing plan if replanning fails.
-   */
-  private async replanAfterConversation(): Promise<void> {
-    if (this.planningInProgress || this.apiExhausted) {
-      // Already planning or API dead — let idle timer handle next intention
-      return;
-    }
-
-    // Cooldown: don't replan more than once per 600 ticks (~50s real time)
-    const ticksSinceReplan = this.world.time.totalMinutes - this.lastReplanTick;
-    if (ticksSinceReplan < 600) return;
-
-    this.planningInProgress = true;
-    this.state = 'planning';
-    try {
-      const time = this.world.time;
-      this.world.updateAgentState(this.agent.id, 'active', '');
-
-      const boardContext = this.cognition.knownPlaces.has('plaza') ? this.world.getBoardSummary() : undefined;
-      const institutionContext = this.buildInstitutionContext();
-      const plan = await this.cognition.plan({ day: time.day, hour: time.hour }, boardContext, institutionContext || undefined);
-      this.handleApiSuccess();
-
-      // Preserve remaining physical-action intentions (gather/craft/build/eat etc.)
-      // so conversations don't wipe queued gather steps from the decomposer
-      const remaining = this.intentions.slice(this.currentIntentionIndex);
-      const physicalRemaining = remaining.filter(i =>
-        AgentController.PHYSICAL_ACTION.test(i.trim())
-      );
-      this.intentions = [...physicalRemaining, ...plan];
-      this.currentIntentionIndex = 0;
-      this.lastReplanTick = this.world.time.totalMinutes;
-
-      console.log(
-        `[Agent] ${this.agent.config.name} replanned after conversation: ${plan.length} new intentions`,
-      );
-    } catch (err) {
-      // Replanning failed — track failure, idle timer will follow existing plan
-      console.log(`[Agent] ${this.agent.config.name} couldn't replan, continuing existing plan`);
-      this.handleApiFailure(err);
-    } finally {
-      this.planningInProgress = false;
-      // Always return to idle — let the idle timer's 30-tick gap handle next intention
-      this.state = 'idle';
-      this.idleTimer = 0;
-    }
-  }
+  // (replanAfterConversation removed in refactor v2)
 
   async doReflect(): Promise<void> {
     if (this.reflectingInProgress) return;
@@ -1188,8 +677,8 @@ export class AgentController {
     if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
       this.lastHungerHour = currentHour;
 
-      // Hunger increases every game hour
-      v.hunger = Math.min(100, v.hunger + 1.0);
+      // Hunger increases every game hour (0.5 per hour — agents last longer)
+      v.hunger = Math.min(100, v.hunger + 0.5);
 
       // Cold damage + building effects
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
@@ -1451,8 +940,7 @@ export class AgentController {
   private static readonly SLEEP_AREAS = ['park', 'garden', 'church', 'tavern', 'forest'];
 
   goToSleep(): void {
-    this.intentions = [];
-    this.currentIntentionIndex = 0;
+    this.currentGoals = [];
 
     // Deterministic sleep spot based on agent name (no randomness)
     const sleepArea = this.nameHash(AgentController.SLEEP_AREAS);
@@ -1465,7 +953,6 @@ export class AgentController {
     } else {
       // Walk to sleep spot first
       this.pendingSleep = sleepArea;
-      this.pendingActivity = null;
       console.log(`[Agent] ${this.agent.config.name} walking to ${sleepArea} to sleep`);
       this.startMoveTo(sleepPos);
     }
@@ -1707,5 +1194,585 @@ export class AgentController {
 
     // Default: plaza
     return 'plaza';
+  }
+
+  // =====================================================================
+  // Refactor v2: Structured Decision System
+  // =====================================================================
+
+  /** Surface unresolved interpersonal dynamics for the decide prompt */
+  private buildSocialPressure(): string {
+    const lines: string[] = [];
+
+    // Broken/expired promises
+    const ledger = this.agent.socialLedger ?? [];
+    const broken = ledger.filter(e =>
+      e.status === 'broken' ||
+      (e.status === 'expired' && e.resolvedAt && this.world.time.totalMinutes - e.resolvedAt < 1440)
+    );
+    for (const b of broken.slice(0, 3)) {
+      lines.push(`UNRESOLVED: ${b.description} — this was ${b.status}`);
+    }
+
+    // Commitments due soon (within 2 game hours)
+    const due = ledger.filter(e =>
+      e.status === 'accepted' && e.expiresAt &&
+      e.expiresAt - this.world.time.totalMinutes < 120 &&
+      e.expiresAt > this.world.time.totalMinutes
+    );
+    for (const d of due.slice(0, 2)) {
+      lines.push(`DUE SOON: ${d.description}`);
+    }
+
+    // Interpersonal tensions and bonds from mental models
+    const knownPeople = this.agent.mentalModels ?? [];
+    for (const model of knownPeople) {
+      const name = this.world.getAgent(model.targetId)?.config.name;
+      if (!name) continue;
+      if (model.trust < -20) {
+        lines.push(`TENSION: You don't trust ${name} (trust: ${model.trust})`);
+      } else if (model.trust > 30) {
+        lines.push(`BOND: You trust ${name} (trust: ${model.trust})`);
+      }
+    }
+
+    // Drive pressures (belonging, status, meaning)
+    const d = this.agent.drives;
+    if (d) {
+      if (d.belonging >= 60) lines.push('You feel isolated. You haven\'t connected with anyone recently.');
+      if (d.status >= 60) lines.push('Nobody seems to value what you contribute.');
+      if (d.meaning >= 70) lines.push('You\'ve been doing the same thing every day. You need purpose.');
+    }
+
+    return lines.length > 0 ? '\nWHAT\'S ON YOUR MIND:\n' + lines.join('\n') : '';
+  }
+
+  /** Time-of-day trigger — creates natural daily rhythm */
+  private getTimeOfDayTrigger(hour: number): string {
+    if (hour >= 6 && hour <= 9) return 'It\'s early. A new day. What matters today?';
+    if (hour >= 10 && hour <= 14) return 'Middle of the day. How\'s it going?';
+    if (hour >= 15 && hour <= 18) return 'Afternoon. Getting toward evening.';
+    if (hour >= 19 && hour <= 22) return 'Evening is coming. The day is almost done. Did you do what you set out to? Is there anyone you need to see before dark?';
+    return 'What now?';
+  }
+
+  /** Step 3: Build the full situation object for the LLM decide() call */
+  private buildSituation(trigger: string, recentOutcome?: string): AgentSituation {
+    const area = getAreaAt(this.agent.position);
+    const areaId = area?.id ?? 'plaza';
+    const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
+    const currentSeason = SEASON_ORDER[seasonIdx];
+
+    const actions: AvailableAction[] = [];
+
+    // 1. GATHER actions
+    const gatherOpts = getGatherOptions(areaId);
+    for (const gDef of gatherOpts) {
+      const seasonMod = gDef.seasonModifier?.[currentSeason] ?? 1.0;
+      const chance = Math.round(gDef.baseSuccessChance * seasonMod * 100);
+      const agentSkillLevel = this.agent.skills?.find(s => s.name === gDef.skill)?.level ?? 0;
+      if (agentSkillLevel >= gDef.minSkillLevel && chance > 0) {
+        actions.push({ id: 'gather_' + gDef.yields[0].resource, label: 'Gather ' + gDef.yields[0].resource + ' (' + chance + '% chance)', category: 'physical' });
+      } else if (gDef.minSkillLevel > 0) {
+        actions.push({ id: 'gather_' + gDef.yields[0].resource, label: 'Gather ' + gDef.yields[0].resource + ' (need ' + gDef.skill + ' Lv' + gDef.minSkillLevel + ')', category: 'physical' });
+      }
+    }
+
+    // 2. CRAFT actions
+    const agentSkillMap: Record<string, number> = {};
+    for (const s of this.agent.skills ?? []) {
+      agentSkillMap[s.name] = s.level;
+    }
+    const recipes = getAvailableRecipes(areaId, agentSkillMap);
+    let craftCount = 0;
+    for (const recipe of recipes) {
+      if (craftCount >= 3) break;
+      // Check if agent has at least 1 input or recipe needs 0 skill
+      const hasAnyInput = recipe.inputs.some(inp =>
+        this.agent.inventory.some(i => i.name.toLowerCase().replace(/\s+/g, '_') === inp.resource)
+      );
+      if (!hasAnyInput && recipe.minSkillLevel > 0) continue;
+
+      const missing: string[] = [];
+      for (const inp of recipe.inputs) {
+        const owned = this.agent.inventory.filter(i => i.name.toLowerCase().replace(/\s+/g, '_') === inp.resource).length;
+        if (owned < inp.qty) missing.push(`${inp.qty - owned} ${inp.resource}`);
+      }
+      const hasAll = missing.length === 0;
+      actions.push({
+        id: 'craft_' + recipe.id,
+        label: recipe.name + (hasAll ? ' ✓ ready' : ' (need: ' + missing.join(', ') + ')'),
+        category: 'physical',
+      });
+      craftCount++;
+    }
+
+    // 3. EAT actions
+    const foodItems = this.agent.inventory.filter(i => i.type === 'food');
+    const foodGroups: Record<string, number> = {};
+    for (const item of foodItems) {
+      foodGroups[item.name] = (foodGroups[item.name] || 0) + 1;
+    }
+    for (const [name, qty] of Object.entries(foodGroups)) {
+      actions.push({
+        id: 'eat_' + name.toLowerCase().replace(/\s+/g, '_'),
+        label: 'Eat ' + name + (qty > 1 ? ` (${qty} available)` : ''),
+        category: 'physical',
+      });
+    }
+
+    // 4. SOCIAL actions
+    const nearby = this.world.getNearbyAgents(this.agent.position, 5)
+      .filter(a => a.id !== this.agent.id && a.alive !== false && a.state !== 'sleeping');
+    const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
+    for (const a of nearby) {
+      nearbyForSituation.push({ name: a.config.name, activity: a.currentAction || 'idle', id: a.id });
+      if (this.conversationCooldown <= 0) {
+        const firstName = a.config.name.split(' ')[0].toLowerCase();
+        actions.push({ id: 'talk_' + firstName, label: 'Talk to ' + a.config.name, category: 'social' });
+      }
+    }
+
+    // 5. MOVEMENT actions
+    for (const [areaKey, desc] of this.cognition.knownPlaces) {
+      if (areaKey === areaId) continue;
+      const areaName = desc.split(' — ')[0] || areaKey;
+      actions.push({ id: 'go_' + areaKey, label: 'Go to ' + areaName, category: 'movement' });
+    }
+
+    // 6. ALWAYS available
+    actions.push({ id: 'rest', label: 'Rest and recover energy', category: 'rest' });
+
+    // Evening rhythm: put social actions FIRST (before physical) to create natural social time
+    const hour = this.world.time.hour;
+    let orderedActions: AvailableAction[];
+    if (hour >= 19 && hour <= 22) {
+      const social = actions.filter(a => a.category === 'social');
+      const movement = actions.filter(a => a.category === 'movement');
+      const rest = actions.filter(a => a.category === 'rest');
+      const physical = actions.filter(a => a.category === 'physical');
+      const creative = actions.filter(a => a.category === 'creative');
+      orderedActions = [...social, ...movement, ...rest, ...physical, ...creative];
+    } else {
+      orderedActions = actions;
+    }
+
+    // Build inventory groups
+    const invGroups: Record<string, { name: string; type: string; qty: number }> = {};
+    for (const item of this.agent.inventory) {
+      const key = item.name;
+      if (!invGroups[key]) invGroups[key] = { name: item.name, type: item.type, qty: 0 };
+      invGroups[key].qty++;
+    }
+
+    // Enrich trigger with time-of-day rhythm if it's the generic arrival/idle trigger
+    const enrichedTrigger = trigger.startsWith('You just arrived')
+      || trigger === 'You just finished a conversation. What now?'
+      || trigger === 'What now?'
+      ? trigger + ' ' + this.getTimeOfDayTrigger(hour)
+      : trigger;
+
+    // Social pressure and commitments
+    const socialPressure = this.buildSocialPressure();
+    const commitments = this.buildLedgerContext();
+
+    return {
+      location: area?.name ?? 'Unknown',
+      areaId,
+      time: { day: this.world.time.day, hour: this.world.time.hour },
+      vitals: {
+        hunger: this.agent.vitals?.hunger ?? 0,
+        energy: this.agent.vitals?.energy ?? 100,
+        health: this.agent.vitals?.health ?? 100,
+      },
+      inventory: Object.values(invGroups),
+      nearbyAgents: nearbyForSituation,
+      availableActions: orderedActions,
+      recentOutcome,
+      trigger: enrichedTrigger,
+      goals: this.currentGoals.length > 0 ? this.currentGoals : undefined,
+      socialPressure: socialPressure || undefined,
+      commitments: commitments || undefined,
+    };
+  }
+
+  /** Step 4: Apply an ActionOutcome to the world (items, vitals, skills, resources) */
+  private applyOutcomeToWorld(outcome: ActionOutcome): void {
+    const actor = this.agent;
+
+    // Items consumed
+    if (outcome.itemsConsumed) {
+      for (const consumed of outcome.itemsConsumed) {
+        for (let i = 0; i < consumed.qty; i++) {
+          const item = actor.inventory.find(it => it.name.toLowerCase().replace(/\s+/g, '_') === consumed.resource);
+          if (item) this.world.removeItem(item.id);
+        }
+      }
+      this.broadcaster.agentInventory(actor.id, actor.inventory);
+    }
+
+    // Items gained (with building gather_bonus)
+    if (outcome.itemsGained) {
+      if (outcome.type === 'gather') {
+        const area = this.world.getAreaAt(actor.position);
+        if (area) {
+          let gatherBonus = 0;
+          for (const b of this.world.getBuildingsAt(area.id)) {
+            if (!b.defId || !BUILDINGS[b.defId]) continue;
+            const bDef = BUILDINGS[b.defId];
+            const gatherEffect = bDef.effects?.find((e: any) => e.type === 'gather_bonus');
+            if (gatherEffect) gatherBonus = Math.max(gatherBonus, gatherEffect.value);
+          }
+          if (gatherBonus > 0) {
+            for (const gained of outcome.itemsGained) {
+              const extra = Math.floor(gained.qty * gatherBonus);
+              if (extra > 0) gained.qty += extra;
+            }
+          }
+        }
+      }
+      for (const gained of outcome.itemsGained) {
+        const resDef = RESOURCES[gained.resource];
+        for (let i = 0; i < gained.qty; i++) {
+          const item: Item = {
+            id: crypto.randomUUID(),
+            name: resDef?.name ?? gained.resource,
+            description: `${resDef?.name ?? gained.resource} obtained by ${actor.config.name}`,
+            ownerId: actor.id,
+            createdBy: actor.id,
+            value: resDef?.baseTradeValue ?? 5,
+            type: (resDef?.type === 'food' || (resDef?.type === 'raw' && (resDef?.nutritionValue ?? 0) > 0)) ? 'food' : resDef?.type === 'tool' ? 'tool' : resDef?.type === 'medicine' ? 'medicine' : 'material',
+          };
+          this.world.addItem(item);
+        }
+      }
+      this.broadcaster.agentInventory(actor.id, actor.inventory);
+
+      // Deplete resource pool + daily gather counts
+      if (outcome.type === 'gather') {
+        const area = this.world.getAreaAt(actor.position);
+        const aId = area?.id ?? 'unknown';
+        const resource = outcome.itemsGained[0]?.resource;
+        if (resource) this.world.depleteResource(aId, resource);
+        const options = getGatherOptions(aId);
+        for (const gDef of options) {
+          if (gDef.yields.some((y: any) => y.resource === resource)) {
+            const current = this.world.dailyGatherCounts.get(gDef.id) ?? 0;
+            this.world.dailyGatherCounts.set(gDef.id, current + 1);
+            break;
+          }
+        }
+      }
+    }
+
+    // Skill XP (with building craft_speed bonus)
+    if (outcome.skillXpGained) {
+      if (outcome.type === 'craft') {
+        const area = this.world.getAreaAt(actor.position);
+        if (area) {
+          let craftSpeed = 1;
+          for (const b of this.world.getBuildingsAt(area.id)) {
+            if (!b.defId || !BUILDINGS[b.defId]) continue;
+            const bDef = BUILDINGS[b.defId];
+            const craftEffect = bDef.effects?.find((e: any) => e.type === 'craft_speed');
+            if (craftEffect) craftSpeed = Math.min(craftSpeed, craftEffect.value);
+          }
+          if (craftSpeed < 1) {
+            const bonus = 1 - craftSpeed;
+            outcome.skillXpGained.xp += Math.round(outcome.skillXpGained.xp * bonus);
+          }
+        }
+      }
+      this.world.addSkillXP(actor.id, outcome.skillXpGained.skill, outcome.skillXpGained.xp);
+    }
+
+    // Vitals
+    if (actor.vitals) {
+      if (outcome.energySpent !== 0) {
+        actor.vitals.energy = Math.max(0, Math.min(100, actor.vitals.energy - outcome.energySpent));
+      }
+      if (outcome.hungerChange !== 0) {
+        actor.vitals.hunger = Math.max(0, Math.min(100, actor.vitals.hunger + outcome.hungerChange));
+      }
+      if (outcome.healthChange !== 0) {
+        actor.vitals.health = Math.max(0, Math.min(100, actor.vitals.health + outcome.healthChange));
+      }
+    }
+
+    // Store outcome as memory
+    void this.cognition.addMemory({
+      id: crypto.randomUUID(),
+      agentId: actor.id,
+      type: 'observation',
+      content: outcome.description,
+      importance: outcome.success ? 4 : 6,
+      timestamp: Date.now(),
+      relatedAgentIds: [],
+    });
+
+    // Broadcast
+    this.broadcaster.agentAction(actor.id, outcome.description);
+  }
+
+  /** Step 5: Execute a structured decision — dispatch to game systems */
+  private async executeDecision(decision: AgentDecision, situation: AgentSituation): Promise<void> {
+    const actionId = decision.actionId;
+
+    // --- Gather ---
+    if (actionId.startsWith('gather_')) {
+      const resource = actionId.replace('gather_', '');
+      const area = getAreaAt(this.agent.position);
+      const areaId = area?.id ?? 'plaza';
+
+      // Build AgentState for action-resolver
+      const agentState: AgentState = {
+        id: this.agent.id,
+        name: this.agent.config.name,
+        location: areaId,
+        energy: this.agent.vitals?.energy ?? 100,
+        hunger: this.agent.vitals?.hunger ?? 0,
+        health: this.agent.vitals?.health ?? 100,
+        inventory: this.buildInventoryForResolver(),
+        skills: this.buildSkillsForResolver(),
+        nearbyAgents: situation.nearbyAgents.map(a => ({ id: a.id, name: a.name })),
+      };
+      const worldState = this.buildWorldState();
+      const intent = { type: 'gather' as const, resource, raw: `gather ${resource}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.success
+        ? `You just gathered ${resource}. ${outcome.description}`
+        : `You tried to gather ${resource} but failed. ${outcome.description}`;
+      this.state = 'performing';
+      this.currentPerformingActivity = `gathering ${resource}`;
+      this.activityTimer = 10;
+      this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+      return;
+    }
+
+    // --- Eat ---
+    if (actionId.startsWith('eat_')) {
+      const foodName = actionId.replace('eat_', '');
+      const agentState: AgentState = {
+        id: this.agent.id,
+        name: this.agent.config.name,
+        location: getAreaAt(this.agent.position)?.id ?? 'plaza',
+        energy: this.agent.vitals?.energy ?? 100,
+        hunger: this.agent.vitals?.hunger ?? 0,
+        health: this.agent.vitals?.health ?? 100,
+        inventory: this.buildInventoryForResolver(),
+        skills: this.buildSkillsForResolver(),
+        nearbyAgents: [],
+      };
+      const worldState = this.buildWorldState();
+      const intent = { type: 'eat' as const, resource: foodName, raw: `eat ${foodName}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.success
+        ? `You just ate. ${outcome.description}`
+        : `You tried to eat but couldn't. ${outcome.description}`;
+      this.state = 'performing';
+      this.currentPerformingActivity = 'eating';
+      this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', 'eating');
+      return;
+    }
+
+    // --- Craft ---
+    if (actionId.startsWith('craft_')) {
+      const recipeId = actionId.replace('craft_', '');
+      const recipe = RECIPES.find(r => r.id === recipeId);
+      if (!recipe) {
+        this.lastTrigger = `You wanted to craft something but couldn't figure out how.`;
+        this.state = 'idle';
+        this.idleTimer = 0;
+        return;
+      }
+      const agentState: AgentState = {
+        id: this.agent.id,
+        name: this.agent.config.name,
+        location: getAreaAt(this.agent.position)?.id ?? 'plaza',
+        energy: this.agent.vitals?.energy ?? 100,
+        hunger: this.agent.vitals?.hunger ?? 0,
+        health: this.agent.vitals?.health ?? 100,
+        inventory: this.buildInventoryForResolver(),
+        skills: this.buildSkillsForResolver(),
+        nearbyAgents: [],
+      };
+      const worldState = this.buildWorldState();
+      const intent = { type: 'craft' as const, recipe: recipeId, raw: `craft ${recipe.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.success
+        ? `You crafted ${recipe.name}. ${outcome.description}`
+        : `You tried to craft ${recipe.name} but failed. ${outcome.description}`;
+      this.state = 'performing';
+      this.currentPerformingActivity = `crafting ${recipe.name}`;
+      this.activityTimer = 15;
+      this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+      return;
+    }
+
+    // --- Movement ---
+    if (actionId.startsWith('go_')) {
+      const targetAreaId = actionId.replace('go_', '');
+      const targetPos = getRandomPositionInArea(targetAreaId);
+      this.startMoveTo(targetPos);
+      this.broadcaster.agentAction(this.agent.id, `heading to ${targetAreaId}`);
+      return;
+    }
+
+    // --- Social (talk) ---
+    if (actionId.startsWith('talk_')) {
+      const firstName = actionId.replace('talk_', '');
+      // Find the agent by first name
+      for (const agent of this.world.agents.values()) {
+        if (agent.id !== this.agent.id &&
+            agent.config.name.split(' ')[0].toLowerCase() === firstName) {
+          this.pendingConversationTarget = agent.id;
+          this.pendingConversationPurpose = decision.reason;
+          // Move toward target if far
+          const dist = Math.abs(this.agent.position.x - agent.position.x) + Math.abs(this.agent.position.y - agent.position.y);
+          if (dist > 3) {
+            this.startMoveTo({ ...agent.position });
+          } else if (this.soloActionExecutor) {
+            const started = this.soloActionExecutor.requestConversation(this.agent.id, agent.id);
+            if (started) {
+              this.pendingConversationTarget = null;
+              this.pendingConversationPurpose = null;
+            }
+          }
+          return;
+        }
+      }
+      // Agent not found — go idle
+      this.lastTrigger = `You looked around but couldn't find who you wanted to talk to.`;
+      this.state = 'idle';
+      this.idleTimer = 0;
+      return;
+    }
+
+    // --- Rest ---
+    if (actionId === 'rest') {
+      this.state = 'performing';
+      this.currentPerformingActivity = 'resting';
+      this.activityTimer = 20;
+      this.world.updateAgentState(this.agent.id, 'active', 'resting');
+      // Resting energy recovery is handled by tickVitals
+      this.broadcaster.agentAction(this.agent.id, 'resting');
+      return;
+    }
+
+    // --- Custom (route through existing action pipeline) ---
+    if (actionId === 'custom' && decision.customAction && this.soloActionExecutor) {
+      this.soloActionExecutor.executeSocialAction(
+        this.agent.id, this.agent.config.name, '', decision.customAction, this.cognition
+      );
+      this.state = 'performing';
+      this.currentPerformingActivity = decision.customAction.slice(0, 60);
+      this.activityTimer = 10;
+      this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+      return;
+    }
+
+    // Unrecognized
+    console.warn(`[Agent] ${this.agent.config.name} unrecognized actionId: ${actionId}`);
+    this.state = 'idle';
+    this.idleTimer = 0;
+  }
+
+  /** Step 6: The core loop — build situation, ask LLM, execute decision */
+  async decideAndAct(): Promise<void> {
+    if (this.decidingInProgress || this.apiExhausted) return;
+    this.decidingInProgress = true;
+
+    try {
+      const situation = this.buildSituation(this.lastTrigger, this.lastOutcome);
+      this.lastOutcome = undefined;
+
+      const decision = await this.cognition.decide(situation);
+      this.handleApiSuccess();
+
+      // Guard: agent may have entered a conversation while awaiting LLM
+      if (this.state === 'conversing') return;
+
+      // Store reason as thought memory
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: 'observation',
+        content: decision.reason,
+        importance: 3,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      });
+
+      // Update mood
+      if (decision.mood) {
+        this.agent.mood = decision.mood as any;
+        this.broadcaster.agentMood(this.agent.id, decision.mood as any);
+      }
+
+      // Broadcast thought
+      this.broadcaster.agentThought(this.agent.id, decision.reason);
+
+      // Say aloud (nearby agents can hear)
+      if (decision.sayAloud) {
+        this.broadcaster.agentAction(this.agent.id, `says: "${decision.sayAloud}"`);
+      }
+
+      // Execute the decision
+      await this.executeDecision(decision, situation);
+
+    } catch (err) {
+      this.handleApiFailure(err);
+      this.state = 'idle';
+      this.idleTimer = 0;
+    } finally {
+      this.decidingInProgress = false;
+    }
+  }
+
+  /** Helper: build inventory array for action-resolver's AgentState */
+  private buildInventoryForResolver(): { resource: string; qty: number }[] {
+    const groups: Record<string, number> = {};
+    for (const item of this.agent.inventory) {
+      const key = item.name.toLowerCase().replace(/\s+/g, '_');
+      groups[key] = (groups[key] || 0) + 1;
+    }
+    return Object.entries(groups).map(([resource, qty]) => ({ resource, qty }));
+  }
+
+  /** Helper: build skills map for action-resolver's AgentState */
+  private buildSkillsForResolver(): Record<string, { level: number; xp: number }> {
+    const skills: Record<string, { level: number; xp: number }> = {};
+    for (const s of this.agent.skills ?? []) {
+      skills[s.name] = { level: s.level, xp: s.xp ?? 0 };
+    }
+    return skills;
+  }
+
+  /** Helper: build WorldState for action-resolver */
+  private buildWorldState(): WorldState {
+    const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
+    return {
+      season: SEASON_ORDER[seasonIdx],
+      dailyGatherCounts: this.world.dailyGatherCounts,
+      activeBuildProjects: this.world.activeBuildProjects,
+      pendingTrades: this.world.pendingTrades,
+      getAgentInventory: (agentId: string) => {
+        const agent = this.world.getAgent(agentId);
+        if (!agent) return [];
+        const groups: Record<string, number> = {};
+        for (const item of agent.inventory) {
+          const key = item.name.toLowerCase().replace(/\s+/g, '_');
+          groups[key] = (groups[key] || 0) + 1;
+        }
+        return Object.entries(groups).map(([resource, qty]) => ({ resource, qty }));
+      },
+    };
   }
 }

@@ -26,9 +26,9 @@ export interface ResourceDef {
 
 export const RESOURCES: Record<string, ResourceDef> = {
   // === Raw gathered resources ===
-  wheat:      { id: 'wheat',      name: 'wheat',       type: 'raw',       perishable: true,  spoilDays: 5,  nutritionValue: 5,  energyValue: 0,  healValue: 0,  baseTradeValue: 2,  weight: 1, stackable: true,  maxStack: 10, description: 'Raw wheat from the farm' },
+  wheat:      { id: 'wheat',      name: 'wheat',       type: 'raw',       perishable: true,  spoilDays: 5,  nutritionValue: 8,  energyValue: 0,  healValue: 0,  baseTradeValue: 2,  weight: 1, stackable: true,  maxStack: 10, description: 'Raw wheat from the farm' },
   vegetables: { id: 'vegetables', name: 'vegetables',  type: 'raw',       perishable: true,  spoilDays: 3,  nutritionValue: 8,  energyValue: 2,  healValue: 0,  baseTradeValue: 3,  weight: 1, stackable: true,  maxStack: 10, description: 'Fresh vegetables from the farm' },
-  fish:       { id: 'fish',       name: 'fish',        type: 'raw',       perishable: true,  spoilDays: 1,  nutritionValue: 12, energyValue: 0,  healValue: 0,  baseTradeValue: 4,  weight: 1, stackable: true,  maxStack: 5,  description: 'Fresh fish from the lake. Spoils fast.' },
+  fish:       { id: 'fish',       name: 'fish',        type: 'raw',       perishable: true,  spoilDays: 1,  nutritionValue: 25, energyValue: 0,  healValue: 0,  baseTradeValue: 4,  weight: 1, stackable: true,  maxStack: 5,  description: 'Fresh fish from the lake. Spoils fast.' },
   mushrooms:  { id: 'mushrooms',  name: 'mushrooms',   type: 'raw',       perishable: true,  spoilDays: 2,  nutritionValue: 6,  energyValue: 0,  healValue: 0,  baseTradeValue: 2,  weight: 1, stackable: true,  maxStack: 10, description: 'Wild mushrooms from the forest floor' },
   herbs:      { id: 'herbs',      name: 'herbs',       type: 'raw',       perishable: true,  spoilDays: 4,  nutritionValue: 2,  energyValue: 0,  healValue: 5,  baseTradeValue: 5,  weight: 1, stackable: true,  maxStack: 10, description: 'Medicinal herbs from the garden' },
   flowers:    { id: 'flowers',    name: 'flowers',     type: 'raw',       perishable: true,  spoilDays: 2,  nutritionValue: 0,  energyValue: 0,  healValue: 0,  baseTradeValue: 1,  weight: 1, stackable: true,  maxStack: 10, description: 'Wildflowers. Pretty but not useful... unless gifted.' },

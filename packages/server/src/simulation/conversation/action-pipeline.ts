@@ -978,13 +978,6 @@ export class ActionPipeline {
             `${actorName} just said: "${rawText}"`,
             `You are at ${this.world.getAreaAt(witness.position)?.id ?? 'somewhere'}. ${actorName} is nearby.`,
           ).then(output => {
-            if (output.actions) {
-              for (const action of output.actions) {
-                void this.executeSocialAction(
-                  witness.id, witness.config.name, '', action, witnessCognition, cognitions, requestConversation,
-                );
-              }
-            }
             if (output.mood) {
               witness.mood = output.mood;
               this.broadcaster.agentMood(witness.id, output.mood);
