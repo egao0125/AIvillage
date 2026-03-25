@@ -410,7 +410,7 @@ export function getRandomPositionInArea(areaId: string): Position {
     for (let x = area.bounds.x - 2; x < area.bounds.x + area.bounds.width + 2; x++) {
       if (getWalkable(x, y) && !walkable.some(p => p.x === x && p.y === y)) {
         const posArea = getAreaAt({ x, y });
-        if (!posArea || posArea.id === areaId) {
+        if (posArea?.id === areaId) {
           walkable.push({ x, y });
         }
       }

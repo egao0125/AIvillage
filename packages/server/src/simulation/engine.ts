@@ -656,7 +656,7 @@ export class SimulationEngine {
     return true;
   }
 
-  resurrectAgent(id: string): boolean {
+  async resurrectAgent(id: string): Promise<boolean> {
     const agent = this.world.getAgent(id);
     if (!agent || agent.alive !== false) return false;
 
@@ -680,16 +680,14 @@ export class SimulationEngine {
       });
     }
 
-    // Clear old memories so resurrected agents start fresh
+    // Clear old memories BEFORE creating new store — await to prevent race condition
     if (this.persistence) {
-      this.persistence.client
+      const { error } = await this.persistence.client
         .from('memories')
         .delete()
-        .eq('agent_id', id)
-        .then(({ error }) => {
-          if (error) console.error(`[Engine] Failed to clear memories for ${agent.config.name}:`, error.message);
-          else console.log(`[Engine] Cleared memories for ${agent.config.name} on resurrection`);
-        });
+        .eq('agent_id', id);
+      if (error) console.error(`[Engine] Failed to clear memories for ${agent.config.name}:`, error.message);
+      else console.log(`[Engine] Cleared memories for ${agent.config.name} on resurrection`);
     }
 
     // Recreate cognition with fresh worldView — no stale knowledge from past life
@@ -775,11 +773,11 @@ export class SimulationEngine {
     return true;
   }
 
-  resurrectAllAgents(): string[] {
+  async resurrectAllAgents(): Promise<string[]> {
     const resurrected: string[] = [];
     for (const agent of this.world.agents.values()) {
       if (agent.alive === false) {
-        if (this.resurrectAgent(agent.id)) {
+        if (await this.resurrectAgent(agent.id)) {
           resurrected.push(agent.config.name);
         }
       }

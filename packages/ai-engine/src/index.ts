@@ -553,6 +553,13 @@ Context: ${context}`;
 
     // Parse structured output
     const actions = AgentCognition.parseActions(response);
+    // Fallback: LLM sometimes writes "ACTION: ..." without brackets
+    if (actions.length === 0) {
+      const actionLine = response.match(/^ACTION:\s*(.+)$/mi);
+      if (actionLine) {
+        actions.push(actionLine[1].trim());
+      }
+    }
     const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
     const mood: Mood | undefined = moodMatch ? moodMatch[1].trim() : undefined;
 

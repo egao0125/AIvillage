@@ -781,6 +781,13 @@ function executeEat(intent: ParsedIntent, agent: AgentState): ActionOutcome {
 
   if (intent.resource) {
     food = agent.inventory.find(i => i.resource === intent.resource && (RESOURCES[i.resource]?.nutritionValue ?? 0) > 0);
+    // Fuzzy: LLM may produce verbose text → resource becomes "of_my_wheat_on_the_way"
+    // Try matching any inventory food whose name appears within the captured text
+    if (!food) {
+      food = agent.inventory.find(i =>
+        intent.resource!.includes(i.resource) && (RESOURCES[i.resource]?.nutritionValue ?? 0) > 0
+      );
+    }
   }
 
   // If no specific food requested, eat the most nutritious available
