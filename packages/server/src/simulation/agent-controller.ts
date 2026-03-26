@@ -2374,23 +2374,28 @@ export class AgentController {
       // Generate public post content via LLM — decision.reason is private inner thought
       let content: string;
       try {
-        const postPrompt = `You are ${this.agent.config.name}. You decided to write a message on the village board.
+        const identity = this.cognition.identityBlock;
+        const postPrompt = `${identity}
+
+You decided to write a message on the village board.
 
 Your reason for posting: ${decision.reason}
 
-Write the ACTUAL MESSAGE you would write on the board. This is a public notice — other villagers will read it. Not your inner thoughts — what you actually write down.
+Write the ACTUAL MESSAGE you would post. This is public — other villagers read it. Not your inner thoughts — what you actually write down. Stay in character.
 
 Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
         content = await this.cognition.llmProvider.complete(
-          'Write only the board message. No preamble.',
+          `You are ${this.agent.config.name}. Write only the board message. No preamble, no quotes.`,
           postPrompt,
         );
         content = content.replace(/^["']|["']$/g, '').trim();
-        if (content.length < 5 || content.length > 200) {
-          content = 'A message for the village.';
+        if (content.length < 3 || content.length > 300) {
+          console.warn(`[PostBoard] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
+          content = decision.reason.slice(0, 200);
         }
-      } catch {
-        content = 'A message for the village.';
+      } catch (err) {
+        console.error(`[PostBoard] ${this.agent.config.name} LLM call failed:`, err);
+        content = decision.reason.slice(0, 200);
       }
 
       const post = {
@@ -2426,13 +2431,20 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
 
       let content: string;
       try {
+        const identity = this.cognition.identityBlock;
         content = await this.cognition.llmProvider.complete(
-          'Write only the group message. No preamble.',
-          `You are ${this.agent.config.name}. Write a message for your alliance group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences.`
+          `You are ${this.agent.config.name}. Write only the group message. No preamble, no quotes.`,
+          `${identity}\n\nWrite a private message for your alliance group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences. Write ONLY the message text.`
         );
         content = content.replace(/^["']|["']$/g, '').trim();
-        if (content.length < 5 || content.length > 200) content = 'A message for the group.';
-      } catch { content = 'A message for the group.'; }
+        if (content.length < 3 || content.length > 300) {
+          console.warn(`[PostGroup] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
+          content = decision.reason.slice(0, 200);
+        }
+      } catch (err) {
+        console.error(`[PostGroup] ${this.agent.config.name} LLM call failed:`, err);
+        content = decision.reason.slice(0, 200);
+      }
 
       const groupId = group.id;
       const post = {
@@ -2523,23 +2535,28 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
     if (actionId === 'propose_rule') {
       let ruleContent: string;
       try {
-        const rulePrompt = `You are ${this.agent.config.name}. You decided to propose a rule for the village.
+        const identity = this.cognition.identityBlock;
+        const rulePrompt = `${identity}
+
+You decided to propose a rule for the village.
 
 Your reason: ${decision.reason}
 
-Write the ACTUAL RULE you would propose on the village board. This is a public proposal — other villagers will read and vote on it. Not your inner thoughts — what you actually write down.
+Write the ACTUAL RULE you would propose. This is a public proposal — other villagers will read and vote on it. Not your inner thoughts — what you actually write down. Stay in character.
 
 Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         ruleContent = await this.cognition.llmProvider.complete(
-          'Write only the proposed rule. No preamble.',
+          `You are ${this.agent.config.name}. Write only the proposed rule. No preamble, no quotes.`,
           rulePrompt,
         );
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
-        if (ruleContent.length < 5 || ruleContent.length > 200) {
-          ruleContent = 'A new rule for the village.';
+        if (ruleContent.length < 3 || ruleContent.length > 300) {
+          console.warn(`[ProposeRule] ${this.agent.config.name} content length out of range (${ruleContent.length}), using reason`);
+          ruleContent = decision.reason.slice(0, 200);
         }
-      } catch {
-        ruleContent = 'A new rule for the village.';
+      } catch (err) {
+        console.error(`[ProposeRule] ${this.agent.config.name} LLM call failed:`, err);
+        ruleContent = decision.reason.slice(0, 200);
       }
 
       const post = {
