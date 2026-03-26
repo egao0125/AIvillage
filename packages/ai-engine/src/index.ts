@@ -121,10 +121,7 @@ export class AgentCognition {
     return `${FROZEN_REALITY}
 
 PLACES I KNOW:
-${placesLines}
-
-MY EXPERIENCE:
-${this.myExperience}`;
+${placesLines}`;
   }
 
   /** Serialize the mutable parts for persistence */
@@ -571,46 +568,28 @@ If nothing notable was exchanged, return []`;
 
 ${this.buildIdentityBlock()}
 
-You are ${this.agent.config.name}. Day ${situation.time.day}, hour ${situation.time.hour}.
+Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDark > 0 ? ' ' + situation.hoursUntilDark + ' hours of daylight left.' : ' It is dark.'}
+Season: ${situation.season}.
 
-YOUR SITUATION:
-Location: ${situation.location}
+YOUR BODY:
 Health: ${Math.round(situation.vitals.health)}/100
-Hunger: ${Math.round(situation.vitals.hunger)}/100${situation.vitals.hunger >= 60 ? ' ⚠ HUNGRY' : situation.vitals.hunger >= 40 ? ' — getting hungry' : ''}
+Hunger: ${Math.round(situation.vitals.hunger)}/100
 Energy: ${Math.round(situation.vitals.energy)}/100
 Inventory: ${invStr}
+
 ${nearbyStr}
-${situation.todaySummary ? '\nTODAY SO FAR:\n' + situation.todaySummary : ''}
-${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts + '\n' : ''}
-${situation.recentOutcome ? 'JUST HAPPENED: ' + situation.recentOutcome + '\n' : ''}HERE'S WHAT'S GOING ON:
-${situation.trigger}
+${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
+${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
+${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 
 WHAT'S POSSIBLE:
 ${situation.availableActions.map(a => a.id + ' — ' + a.label).join('\n')}
-Every action above is real and has consequences. Pick the one YOUR CHARACTER would do.
 
-Now — what do you actually WANT to do?
+What does YOUR CHARACTER do next? Consider who you are, what matters to you, what you've done today, who's here, and what's on your mind.
 
-Not what's optimal. Not what's safe. What does YOUR CHARACTER want right now?
-${situation.nearbyAgents.length > 0 ? `
-Before you talk to anyone, ask yourself:
-- Have I eaten today? Do I have food for tomorrow?
-- Have I gathered or built anything useful recently?
-- Am I just talking to avoid doing something harder?
+Your actionId MUST be one of the IDs listed above.
 
-Then ask:
-- Is there someone here I have real business with?
-- Not small talk — real business. A trade, a debt, an accusation, an alliance that changes something.
-
-Talk is cheap. Actions keep you alive. If you've been talking all day and your inventory is empty, that's a problem.` : `You're still getting settled. Explore, take care of your basic needs, gather resources.`}
-
-FACTS:
-You have EXACTLY these items: ${invStr}. Nothing else. No wheat, no tools, no materials unless listed above.
-${situation.nearbyAgents.length > 0 ? 'People here RIGHT NOW: ' + situation.nearbyAgents.map(a => a.name).join(', ') + '. ONLY these people exist here.' : 'You are COMPLETELY ALONE. Nobody is here. Do not talk to, reference, or mention any person by name.'}
-${situation.nearbyAgents.length > 0 ? `To have a real conversation where someone hears and responds, pick talk_<name> as your action.` : ''}
-Your actionId MUST be one of the IDs listed above. Do NOT invent action IDs.
-
-Reply with ONLY valid JSON, no other text:
+Reply with ONLY valid JSON:
 {"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel"}`;
 
     let memoryText: string;
