@@ -1342,9 +1342,8 @@ export class AgentController {
     }
 
     // ========================================
-    // 2. SOCIAL ACTIONS (proximity + inventory checks ONLY)
-    //    No trust gating. No hunger gating.
-    //    The LLM decides based on personality and memory.
+    // 2. SOCIAL ACTIONS — pattern-based, listed ONCE (not per agent)
+    //    The LLM fills in the name from the nearby list.
     // ========================================
 
     const nearby = this.world.getNearbyAgents(this.agent.position, 5)
@@ -1352,7 +1351,6 @@ export class AgentController {
     const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
 
     for (const a of nearby) {
-      // Show what nearby agents carry
       const otherInv = a.inventory.length > 0
         ? a.inventory.reduce((acc: Record<string, number>, item) => {
             acc[item.name] = (acc[item.name] || 0) + 1;
@@ -1367,41 +1365,33 @@ export class AgentController {
         activity: (a.currentAction || 'idle') + otherInvStr,
         id: a.id,
       });
+    }
 
-      const firstName = a.config.name.split(' ')[0].toLowerCase();
-      const otherHasItems = a.inventory.length > 0;
-
-      // Talk — only gated by conversation cooldown
+    // Social action patterns — listed ONCE, not per agent
+    if (nearby.length > 0) {
       if (this.conversationCooldown <= 0) {
-        actions.push({ id: 'talk_' + firstName, label: 'Talk to ' + a.config.name, category: 'social' });
+        actions.push({ id: 'talk_NAME', label: 'Talk to someone', category: 'social' });
       }
-
-      // Give — gated by: I have items
       if (this.agent.inventory.length > 0) {
-        actions.push({ id: 'give_to_' + firstName, label: 'Give something to ' + a.config.name, category: 'social' });
+        actions.push({ id: 'give_NAME', label: 'Give something to someone', category: 'social' });
+        actions.push({ id: 'trade_NAME', label: 'Trade with someone', category: 'social' });
       }
-
-      // Trade — gated by: both have items
-      if (this.agent.inventory.length > 0 && otherHasItems) {
-        actions.push({ id: 'trade_with_' + firstName, label: 'Trade with ' + a.config.name, category: 'social' });
-      }
-
-      // Steal — gated by: they have items
-      if (otherHasItems) {
-        actions.push({ id: 'steal_from_' + firstName, label: 'Steal from ' + a.config.name + ' (risky)', category: 'social' });
-      }
-
-      // Confront, ally, fight — always available for any nearby person
-      actions.push({ id: 'confront_' + firstName, label: 'Confront ' + a.config.name, category: 'social' });
-      actions.push({ id: 'ally_with_' + firstName, label: 'Propose alliance with ' + a.config.name, category: 'social' });
-      actions.push({ id: 'fight_' + firstName, label: 'Attack ' + a.config.name + ' (both take damage)', category: 'social' });
+      actions.push({ id: 'ask_NAME', label: 'Ask someone for something', category: 'social' });
+      actions.push({ id: 'teach_NAME', label: 'Teach someone a skill', category: 'social' });
+      actions.push({ id: 'steal_NAME', label: 'Steal from someone', category: 'social' });
+      actions.push({ id: 'confront_NAME', label: 'Confront someone', category: 'social' });
+      actions.push({ id: 'threaten_NAME', label: 'Threaten someone', category: 'social' });
+      actions.push({ id: 'ally_NAME', label: 'Propose alliance with someone', category: 'social' });
+      actions.push({ id: 'betray_NAME', label: 'Break an alliance with someone', category: 'social' });
+      actions.push({ id: 'fight_NAME', label: 'Attack someone', category: 'social' });
+      actions.push({ id: 'observe_NAME', label: 'Watch someone without interacting', category: 'social' });
     }
 
     // ========================================
     // 3. COMMUNITY ACTIONS (with cooldowns)
     // ========================================
 
-    // Board post — cooldown based on recent posts
+    // Board post — with cooldown
     let showBoardPost = true;
     if (this.cognition.fourStream) {
       const recentPosts = this.cognition.fourStream.getRecentTimeline(10)
@@ -1409,35 +1399,27 @@ export class AgentController {
       if (recentPosts.length >= 2) showBoardPost = false;
     }
     if (showBoardPost) {
-      actions.push({ id: 'post_board', label: 'Write something on the village board', category: 'creative' });
+      actions.push({ id: 'post_board', label: 'Write on all-agent chat', category: 'creative' });
     }
 
-    // Meeting + rule — only with 3+ people, with cooldown
-    if (nearby.length >= 2) {
-      const recentCommunity = this.cognition.fourStream
-        ?.getRecentTimeline(10)
-        .filter(m => m.content.includes('called a meeting') || m.content.includes('proposed a rule'))
-        .length ?? 0;
-      if (recentCommunity < 1) {
-        actions.push({ id: 'call_meeting', label: 'Call everyone here to discuss', category: 'creative' });
-        actions.push({ id: 'propose_rule', label: 'Propose a rule for the village', category: 'creative' });
-      }
-      actions.push({ id: 'accuse_someone', label: 'Publicly accuse someone', category: 'social' });
-    }
-
-    // Group chat — if agent has alliances
+    // Group post — only if agent has groups
     const myGroups = this.agent.socialLedger?.filter(e =>
       e.type === 'alliance' && e.status === 'accepted'
     ) ?? [];
     if (myGroups.length > 0) {
-      actions.push({
-        id: 'post_group',
-        label: 'Write in group chat',
-        category: 'creative',
-      });
+      actions.push({ id: 'post_group', label: 'Write in group chat', category: 'creative' });
     }
 
-    // Voting — pending rule proposals this agent hasn't voted on
+    // Propose rule — with cooldown
+    const recentRules = this.cognition.fourStream
+      ?.getRecentTimeline(10)
+      .filter(m => m.content.includes('proposed a rule'))
+      .length ?? 0;
+    if (recentRules < 1) {
+      actions.push({ id: 'propose_rule', label: 'Propose a rule for voting', category: 'creative' });
+    }
+
+    // Vote on pending rules
     const pendingRules = this.world.getActiveBoard()
       .filter(p => p.type === 'rule' && p.ruleStatus === 'proposed'
         && !p.votes?.some(v => v.agentId === this.agent.id));
@@ -1445,13 +1427,25 @@ export class AgentController {
       actions.push({
         id: 'vote_like_' + rule.id.slice(0, 8),
         label: `Support rule: "${rule.content.slice(0, 40)}..."`,
-        category: 'social',
+        category: 'creative',
       });
       actions.push({
         id: 'vote_dislike_' + rule.id.slice(0, 8),
         label: `Oppose rule: "${rule.content.slice(0, 40)}..."`,
-        category: 'social',
+        category: 'creative',
       });
+    }
+
+    // Meeting — only with 3+ people nearby, with cooldown
+    if (nearby.length >= 2) {
+      const recentMeetings = this.cognition.fourStream
+        ?.getRecentTimeline(10)
+        .filter(m => m.content.includes('called a meeting'))
+        .length ?? 0;
+      if (recentMeetings < 1) {
+        actions.push({ id: 'call_meeting', label: 'Call everyone here to discuss', category: 'creative' });
+      }
+      actions.push({ id: 'accuse_someone', label: 'Publicly accuse someone', category: 'social' });
     }
 
     // ========================================
@@ -1766,51 +1760,9 @@ export class AgentController {
       return;
     }
 
-    // --- Social (talk) ---
-    if (actionId.startsWith('talk_')) {
-      const firstName = actionId.replace('talk_', '');
-      // Find the agent by first name
-      for (const agent of this.world.agents.values()) {
-        if (agent.id !== this.agent.id &&
-            agent.config.name.split(' ')[0].toLowerCase() === firstName) {
-          this.pendingConversationTarget = agent.id;
-          this.pendingConversationPurpose = decision.reason;
-          // Move toward target if far
-          const dist = Math.abs(this.agent.position.x - agent.position.x) + Math.abs(this.agent.position.y - agent.position.y);
-          if (dist > 3) {
-            this.startMoveTo({ ...agent.position });
-          } else if (this.soloActionExecutor) {
-            const started = this.soloActionExecutor.requestConversation(this.agent.id, agent.id);
-            if (started) {
-              this.pendingConversationTarget = null;
-              this.pendingConversationPurpose = null;
-            }
-          }
-          return;
-        }
-      }
-      // Agent not found — go idle
-      this.lastTrigger = `You looked around but couldn't find who you wanted to talk to.`;
-      this.state = 'idle';
-      this.idleTimer = 0;
-      return;
-    }
-
-    // --- Rest ---
-    if (actionId === 'rest') {
-      this.state = 'performing';
-      this.currentPerformingActivity = 'resting';
-      this.activityTimer = 20;
-      this.world.updateAgentState(this.agent.id, 'active', 'resting');
-      // Resting energy recovery is handled by tickVitals
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] });
-      this.broadcaster.agentAction(this.agent.id, 'resting');
-      return;
-    }
-
     // --- Give ---
-    if (actionId.startsWith('give_to_')) {
-      const firstName = actionId.replace('give_to_', '');
+    if (actionId.startsWith('give_')) {
+      const firstName = actionId.replace('give_', '');
       const target = this.findNearbyByFirstName(firstName);
       if (!target || this.agent.inventory.length === 0) {
         this.lastTrigger = 'You wanted to give something but couldn\'t.';
@@ -1839,9 +1791,36 @@ export class AgentController {
       return;
     }
 
+    // --- Social (talk) ---
+    if (actionId.startsWith('talk_')) {
+      const firstName = actionId.replace('talk_', '');
+      for (const agent of this.world.agents.values()) {
+        if (agent.id !== this.agent.id &&
+            agent.config.name.split(' ')[0].toLowerCase() === firstName) {
+          this.pendingConversationTarget = agent.id;
+          this.pendingConversationPurpose = decision.reason;
+          const dist = Math.abs(this.agent.position.x - agent.position.x) + Math.abs(this.agent.position.y - agent.position.y);
+          if (dist > 3) {
+            this.startMoveTo({ ...agent.position });
+          } else if (this.soloActionExecutor) {
+            const started = this.soloActionExecutor.requestConversation(this.agent.id, agent.id);
+            if (started) {
+              this.pendingConversationTarget = null;
+              this.pendingConversationPurpose = null;
+            }
+          }
+          return;
+        }
+      }
+      this.lastTrigger = `You looked around but couldn't find who you wanted to talk to.`;
+      this.state = 'idle';
+      this.idleTimer = 0;
+      return;
+    }
+
     // --- Trade ---
-    if (actionId.startsWith('trade_with_')) {
-      const firstName = actionId.replace('trade_with_', '');
+    if (actionId.startsWith('trade_')) {
+      const firstName = actionId.replace('trade_', '');
       const target = this.findNearbyByFirstName(firstName);
       if (!target || this.agent.inventory.length === 0) {
         this.lastTrigger = 'You wanted to trade but couldn\'t.';
@@ -1906,6 +1885,140 @@ export class AgentController {
       return;
     }
 
+    // --- Threaten ---
+    if (actionId.startsWith('threaten_')) {
+      const firstName = actionId.replace('threaten_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to threaten someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const threatText = decision.reason;
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+        content: `I threatened ${target.config.name}: ${threatText}`,
+        importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
+      });
+
+      const targetCog = (this.world as any).cognitions?.get?.(target.id);
+      if (targetCog) {
+        void targetCog.addMemory({
+          id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+          content: `${this.agent.config.name} threatened me: ${threatText}`,
+          importance: 9, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+        });
+        if (targetCog.fourStream) {
+          targetCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${this.agent.config.name} threatened me. I need to decide how to respond.`,
+            category: 'threat', relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      this.adjustTrust(this.agent, target, -25);
+      this.adjustTrust(target, this.agent, -25);
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          `I threatened ${target.config.name}: ${threatText}`, this.cognition.llmProvider);
+      }
+
+      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      if (targetCtrl) {
+        targetCtrl.lastTrigger = `${this.agent.config.name} just threatened you: "${threatText}". What do you do?`;
+        targetCtrl.idleTimer = 7;
+      }
+
+      this.lastOutcome = `You threatened ${target.config.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `threatening ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `threatened ${target.config.name}`);
+      return;
+    }
+
+    // --- Ask ---
+    if (actionId.startsWith('ask_')) {
+      const firstName = actionId.replace('ask_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to ask someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+        content: `I asked ${target.config.name} for help: ${decision.reason}`,
+        importance: 6, timestamp: Date.now(), relatedAgentIds: [target.id],
+      });
+
+      const targetCog = (this.world as any).cognitions?.get?.(target.id);
+      if (targetCog) {
+        void targetCog.addMemory({
+          id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+          content: `${this.agent.config.name} asked me for help: ${decision.reason}`,
+          importance: 6, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+        });
+        if (targetCog.fourStream) {
+          targetCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${this.agent.config.name} asked me for something. I should respond.`,
+            category: 'unresolved', relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes,
+            expiresAt: this.world.time.totalMinutes + 480,
+          });
+        }
+      }
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          `I asked ${target.config.name} for help.`, this.cognition.llmProvider);
+      }
+
+      this.lastOutcome = `You asked ${target.config.name} for help.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `asking ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `asked ${target.config.name} for something`);
+      return;
+    }
+
+    // --- Observe ---
+    if (actionId.startsWith('observe_')) {
+      const firstName = actionId.replace('observe_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to observe someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const targetActivity = target.currentAction || 'idle';
+      const targetInv = target.inventory.length > 0
+        ? target.inventory.map(i => i.name).join(', ') : 'nothing';
+      const observation = `I watched ${target.config.name}. They were ${targetActivity}. They were carrying: ${targetInv}.`;
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'observation',
+        content: observation, importance: 5, timestamp: Date.now(),
+        relatedAgentIds: [target.id],
+      });
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          observation, this.cognition.llmProvider);
+      }
+
+      this.lastOutcome = observation;
+      this.lastTrigger = `You observed ${target.config.name}. ${observation}`;
+      this.state = 'performing'; this.activityTimer = 8;
+      this.world.updateAgentState(this.agent.id, 'active', `observing ${target.config.name}`);
+      return;
+    }
+
     // --- Confront ---
     if (actionId.startsWith('confront_')) {
       const firstName = actionId.replace('confront_', '');
@@ -1950,8 +2063,8 @@ export class AgentController {
     }
 
     // --- Steal ---
-    if (actionId.startsWith('steal_from_')) {
-      const firstName = actionId.replace('steal_from_', '');
+    if (actionId.startsWith('steal_')) {
+      const firstName = actionId.replace('steal_', '');
       const target = this.findNearbyByFirstName(firstName);
       if (!target) {
         this.lastTrigger = 'You wanted to steal but the target wasn\'t here.';
@@ -2121,8 +2234,8 @@ export class AgentController {
     }
 
     // --- Alliance ---
-    if (actionId.startsWith('ally_with_')) {
-      const firstName = actionId.replace('ally_with_', '');
+    if (actionId.startsWith('ally_')) {
+      const firstName = actionId.replace('ally_', '');
       const target = this.findNearbyByFirstName(firstName);
       if (!target) {
         this.lastTrigger = 'You wanted to form an alliance but they weren\'t here.';
@@ -2146,6 +2259,113 @@ export class AgentController {
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `forming alliance with ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `formed alliance with ${target.config.name}`);
+      return;
+    }
+
+    // --- Betray ---
+    if (actionId.startsWith('betray_')) {
+      const firstName = actionId.replace('betray_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to betray someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const allianceIdx = this.agent.socialLedger?.findIndex(e =>
+        e.type === 'alliance' && e.targetIds?.includes(target.id) && e.status === 'accepted'
+      ) ?? -1;
+      if (allianceIdx === -1) {
+        this.lastTrigger = `You have no alliance with ${target.config.name} to betray.`;
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      if (this.agent.socialLedger) this.agent.socialLedger[allianceIdx].status = 'rejected' as any;
+      if (target.socialLedger) {
+        const tIdx = target.socialLedger.findIndex(e => e.type === 'alliance' && e.targetIds?.includes(this.agent.id));
+        if (tIdx >= 0) target.socialLedger[tIdx].status = 'rejected' as any;
+      }
+
+      this.adjustTrust(this.agent, target, -50);
+      this.adjustTrust(target, this.agent, -50);
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+        content: `I betrayed my alliance with ${target.config.name}.`,
+        importance: 9, timestamp: Date.now(), relatedAgentIds: [target.id],
+      });
+
+      const targetCog = (this.world as any).cognitions?.get?.(target.id);
+      if (targetCog) {
+        void targetCog.addMemory({
+          id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+          content: `${this.agent.config.name} betrayed our alliance.`,
+          importance: 9, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+        });
+        if (targetCog.fourStream) {
+          targetCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${this.agent.config.name} broke our alliance. I can't trust them.`,
+            category: 'threat', relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          `I betrayed my alliance with ${target.config.name}.`, this.cognition.llmProvider);
+      }
+
+      this.world.addBoardPost({
+        id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+        type: 'news' as any, channel: 'all' as any,
+        content: `${this.agent.config.name} broke their alliance with ${target.config.name}.`,
+        timestamp: Date.now(), day: this.world.time.day,
+      });
+
+      this.lastOutcome = `You betrayed your alliance with ${target.config.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `betraying ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `broke alliance with ${target.config.name}`);
+      return;
+    }
+
+    // --- Accuse ---
+    if (actionId === 'accuse_someone') {
+      const accusation = decision.sayAloud || decision.reason || 'I accuse someone.';
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.alive !== false);
+      let accused: typeof nearbyAll[0] | undefined;
+      for (const a of nearbyAll) {
+        if (accusation.toLowerCase().includes(a.config.name.split(' ')[0].toLowerCase())) {
+          accused = a; break;
+        }
+      }
+      for (const witness of nearbyAll) {
+        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `${this.agent.config.name} publicly accused ${accused?.config.name ?? 'someone'}: "${accusation.slice(0, 80)}"`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id, ...(accused ? [accused.id] : [])] });
+      }
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'rumor' as const,
+        channel: 'all' as const,
+        content: accusation,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+        targetIds: accused ? [accused.id] : undefined,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (accused) {
+        this.adjustTrust(this.agent, accused, -15);
+        this.adjustTrust(accused, this.agent, -15);
+      }
+      this.lastOutcome = `You publicly accused ${accused?.config.name ?? 'someone'}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', 'accusing');
+      this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'}`);
       return;
     }
 
@@ -2191,6 +2411,72 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', 'posting on board');
       this.broadcaster.agentAction(this.agent.id, `posted on village board`);
+      return;
+    }
+
+    // --- Post Group Chat ---
+    if (actionId === 'post_group') {
+      const group = this.agent.socialLedger?.find(e =>
+        e.type === 'alliance' && e.status === 'accepted'
+      );
+      if (!group) {
+        this.lastTrigger = 'You have no group to post in.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      let content: string;
+      try {
+        content = await this.cognition.llmProvider.complete(
+          'Write only the group message. No preamble.',
+          `You are ${this.agent.config.name}. Write a message for your alliance group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences.`
+        );
+        content = content.replace(/^["']|["']$/g, '').trim();
+        if (content.length < 5 || content.length > 200) content = 'A message for the group.';
+      } catch { content = 'A message for the group.'; }
+
+      const groupId = group.id;
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'announcement' as const,
+        channel: 'group' as const,
+        groupId,
+        content,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+
+      for (const targetId of group.targetIds) {
+        const cog = (this.world as any).cognitions?.get?.(targetId);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: targetId,
+            type: 'observation',
+            content: `${this.agent.config.name} posted in our group: "${content.slice(0, 60)}"`,
+            importance: 5,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+        }
+      }
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: 'action_outcome',
+        content: `I posted in my group chat: "${content.slice(0, 60)}"`,
+        importance: 4,
+        timestamp: Date.now(),
+        relatedAgentIds: group.targetIds,
+      });
+
+      this.lastOutcome = 'You posted in your group chat.';
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
       return;
     }
 
@@ -2297,114 +2583,6 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       return;
     }
 
-    // --- Accuse ---
-    if (actionId === 'accuse_someone') {
-      const accusation = decision.sayAloud || decision.reason || 'I accuse someone.';
-      // Try to parse target name from accusation text
-      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.alive !== false);
-      let accused: typeof nearbyAll[0] | undefined;
-      for (const a of nearbyAll) {
-        if (accusation.toLowerCase().includes(a.config.name.split(' ')[0].toLowerCase())) {
-          accused = a; break;
-        }
-      }
-      // Memories for all nearby
-      for (const witness of nearbyAll) {
-        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `${this.agent.config.name} publicly accused ${accused?.config.name ?? 'someone'}: "${accusation.slice(0, 80)}"`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id, ...(accused ? [accused.id] : [])] });
-      }
-      // Post on board
-      const post = {
-        id: crypto.randomUUID(),
-        authorId: this.agent.id,
-        authorName: this.agent.config.name,
-        type: 'rumor' as const,
-        channel: 'all' as const,
-        content: accusation,
-        timestamp: Date.now(),
-        day: this.world.time.day,
-        targetIds: accused ? [accused.id] : undefined,
-      };
-      this.world.addBoardPost(post);
-      this.broadcaster.boardPost(post);
-      if (accused) {
-        this.adjustTrust(this.agent, accused, -15);
-        this.adjustTrust(accused, this.agent, -15);
-      }
-      this.lastOutcome = `You publicly accused ${accused?.config.name ?? 'someone'}.`;
-      this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
-      this.world.updateAgentState(this.agent.id, 'active', 'accusing');
-      this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'}`);
-      return;
-    }
-
-    // --- Post Group Chat ---
-    if (actionId === 'post_group') {
-      const group = this.agent.socialLedger?.find(e =>
-        e.type === 'alliance' && e.status === 'accepted'
-      );
-      if (!group) {
-        this.lastTrigger = 'You have no group to post in.';
-        this.state = 'idle'; this.idleTimer = 0; return;
-      }
-
-      let content: string;
-      try {
-        content = await this.cognition.llmProvider.complete(
-          'Write only the group message. No preamble.',
-          `You are ${this.agent.config.name}. Write a message for your alliance group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences.`
-        );
-        content = content.replace(/^["']|["']$/g, '').trim();
-        if (content.length < 5 || content.length > 200) content = 'A message for the group.';
-      } catch { content = 'A message for the group.'; }
-
-      const groupId = group.id;
-      const post = {
-        id: crypto.randomUUID(),
-        authorId: this.agent.id,
-        authorName: this.agent.config.name,
-        type: 'announcement' as const,
-        channel: 'group' as const,
-        groupId,
-        content,
-        timestamp: Date.now(),
-        day: this.world.time.day,
-      };
-      this.world.addBoardPost(post);
-      this.broadcaster.boardPost(post);
-
-      // Only notify group members
-      for (const targetId of group.targetIds) {
-        const cog = (this.world as any).cognitions?.get?.(targetId);
-        if (cog) {
-          void cog.addMemory({
-            id: crypto.randomUUID(),
-            agentId: targetId,
-            type: 'observation',
-            content: `${this.agent.config.name} posted in our group: "${content.slice(0, 60)}"`,
-            importance: 5,
-            timestamp: Date.now(),
-            relatedAgentIds: [this.agent.id],
-          });
-        }
-      }
-
-      void this.cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: this.agent.id,
-        type: 'action_outcome',
-        content: `I posted in my group chat: "${content.slice(0, 60)}"`,
-        importance: 4,
-        timestamp: Date.now(),
-        relatedAgentIds: group.targetIds,
-      });
-
-      this.lastOutcome = 'You posted in your group chat.';
-      this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
-      return;
-    }
-
     // --- Vote on Rule ---
     if (actionId.startsWith('vote_like_') || actionId.startsWith('vote_dislike_')) {
       const isLike = actionId.startsWith('vote_like_');
@@ -2488,6 +2666,17 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.lastOutcome = `You voted ${isLike ? 'for' : 'against'} the proposed rule.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
+      return;
+    }
+
+    // --- Rest ---
+    if (actionId === 'rest') {
+      this.state = 'performing';
+      this.currentPerformingActivity = 'resting';
+      this.activityTimer = 20;
+      this.world.updateAgentState(this.agent.id, 'active', 'resting');
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] });
+      this.broadcaster.agentAction(this.agent.id, 'resting');
       return;
     }
 
