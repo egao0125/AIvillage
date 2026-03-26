@@ -25,6 +25,8 @@ export class ConversationManager {
   private requestConversationFn?: (initiatorId: string, targetId: string) => boolean;
   private actionPipeline: ActionPipeline;
   private postProcessor: PostConversationProcessor;
+  /** Called when a conversation ends — engine uses this to notify bystanders */
+  onConversationEnd?: (conv: { participants: string[]; location: { x: number; y: number } }) => void;
 
   constructor(
     private world: World,
@@ -445,6 +447,14 @@ export class ConversationManager {
       // Store conversation as memory for each participant
       if (cognitions && active.conversation.messages.length > 0) {
         void this.postProcessor.process(active.conversation, cognitions);
+      }
+
+      // Notify bystanders that a conversation happened (without revealing content)
+      if (this.onConversationEnd) {
+        this.onConversationEnd({
+          participants: active.conversation.participants,
+          location: active.conversation.location,
+        });
       }
     }
     this.world.endConversation(conversationId);

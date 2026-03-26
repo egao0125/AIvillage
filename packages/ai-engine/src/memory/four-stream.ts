@@ -238,6 +238,7 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
 
   pruneExpired(currentGameMinutes: number): void {
     this.concerns = this.concerns.filter(c => {
+      if (c.permanent) return true;  // Rules never expire
       if (c.resolved) return false;
       if (c.expiresAt && currentGameMinutes >= c.expiresAt) return false;
       return true;
