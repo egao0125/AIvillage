@@ -615,7 +615,7 @@ ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
 
 ${actionMenu}
 
-What does YOUR CHARACTER do next? Consider who you are, what matters to you, what you've done today, who's here, and what's on your mind.
+What does YOUR CHARACTER do next? Not the safe choice. Not the polite choice. The honest one — what would THIS person, with THIS personality, in THIS situation, actually do? Someone desperate steals. Someone angry fights. Someone strategic manipulates. Someone scared hides. What are YOU?
 
 Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
 
