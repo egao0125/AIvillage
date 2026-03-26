@@ -557,9 +557,34 @@ If nothing notable was exchanged, return []`;
     }
     const invStr = Object.entries(invGroups).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') || 'nothing';
 
-    const nearbyStr = situation.nearbyAgents.length > 0
-      ? 'Nearby: ' + situation.nearbyAgents.map(a => `${a.name} (${a.activity || 'idle'})`).join(', ')
-      : 'Nobody else is here.';
+    // Build sectioned action menu
+    const physicalActions = situation.availableActions.filter(a => a.category === 'physical');
+    const socialActions = situation.availableActions.filter(a => a.category === 'social');
+    const communityActions = situation.availableActions.filter(a => a.category === 'creative');
+    const movementActions = situation.availableActions.filter(a => a.category === 'movement');
+    const restActions = situation.availableActions.filter(a => a.category === 'rest');
+
+    let actionMenu = 'WHAT YOU CAN DO:\n';
+
+    if (physicalActions.length > 0 || restActions.length > 0) {
+      actionMenu += '\nPhysical:\n' + [...physicalActions, ...restActions].map(a => a.id + ' — ' + a.label).join('\n');
+    }
+
+    if (situation.nearbyAgents.length > 0) {
+      actionMenu += '\n\nPeople nearby:\n' + situation.nearbyAgents.map(a => `- ${a.name} (${a.activity})`).join('\n');
+      if (socialActions.length > 0) {
+        actionMenu += '\n\nWith any nearby person (replace NAME with their first name):\n' + socialActions.map(a => a.id + ' — ' + a.label).join('\n');
+        actionMenu += '\n\nExample: talk_wren, steal_felix, ally_ren';
+      }
+    }
+
+    if (communityActions.length > 0) {
+      actionMenu += '\n\nCommunity:\n' + communityActions.map(a => a.id + ' — ' + a.label).join('\n');
+    }
+
+    if (movementActions.length > 0) {
+      actionMenu += '\n\nMovement:\n' + movementActions.map(a => a.id).join(', ');
+    }
 
     const systemPrompt = `${this.worldView}
 
@@ -573,18 +598,15 @@ Health: ${Math.round(situation.vitals.health)}/100
 Hunger: ${Math.round(situation.vitals.hunger)}/100
 Energy: ${Math.round(situation.vitals.energy)}/100
 Inventory: ${invStr}
-
-${nearbyStr}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 
-WHAT'S POSSIBLE:
-${situation.availableActions.map(a => a.id + ' — ' + a.label).join('\n')}
+${actionMenu}
 
 What does YOUR CHARACTER do next? Consider who you are, what matters to you, what you've done today, who's here, and what's on your mind.
 
-Your actionId MUST be one of the IDs listed above.
+Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
 
 Reply with ONLY valid JSON:
 {"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel"}`;
