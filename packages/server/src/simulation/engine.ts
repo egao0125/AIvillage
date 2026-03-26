@@ -427,6 +427,8 @@ export class SimulationEngine {
     agent.vitals = { health: 100, hunger: 0, energy: 100 };
     agent.alive = true;
     agent.mentalModels = [];
+    agent.activeConcerns = [];
+    agent.dossiers = [];
     agent.institutionIds = [];
 
     this.world.addAgent(agent);
@@ -701,6 +703,8 @@ export class SimulationEngine {
     agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
     agent.mentalModels = [];
     agent.socialLedger = [];
+    agent.activeConcerns = [];
+    agent.dossiers = [];
     agent.inventory = [];
     agent.skills = [];
 
@@ -1656,6 +1660,8 @@ export class SimulationEngine {
       agent.skills = [];
       agent.mentalModels = [];
       agent.socialLedger = [];
+      agent.activeConcerns = [];
+      agent.dossiers = [];
       agent.institutionIds = [];
       agent.joinedDay = 1;
 

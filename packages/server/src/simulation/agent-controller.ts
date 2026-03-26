@@ -681,8 +681,8 @@ export class AgentController {
     if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
       this.lastHungerHour = currentHour;
 
-      // Hunger increases every game hour (1.0 per hour — provisions gone by Day 2, desperate by Day 4-5)
-      v.hunger = Math.min(100, v.hunger + 1.0);
+      // Hunger increases every game hour (2.0 per hour — provisions gone by Day 1, desperate by Day 2-3)
+      v.hunger = Math.min(100, v.hunger + 2.0);
 
       // Cold damage + building effects
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
