@@ -62,15 +62,16 @@ export interface AgentSituation {
   location: string;           // "Village Farm"
   areaId: string;             // "farm"
   time: { day: number; hour: number };
+  hoursUntilDark: number;     // hours until 19:00
+  hoursUntilSleep: number;    // hours until 22:00
+  season: string;             // current season
   vitals: { hunger: number; energy: number; health: number };
   inventory: { name: string; type: string; qty: number }[];
   nearbyAgents: { name: string; activity: string; id: string }[];
   availableActions: AvailableAction[];
   recentOutcome?: string;
   trigger: string;
-  goals?: string[];
-  socialPressure?: string;    // unresolved tensions, bonds, isolation
-  commitments?: string;       // active ledger entries
+  todaySummary?: string;      // what the agent has done today
   boardPosts?: string;        // recent village board posts
 }
 
@@ -579,8 +580,7 @@ Hunger: ${Math.round(situation.vitals.hunger)}/100${situation.vitals.hunger >= 6
 Energy: ${Math.round(situation.vitals.energy)}/100
 Inventory: ${invStr}
 ${nearbyStr}
-${situation.goals?.length ? '\nYOUR PRIORITIES TODAY:\n' + situation.goals.map((g, i) => (i + 1) + '. ' + g).join('\n') : ''}
-${situation.commitments || ''}${situation.socialPressure || ''}
+${situation.todaySummary ? '\nTODAY SO FAR:\n' + situation.todaySummary : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts + '\n' : ''}
 ${situation.recentOutcome ? 'JUST HAPPENED: ' + situation.recentOutcome + '\n' : ''}HERE'S WHAT'S GOING ON:
 ${situation.trigger}
@@ -592,7 +592,7 @@ Every action above is real and has consequences. Pick the one YOUR CHARACTER wou
 Now — what do you actually WANT to do?
 
 Not what's optimal. Not what's safe. What does YOUR CHARACTER want right now?
-${situation.nearbyAgents.length > 0 || situation.socialPressure || situation.commitments ? `
+${situation.nearbyAgents.length > 0 ? `
 Before you talk to anyone, ask yourself:
 - Have I eaten today? Do I have food for tomorrow?
 - Have I gathered or built anything useful recently?
@@ -607,7 +607,6 @@ Talk is cheap. Actions keep you alive. If you've been talking all day and your i
 FACTS:
 You have EXACTLY these items: ${invStr}. Nothing else. No wheat, no tools, no materials unless listed above.
 ${situation.nearbyAgents.length > 0 ? 'People here RIGHT NOW: ' + situation.nearbyAgents.map(a => a.name).join(', ') + '. ONLY these people exist here.' : 'You are COMPLETELY ALONE. Nobody is here. Do not talk to, reference, or mention any person by name.'}
-${!situation.socialPressure && !situation.commitments ? 'You have NO promises, NO unfinished business, NO relationships yet.' : ''}
 ${situation.nearbyAgents.length > 0 ? `To have a real conversation where someone hears and responds, pick talk_<name> as your action.` : ''}
 Your actionId MUST be one of the IDs listed above. Do NOT invent action IDs.
 

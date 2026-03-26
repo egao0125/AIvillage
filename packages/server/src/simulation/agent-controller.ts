@@ -1245,84 +1245,36 @@ export class AgentController {
   // =====================================================================
 
   /** Surface unresolved interpersonal dynamics for the decide prompt */
-  private buildSocialPressure(): string {
-    const lines: string[] = [];
-
-    // Broken/expired promises
-    const ledger = this.agent.socialLedger ?? [];
-    const broken = ledger.filter(e =>
-      e.status === 'broken' ||
-      (e.status === 'expired' && e.resolvedAt && this.world.time.totalMinutes - e.resolvedAt < 1440)
-    );
-    for (const b of broken.slice(0, 3)) {
-      lines.push(`UNRESOLVED: ${b.description} — this was ${b.status}`);
-    }
-
-    // Commitments due soon (within 2 game hours)
-    const due = ledger.filter(e =>
-      e.status === 'accepted' && e.expiresAt &&
-      e.expiresAt - this.world.time.totalMinutes < 120 &&
-      e.expiresAt > this.world.time.totalMinutes
-    );
-    for (const d of due.slice(0, 2)) {
-      lines.push(`DUE SOON: ${d.description}`);
-    }
-
-    // Interpersonal tensions and bonds from mental models
-    const knownPeople = this.agent.mentalModels ?? [];
-    for (const model of knownPeople) {
-      const name = this.world.getAgent(model.targetId)?.config.name;
-      if (!name) continue;
-      if (model.trust < -20) {
-        lines.push(`TENSION: You don't trust ${name} (trust: ${model.trust})`);
-      } else if (model.trust > 30) {
-        lines.push(`BOND: You trust ${name} (trust: ${model.trust})`);
-      }
-    }
-
-    // Drive pressures (belonging, status, meaning)
-    const d = this.agent.drives;
-    if (d) {
-      if (d.belonging >= 60) lines.push('You feel isolated. You haven\'t connected with anyone recently.');
-      if (d.status >= 60) lines.push('Nobody seems to value what you contribute.');
-      if (d.meaning >= 70) lines.push('You\'ve been doing the same thing every day. You need purpose.');
-    }
-
-    return lines.length > 0 ? '\nWHAT\'S ON YOUR MIND:\n' + lines.join('\n') : '';
-  }
-
-  /** Time-of-day trigger — creates natural daily rhythm */
-  private getTimeOfDayTrigger(hour: number): string {
-    if (hour >= 6 && hour <= 9) return 'It\'s early. A new day. What matters today?';
-    if (hour >= 10 && hour <= 14) return 'Middle of the day. How\'s it going?';
-    if (hour >= 15 && hour <= 18) return 'Afternoon. Getting toward evening.';
-    if (hour >= 19 && hour <= 22) return 'Evening is coming. The day is almost done. Did you do what you set out to? Is there anyone you need to see before dark?';
-    return 'What now?';
-  }
-
   /** Step 3: Build the full situation object for the LLM decide() call */
   private buildSituation(trigger: string, recentOutcome?: string): AgentSituation {
     const area = getAreaAt(this.agent.position);
     const areaId = area?.id ?? 'plaza';
     const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
     const currentSeason = SEASON_ORDER[seasonIdx];
+    const hour = this.world.time.hour;
 
     const actions: AvailableAction[] = [];
 
-    // 1. GATHER actions
+    // ========================================
+    // 1. PHYSICAL ACTIONS (location + skill + inventory checks)
+    // ========================================
+
+    // Gather — filtered by location and skill
     const gatherOpts = getGatherOptions(areaId);
     for (const gDef of gatherOpts) {
       const seasonMod = gDef.seasonModifier?.[currentSeason] ?? 1.0;
       const chance = Math.round(gDef.baseSuccessChance * seasonMod * 100);
       const agentSkillLevel = this.agent.skills?.find(s => s.name === gDef.skill)?.level ?? 0;
       if (agentSkillLevel >= gDef.minSkillLevel && chance > 0) {
-        actions.push({ id: 'gather_' + gDef.yields[0].resource, label: 'Gather ' + gDef.yields[0].resource + ' (' + chance + '% chance)', category: 'physical' });
-      } else if (gDef.minSkillLevel > 0) {
-        actions.push({ id: 'gather_' + gDef.yields[0].resource, label: 'Gather ' + gDef.yields[0].resource + ' (need ' + gDef.skill + ' Lv' + gDef.minSkillLevel + ')', category: 'physical' });
+        actions.push({
+          id: 'gather_' + gDef.yields[0].resource,
+          label: 'Gather ' + gDef.yields[0].resource + ' (' + chance + '% chance)',
+          category: 'physical',
+        });
       }
     }
 
-    // 2. CRAFT actions
+    // Craft — filtered by location and skill and ingredients
     const agentSkillMap: Record<string, number> = {};
     for (const s of this.agent.skills ?? []) {
       agentSkillMap[s.name] = s.level;
@@ -1331,7 +1283,6 @@ export class AgentController {
     let craftCount = 0;
     for (const recipe of recipes) {
       if (craftCount >= 3) break;
-      // Check if agent has at least 1 input or recipe needs 0 skill
       const hasAnyInput = recipe.inputs.some(inp =>
         this.agent.inventory.some(i => i.name.toLowerCase().replace(/\s+/g, '_') === inp.resource)
       );
@@ -1345,16 +1296,15 @@ export class AgentController {
       const hasAll = missing.length === 0;
       actions.push({
         id: 'craft_' + recipe.id,
-        label: recipe.name + (hasAll ? ' ✓ ready' : ' (need: ' + missing.join(', ') + ')'),
+        label: recipe.name + (hasAll ? ' (ready)' : ' (need: ' + missing.join(', ') + ')'),
         category: 'physical',
       });
       craftCount++;
     }
 
-    // 3. EAT actions
-    const foodItems = this.agent.inventory.filter(i => i.type === 'food');
+    // Eat — filtered by actual food in inventory
     const foodGroups: Record<string, number> = {};
-    for (const item of foodItems) {
+    for (const item of this.agent.inventory.filter(i => i.type === 'food')) {
       foodGroups[item.name] = (foodGroups[item.name] || 0) + 1;
     }
     for (const [name, qty] of Object.entries(foodGroups)) {
@@ -1365,13 +1315,18 @@ export class AgentController {
       });
     }
 
-    // 4. SOCIAL actions — limited per nearby agent to avoid drowning out physical options
+    // ========================================
+    // 2. SOCIAL ACTIONS (proximity + inventory checks ONLY)
+    //    No trust gating. No hunger gating.
+    //    The LLM decides based on personality and memory.
+    // ========================================
+
     const nearby = this.world.getNearbyAgents(this.agent.position, 5)
       .filter(a => a.id !== this.agent.id && a.alive !== false && a.state !== 'sleeping');
     const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
-    const myHunger = this.agent.vitals?.hunger ?? 0;
+
     for (const a of nearby) {
-      // Show what nearby agents have — creates envy, trade motivation, steal temptation
+      // Show what nearby agents carry
       const otherInv = a.inventory.length > 0
         ? a.inventory.reduce((acc: Record<string, number>, item) => {
             acc[item.name] = (acc[item.name] || 0) + 1;
@@ -1381,92 +1336,93 @@ export class AgentController {
       const otherInvStr = Object.entries(otherInv).length > 0
         ? ' [carrying: ' + Object.entries(otherInv).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') + ']'
         : ' [carrying nothing]';
-      nearbyForSituation.push({ name: a.config.name, activity: (a.currentAction || 'idle') + otherInvStr, id: a.id });
-      const firstName = a.config.name.split(' ')[0].toLowerCase();
+      nearbyForSituation.push({
+        name: a.config.name,
+        activity: (a.currentAction || 'idle') + otherInvStr,
+        id: a.id,
+      });
 
-      const model = this.agent.mentalModels?.find(m => m.targetId === a.id);
-      const trust = model?.trust ?? 0;
+      const firstName = a.config.name.split(' ')[0].toLowerCase();
       const otherHasItems = a.inventory.length > 0;
 
-      // Talk — always available
+      // Talk — only gated by conversation cooldown
       if (this.conversationCooldown <= 0) {
         actions.push({ id: 'talk_' + firstName, label: 'Talk to ' + a.config.name, category: 'social' });
       }
 
-      // Give or Trade — only if agent has items, pick one based on trust
-      if (this.agent.inventory.length > 0 && otherHasItems) {
-        if (trust > 20) {
-          actions.push({ id: 'give_to_' + firstName, label: 'Give something to ' + a.config.name, category: 'social' });
-        } else if (trust >= 0) {
-          actions.push({ id: 'trade_with_' + firstName, label: 'Propose a trade with ' + a.config.name, category: 'social' });
-        }
-      } else if (this.agent.inventory.length > 0 && trust > 20) {
+      // Give — gated by: I have items
+      if (this.agent.inventory.length > 0) {
         actions.push({ id: 'give_to_' + firstName, label: 'Give something to ' + a.config.name, category: 'social' });
       }
 
-      // Steal — only if other has items AND (hungry or distrusted)
-      if (otherHasItems && (myHunger >= 40 || trust < -10)) {
-        actions.push({ id: 'steal_from_' + firstName, label: 'Steal from ' + a.config.name + ' — risky', category: 'social' });
+      // Trade — gated by: both have items
+      if (this.agent.inventory.length > 0 && otherHasItems) {
+        actions.push({ id: 'trade_with_' + firstName, label: 'Trade with ' + a.config.name, category: 'social' });
       }
 
-      // Confront — only if trust is negative
-      if (trust < 0) {
-        actions.push({ id: 'confront_' + firstName, label: 'Confront ' + a.config.name, category: 'social' });
+      // Steal — gated by: they have items
+      if (otherHasItems) {
+        actions.push({ id: 'steal_from_' + firstName, label: 'Steal from ' + a.config.name + ' (risky)', category: 'social' });
       }
 
-      // Ally — only if trust >= 0 and no existing alliance
-      const hasAlliance = this.agent.socialLedger?.some(e =>
-        e.type === 'alliance' && e.status === 'accepted' && e.targetIds.includes(a.id)
-      );
-      if (trust >= 0 && !hasAlliance) {
-        actions.push({ id: 'ally_with_' + firstName, label: 'Propose alliance with ' + a.config.name, category: 'social' });
-      }
-
-      // Fight — only if trust < -20 or recently wronged
-      if (trust < -20) {
-        actions.push({ id: 'fight_' + firstName, label: 'Attack ' + a.config.name + ' — both take damage, everyone remembers', category: 'social' });
-      }
+      // Confront, ally, fight — always available for any nearby person
+      actions.push({ id: 'confront_' + firstName, label: 'Confront ' + a.config.name, category: 'social' });
+      actions.push({ id: 'ally_with_' + firstName, label: 'Propose alliance with ' + a.config.name, category: 'social' });
+      actions.push({ id: 'fight_' + firstName, label: 'Attack ' + a.config.name + ' (both take damage)', category: 'social' });
     }
 
-    // Group actions (3+ agents nearby including self)
+    // ========================================
+    // 3. COMMUNITY ACTIONS (with cooldowns)
+    // ========================================
+
+    // Board post — cooldown based on recent posts
+    let showBoardPost = true;
+    if (this.cognition.fourStream) {
+      const recentPosts = this.cognition.fourStream.getRecentTimeline(10)
+        .filter(m => m.content.includes('posted on the village board'));
+      if (recentPosts.length >= 2) showBoardPost = false;
+    }
+    if (showBoardPost) {
+      actions.push({ id: 'post_board', label: 'Write something on the village board', category: 'creative' });
+    }
+
+    // Meeting + rule — only with 3+ people, with cooldown
     if (nearby.length >= 2) {
-      actions.push({ id: 'call_meeting', label: 'Call everyone here to discuss something', category: 'creative' });
-      actions.push({ id: 'propose_rule', label: 'Propose a rule for the village', category: 'creative' });
-      actions.push({ id: 'accuse_someone', label: 'Publicly accuse someone (everyone hears)', category: 'social' });
+      const recentCommunity = this.cognition.fourStream
+        ?.getRecentTimeline(10)
+        .filter(m => m.content.includes('called a meeting') || m.content.includes('proposed a rule'))
+        .length ?? 0;
+      if (recentCommunity < 1) {
+        actions.push({ id: 'call_meeting', label: 'Call everyone here to discuss', category: 'creative' });
+        actions.push({ id: 'propose_rule', label: 'Propose a rule for the village', category: 'creative' });
+      }
+      actions.push({ id: 'accuse_someone', label: 'Publicly accuse someone', category: 'social' });
     }
 
-    // Always available creative
-    actions.push({ id: 'post_board', label: 'Write something on the village board', category: 'creative' });
+    // ========================================
+    // 4. MOVEMENT ACTIONS
+    // ========================================
 
-    // 5. MOVEMENT actions
     for (const [areaKey, desc] of this.cognition.knownPlaces) {
       if (areaKey === areaId) continue;
       const areaName = desc.split(' — ')[0] || areaKey;
       actions.push({ id: 'go_' + areaKey, label: 'Go to ' + areaName, category: 'movement' });
     }
 
-    // 6. ALWAYS available
+    // ========================================
+    // 5. ALWAYS AVAILABLE
+    // ========================================
+
     actions.push({ id: 'rest', label: 'Rest and recover energy', category: 'rest' });
 
-    // Action ordering: physical first during daytime, social first in evening
-    const hour = this.world.time.hour;
-    const physical = actions.filter(a => a.category === 'physical');
-    const social = actions.filter(a => a.category === 'social');
-    const movement = actions.filter(a => a.category === 'movement');
-    const creative = actions.filter(a => a.category === 'creative');
-    const rest = actions.filter(a => a.category === 'rest');
-    let orderedActions: AvailableAction[];
-    if (hour >= 19 && hour <= 22) {
-      // Evening: social time
-      orderedActions = [...social, ...creative, ...physical, ...movement, ...rest];
-    } else if (hour >= 6 && hour < 19) {
-      // Daytime: productive actions first
-      orderedActions = [...physical, ...movement, ...social, ...creative, ...rest];
-    } else {
-      orderedActions = actions;
-    }
+    // ========================================
+    // NO ACTION ORDERING.
+    // Actions stay in the order generated above:
+    // physical → social (grouped by person) → community → movement → rest
+    // The LLM's personality and memory determine what it picks.
+    // ========================================
 
-    // Build inventory groups
+    // Build inventory groups for the situation output
     const invGroups: Record<string, { name: string; type: string; qty: number }> = {};
     for (const item of this.agent.inventory) {
       const key = item.name;
@@ -1474,45 +1430,23 @@ export class AgentController {
       invGroups[key].qty++;
     }
 
-    // Enrich trigger with time-of-day rhythm if it's the generic arrival/idle trigger
-    const enrichedTrigger = trigger.startsWith('You just arrived')
-      || trigger === 'You just finished a conversation. What now?'
-      || trigger === 'What now?'
-      ? trigger + ' ' + this.getTimeOfDayTrigger(hour)
-      : trigger;
-
-    // Productivity signal — tell agent if they've been all talk and no action
-    let productivityHint = '';
+    // Today summary — what the agent has done today
+    let todaySummary: string | undefined;
     if (this.cognition.fourStream) {
-      const recentTimeline = this.cognition.fourStream.getRecentTimeline(10);
-      const recentGathers = recentTimeline.filter(m =>
-        m.content.includes('Gathered') || m.content.includes('Crafted') || m.content.includes('gathered') || m.content.includes('crafted'));
-      const recentTalks = recentTimeline.filter(m =>
-        m.content.includes('talked') || m.content.includes('Talked'));
-
-      if (recentGathers.length === 0 && this.agent.inventory.length === 0) {
-        productivityHint = 'You have nothing. No food, no materials, no tools. Talking won\'t change that.';
-      } else if (recentGathers.length === 0 && recentTalks.length >= 3) {
-        productivityHint = 'You\'ve been talking a lot but haven\'t gathered or built anything recently. Your inventory won\'t fill itself.';
+      const allRecent = this.cognition.fourStream.getRecentTimeline(20);
+      if (allRecent.length > 0) {
+        todaySummary = allRecent
+          .slice(-10) // last 10 events
+          .map(m => m.content)
+          .join('. ');
       }
     }
 
-    // Social pressure and commitments — use fourStream concerns if available
-    let socialPressure: string;
-    let commitments: string;
-    if (this.cognition.fourStream) {
-      const concerns = this.cognition.fourStream.getAllConcerns();
-      const concernsText = concerns.length > 0
-        ? '\nWHAT\'S ON YOUR MIND:\n' + concerns.map(c => `- ${c.content}`).join('\n')
-        : '';
-      socialPressure = concernsText;
-      commitments = '';
-    } else {
-      socialPressure = this.buildSocialPressure();
-      commitments = this.buildLedgerContext();
-    }
+    // Time calculations
+    const hoursUntilDark = Math.max(0, 19 - hour);
+    const hoursUntilSleep = Math.max(0, 22 - hour);
 
-    // Village board — only if agent knows the plaza
+    // Board posts
     let boardPosts: string | undefined;
     if (this.cognition.knownPlaces.has('plaza')) {
       const summary = this.world.getBoardSummary();
@@ -1524,7 +1458,10 @@ export class AgentController {
     return {
       location: area?.name ?? 'Unknown',
       areaId,
-      time: { day: this.world.time.day, hour: this.world.time.hour },
+      time: { day: this.world.time.day, hour },
+      hoursUntilDark,
+      hoursUntilSleep,
+      season: currentSeason,
       vitals: {
         hunger: this.agent.vitals?.hunger ?? 0,
         energy: this.agent.vitals?.energy ?? 100,
@@ -1532,13 +1469,11 @@ export class AgentController {
       },
       inventory: Object.values(invGroups),
       nearbyAgents: nearbyForSituation,
-      availableActions: orderedActions,
+      availableActions: actions,  // NO ordering applied
       recentOutcome,
-      trigger: enrichedTrigger + (productivityHint ? ' ' + productivityHint : ''),
-      goals: this.currentGoals.length > 0 ? this.currentGoals : undefined,
-      socialPressure: socialPressure || undefined,
-      commitments: commitments || undefined,
-      boardPosts: boardPosts || undefined,
+      trigger,  // No enrichedTrigger — just the raw trigger
+      todaySummary,
+      boardPosts,
     };
   }
 
