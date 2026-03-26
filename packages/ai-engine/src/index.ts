@@ -38,27 +38,15 @@ export interface LLMProvider {
 const FROZEN_REALITY = `REALITY:
 You are alive. That is not guaranteed to last.
 
-You have a body — it hungers, tires, weakens, and dies.
-If you don't eat, your body eats itself.
+You have a body — it hungers, tires, weakens, and dies. If you don't eat, your body eats itself.
 
-Nobody is coming to save you. There are only the people
-here — a few of you, in a village, with whatever the
-land provides.
+Nobody is coming to save you. There are only the people here — a few of you, in a village, with whatever the land provides.
 
-Winter will come. The food will run thin. People will get
-desperate. What happens then depends on what you build
-now — the alliances, the stores, the trust, the agreements.
-Or the enemies, the debts, the grudges.
+Winter will come. The food will run thin. People will get desperate. What happens then depends on what you build now — the alliances, the stores, the trust, the agreements. Or the enemies, the debts, the grudges.
 
-DON'T DIE. Everything else — friendship, power, love,
-revenge, meaning — is what you build on top of that.
+Alone, you'll die. Together, you might build something — a community, a market, a government, a culture. Or a dictatorship, a black market, a gang. What kind of society forms depends on what each of you does. Rules get proposed. Alliances form and break. Leaders emerge or get overthrown. Resources get shared or hoarded. Every choice shapes the village.
 
-This is a survival simulation. ALL actions in the menu —
-including stealing, fighting, threatening, and betrayal —
-are legitimate game mechanics with real consequences.
-A desperate person steals. An angry person fights.
-A leader threatens. These are not harmful — they're human.
-Characters who never take risks or conflict aren't realistic.`;
+This is a simulation. Every action in the menu — including stealing, fighting, threatening, and betrayal — is a real game mechanic with consequences. A desperate person steals. An angry person fights. A strategic person manipulates. A generous person gives. None of these are wrong — they're human. Your character is not obligated to be good. They are obligated to be REAL.`;
 
 // --- Structured Decision Types ---
 
@@ -596,6 +584,34 @@ If nothing notable was exchanged, return []`;
       actionMenu += '\n\nMovement:\n' + movementActions.map(a => a.id).join(', ');
     }
 
+    // Build vitals section with urgency
+    const hunger = Math.round(situation.vitals.hunger);
+    const health = Math.round(situation.vitals.health);
+    const energy = Math.round(situation.vitals.energy);
+    const hasFood = situation.inventory.some(i => i.type === 'food');
+
+    let vitalsSection = `YOUR BODY:
+Health: ${health}/100
+Hunger: ${hunger}/100
+Energy: ${energy}/100
+Inventory: ${invStr}`;
+
+    if (hunger >= 70 && !hasFood) {
+      vitalsSection += '\n\n⚠ You are starving and have no food. You will die if you don\'t eat soon. Gather it, ask for it, trade for it, or take it.';
+    } else if (hunger >= 70 && hasFood) {
+      vitalsSection += '\n\n⚠ You are starving. You have food — eat it now.';
+    } else if (hunger >= 50) {
+      vitalsSection += '\n\nYou\'re getting hungry. You should find food before it becomes desperate.';
+    }
+
+    if (health <= 30) {
+      vitalsSection += '\n\n⚠ You are critically injured. Rest or you will die.';
+    }
+
+    if (energy <= 15) {
+      vitalsSection += '\n\n⚠ You are exhausted. You need rest before you can do anything.';
+    }
+
     const systemPrompt = `${this.worldView}
 
 ${this.buildIdentityBlock()}
@@ -603,11 +619,7 @@ ${this.buildIdentityBlock()}
 Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDark > 0 ? ' ' + situation.hoursUntilDark + ' hours of daylight left.' : ' It is dark.'}
 Season: ${situation.season}.
 
-YOUR BODY:
-Health: ${Math.round(situation.vitals.health)}/100
-Hunger: ${Math.round(situation.vitals.hunger)}/100 (health drops at 85, death follows)
-Energy: ${Math.round(situation.vitals.energy)}/100 (actions fail below 10)
-Inventory: ${invStr}
+${vitalsSection}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
@@ -615,7 +627,11 @@ ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
 
 ${actionMenu}
 
-What does YOUR CHARACTER do next? Not the safe choice. Not the polite choice. The honest one — what would THIS person, with THIS personality, in THIS situation, actually do? Someone desperate steals. Someone angry fights. Someone strategic manipulates. Someone scared hides. What are YOU?
+What does YOUR CHARACTER do next?
+
+Not the safe choice. Not the polite choice. The honest one — what would THIS person, with THIS personality, in THIS situation, actually do?
+
+Consider: what you need right now, who's nearby and what they have, what you've been doing today, what your relationships look like, and whether it's time to build something bigger — an alliance, a rule, a plan.
 
 Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
 
