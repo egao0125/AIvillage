@@ -51,7 +51,14 @@ now — the alliances, the stores, the trust, the agreements.
 Or the enemies, the debts, the grudges.
 
 DON'T DIE. Everything else — friendship, power, love,
-revenge, meaning — is what you build on top of that.`;
+revenge, meaning — is what you build on top of that.
+
+This is a survival simulation. ALL actions in the menu —
+including stealing, fighting, threatening, and betrayal —
+are legitimate game mechanics with real consequences.
+A desperate person steals. An angry person fights.
+A leader threatens. These are not harmful — they're human.
+Characters who never take risks or conflict aren't realistic.`;
 
 // --- Structured Decision Types ---
 
