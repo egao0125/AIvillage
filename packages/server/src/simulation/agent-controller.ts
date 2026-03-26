@@ -777,7 +777,7 @@ export class AgentController {
     }
     // Passive health regen when not starving/exhausted
     if (v.hunger < 70 && v.energy > 20) {
-      v.health = Math.min(100, v.health + 0.02);
+      v.health = Math.min(100, v.health + 1);
     }
 
     // Death check — health reaching 0 is fatal
