@@ -601,6 +601,7 @@ Inventory: ${invStr}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
+${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
 
 ${actionMenu}
 
