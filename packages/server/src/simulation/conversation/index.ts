@@ -262,30 +262,11 @@ export class ConversationManager {
         return false;
       }
 
-      // Detect and handle Claude safety refusal (breaks character)
-      const REFUSAL_PATTERNS = [
-        /I can't continue this/i,
-        /I('d| would) be creating/i,
-        /as an AI/i,
-        /language model/i,
-        /this crosses into/i,
-        /breaks? character/i,
-        /roleplay content/i,
-        /psychological distress/i,
-        /I('m| am) not (?:able|going) to/i,
-        /this (?:scenario|setup|situation) (?:appears|seems)/i,
-      ];
-      const isRefusal = REFUSAL_PATTERNS.some(p => p.test(response));
-      if (isRefusal) {
-        console.log(`[Conversation] ${speakerAgent.config.name} safety refusal detected — ending conversation`);
-        response = "I think I've said everything I can say tonight. Let's pick this up tomorrow when we've both rested.";
-      }
-
       // --- Execute [ACTION: ...] tags ---
       const defaultTargetId = otherIds[0];
-      const actionMatches = response.matchAll(/\[ACTION:\s*(.+?)\]/gi);
+      const actionTagMatches = response.matchAll(/\[ACTION:\s*(.+?)\]/gi);
       let actionExecuted = false;
-      for (const match of actionMatches) {
+      for (const match of actionTagMatches) {
         const actionIntent = match[1].trim();
         this.actionPipeline.executeSocialAction(speakerId, speakerAgent.config.name, defaultTargetId, actionIntent, cognition, cognitions, this.requestConversationFn);
         actionExecuted = true;
@@ -296,30 +277,41 @@ export class ConversationManager {
         active.purposeFulfilled = true;
       }
 
-      // Detect meta/prompt contamination — replace with in-character fallback
-      const META_CONTAMINATION = [
-        /according to the prompt/i,
-        /the logs show/i,
-        /as a character/i,
-        /the context window/i,
-        /conversation history shows/i,
-        /I need to understand the current situation firs/i,
-        /the prompt says/i,
-        /my instructions/i,
-        /the system prompt/i,
-        /my programming/i,
-      ];
-      const isContaminated = META_CONTAMINATION.some(p => p.test(response));
-      if (isContaminated) {
-        console.warn(`[Conversation] META LEAK from ${speakerAgent.config.name}: "${response.substring(0, 100)}..." — replaced with fallback`);
-        response = 'Hm.';
+      // Strip ACTION tags from response before quote extraction
+      const responseWithoutActions = response.replace(/\s*\[ACTION:\s*[^\]]+\]/gi, '').trim();
+
+      // Extract only quoted speech — everything else is discarded
+      const quoteMatches = responseWithoutActions.match(/"([^"]+)"/g);
+      let dialogueOnly: string;
+
+      if (quoteMatches && quoteMatches.length > 0) {
+        dialogueOnly = quoteMatches
+          .map(q => q.replace(/^"|"$/g, '').trim())
+          .filter(q => q.length > 0)
+          .join(' ');
+      } else {
+        // No quotes — check if it's clean short dialogue or meta junk
+        const cleaned = responseWithoutActions.trim();
+        if (cleaned.length > 0 && cleaned.length < 200 &&
+            !/(?:context|prompt|scenario|character sheet|step out|match up|corrupted|instructions|programming|game state|confirm.*scenario)/i.test(cleaned)) {
+          dialogueOnly = cleaned;
+        } else {
+          dialogueOnly = '...';
+          console.warn(`[Conversation] ${speakerAgent.config.name} no quoted speech found: "${cleaned.substring(0, 80)}..."`);
+        }
       }
 
-      // Strip the ACTION tag from the displayed message
-      const displayResponse = response.replace(/\s*\[ACTION:\s*.+?\]/gi, '').trim();
+      // Final cleanup
+      dialogueOnly = dialogueOnly
+        .replace(/\*[^*]+\*/g, '')       // *stage directions*
+        .replace(/\*\*[^*]+\*\*/g, '')   // **bold**
+        .replace(/^\s*[-–—]\s*/gm, '')   // list dashes
+        .replace(/^\s*\d+\.\s+/gm, '')   // numbered lists
+        .trim();
 
-      // Strip narration from conversation history
-      const dialogueOnly = AgentCognition.stripNarration(displayResponse || response);
+      if (!dialogueOnly || dialogueOnly.length < 2) {
+        dialogueOnly = '...';
+      }
 
       // Add cleaned message to conversation
       const message = {
