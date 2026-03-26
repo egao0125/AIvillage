@@ -2697,6 +2697,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
 
       const decision = await this.cognition.decide(situation);
       this.handleApiSuccess();
+      console.log(`[Decision] ${this.agent.config.name} → ${decision.actionId} | ${decision.reason.slice(0, 120)}`);
 
       // Guard: agent may have entered a conversation while awaiting LLM
       if (this.state === 'conversing') return;
