@@ -456,6 +456,9 @@ If nothing notable was exchanged, return []`;
    * Build identity block: soul/backstory, deep identity, personality bias hints.
    * Used by think(), plan(), talk(), reflect().
    */
+  /** Public accessor for identity context (used by secondary LLM calls like board posts) */
+  get identityBlock(): string { return this.buildIdentityBlock(); }
+
   private buildIdentityBlock(): string {
     const { config } = this.agent;
     const parts: string[] = [];
