@@ -1629,12 +1629,12 @@ export class AgentController {
       }
     }
 
-    // Store outcome as memory
+    // Store outcome as memory — action_outcome so it enters the four-stream timeline
     const outcomeImportance = outcome.success ? 4 : 6;
     void this.cognition.addMemory({
       id: crypto.randomUUID(),
       agentId: actor.id,
-      type: 'observation',
+      type: 'action_outcome',
       content: outcome.description,
       importance: outcomeImportance,
       timestamp: Date.now(),

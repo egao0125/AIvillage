@@ -595,8 +595,8 @@ Season: ${situation.season}.
 
 YOUR BODY:
 Health: ${Math.round(situation.vitals.health)}/100
-Hunger: ${Math.round(situation.vitals.hunger)}/100
-Energy: ${Math.round(situation.vitals.energy)}/100
+Hunger: ${Math.round(situation.vitals.hunger)}/100 (health drops at 85, death follows)
+Energy: ${Math.round(situation.vitals.energy)}/100 (actions fail below 10)
 Inventory: ${invStr}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
