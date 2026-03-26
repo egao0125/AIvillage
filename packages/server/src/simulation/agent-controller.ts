@@ -72,6 +72,8 @@ export class AgentController {
   private lastOutcome: string | undefined;
   // Four Stream Memory: importance accumulator for belief generation
   private importanceAccum: number = 0;
+  // Sequential actions: store why agent is moving so arrival trigger includes intent
+  private pendingArrivalIntent: string | null = null;
   private lastBeliefTick: number = 0;
 
   readonly wakeHour: number;
@@ -492,7 +494,13 @@ export class AgentController {
     if (path.length <= 1) {
       // Already there or no path found — go idle so decideAndAct picks up
       const area = getAreaAt(this.agent.position);
-      this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + '.';
+      const areaName = area?.name ?? 'your destination';
+      if (this.pendingArrivalIntent) {
+        this.lastTrigger = `You arrived at ${areaName}. You came here because: ${this.pendingArrivalIntent}`;
+        this.pendingArrivalIntent = null;
+      } else {
+        this.lastTrigger = `You arrived at ${areaName}. Look around and decide what to do.`;
+      }
       this.state = 'idle';
       this.idleTimer = 6;
       this.world.updateAgentState(this.agent.id, 'idle', '');
@@ -529,7 +537,13 @@ export class AgentController {
         this.world.updateAgentState(this.agent.id, 'idle', '');
       } else {
         const area = getAreaAt(this.agent.position);
-        this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + '.';
+        const areaName = area?.name ?? 'your destination';
+        if (this.pendingArrivalIntent) {
+          this.lastTrigger = `You arrived at ${areaName}. You came here because: ${this.pendingArrivalIntent}`;
+          this.pendingArrivalIntent = null;
+        } else {
+          this.lastTrigger = `You arrived at ${areaName}. Look around and decide what to do.`;
+        }
         this.state = 'idle';
         this.idleTimer = 6;
         this.world.updateAgentState(this.agent.id, 'idle', '');
@@ -929,6 +943,18 @@ export class AgentController {
 
     this.broadcaster.agentDeath(this.agent.id, cause);
     this.broadcaster.agentAction(this.agent.id, `died: ${cause}`, '\u{1F480}');
+
+    // PUBLIC: news post for death
+    this.world.addBoardPost({
+      id: crypto.randomUUID(),
+      authorId: 'system',
+      authorName: 'Village News',
+      type: 'news',
+      channel: 'all',
+      content: `${this.agent.config.name} has died of ${cause}.`,
+      timestamp: Date.now(),
+      day: this.world.time.day,
+    });
 
     // Fix 4: Emit agent_died event for nearby witness perception
     if (this.bus) {
@@ -1399,6 +1425,35 @@ export class AgentController {
       actions.push({ id: 'accuse_someone', label: 'Publicly accuse someone', category: 'social' });
     }
 
+    // Group chat — if agent has alliances
+    const myGroups = this.agent.socialLedger?.filter(e =>
+      e.type === 'alliance' && e.status === 'accepted'
+    ) ?? [];
+    if (myGroups.length > 0) {
+      actions.push({
+        id: 'post_group',
+        label: 'Write in group chat',
+        category: 'creative',
+      });
+    }
+
+    // Voting — pending rule proposals this agent hasn't voted on
+    const pendingRules = this.world.getActiveBoard()
+      .filter(p => p.type === 'rule' && p.ruleStatus === 'proposed'
+        && !p.votes?.some(v => v.agentId === this.agent.id));
+    for (const rule of pendingRules.slice(0, 3)) {
+      actions.push({
+        id: 'vote_like_' + rule.id.slice(0, 8),
+        label: `Support rule: "${rule.content.slice(0, 40)}..."`,
+        category: 'social',
+      });
+      actions.push({
+        id: 'vote_dislike_' + rule.id.slice(0, 8),
+        label: `Oppose rule: "${rule.content.slice(0, 40)}..."`,
+        category: 'social',
+      });
+    }
+
     // ========================================
     // 4. MOVEMENT ACTIONS
     // ========================================
@@ -1705,6 +1760,8 @@ export class AgentController {
       const targetAreaId = actionId.replace('go_', '');
       const targetPos = getRandomPositionInArea(targetAreaId);
       this.startMoveTo(targetPos);
+      // Store the reason for going — so the agent remembers WHY it went there when decide() fires on arrival
+      this.pendingArrivalIntent = decision.reason;
       this.broadcaster.agentAction(this.agent.id, `heading to ${targetAreaId}`);
       return;
     }
@@ -1746,6 +1803,7 @@ export class AgentController {
       this.activityTimer = 20;
       this.world.updateAgentState(this.agent.id, 'active', 'resting');
       // Resting energy recovery is handled by tickVitals
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] });
       this.broadcaster.agentAction(this.agent.id, 'resting');
       return;
     }
@@ -1758,8 +1816,11 @@ export class AgentController {
         this.lastTrigger = 'You wanted to give something but couldn\'t.';
         this.state = 'idle'; this.idleTimer = 0; return;
       }
-      // Pick item: first non-food, or first food
-      const item = this.agent.inventory.find(i => i.type !== 'food') || this.agent.inventory[0];
+      // Pick item from decision.reason if mentioned, else first non-food
+      const reasonLower = (decision.reason || '').toLowerCase();
+      const item = this.agent.inventory.find(i =>
+        reasonLower.includes(i.name.toLowerCase())
+      ) || this.agent.inventory.find(i => i.type !== 'food') || this.agent.inventory[0];
       const agentState = this.buildAgentStateForResolver(situation);
       const worldState = this.buildWorldState();
       const intent = { type: 'give' as const, resource: item.name.toLowerCase().replace(/\s+/g, '_'), targetAgent: target.config.name.split(' ')[0], quantity: 1, raw: `give ${item.name} to ${target.config.name}` };
@@ -1786,7 +1847,12 @@ export class AgentController {
         this.lastTrigger = 'You wanted to trade but couldn\'t.';
         this.state = 'idle'; this.idleTimer = 0; return;
       }
-      const item = this.agent.inventory[0];
+      // Pick item from decision.reason if mentioned, else first item
+      const reasonLower = (decision.reason || '').toLowerCase();
+      const item = this.agent.inventory.find(i =>
+        reasonLower.includes(i.name.toLowerCase())
+      ) || this.agent.inventory[0];
+
       const agentState = this.buildAgentStateForResolver(situation);
       const worldState = this.buildWorldState();
       const intent = { type: 'trade_offer' as const, offerItems: [{ resource: item.name.toLowerCase().replace(/\s+/g, '_'), qty: 1 }], requestItems: [], targetAgent: target.config.name.split(' ')[0], raw: `trade ${item.name} with ${target.config.name}` };
@@ -1794,9 +1860,26 @@ export class AgentController {
       this.applyOutcomeToWorld(outcome);
       this.lastOutcome = outcome.description;
       this.lastTrigger = outcome.description;
+      // Dossier update
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+      }
+      // PUBLIC: trade post if successful
+      if (outcome.success) {
+        this.world.addBoardPost({
+          id: crypto.randomUUID(),
+          authorId: 'system',
+          authorName: 'Village Trades',
+          type: 'trade',
+          channel: 'all',
+          content: `${this.agent.config.name} traded ${item.name} with ${target.config.name}. ${outcome.description}`,
+          timestamp: Date.now(),
+          day: this.world.time.day,
+        });
+      }
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `proposed trade with ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `traded with ${target.config.name}`);
       return;
     }
 
@@ -1832,13 +1915,20 @@ export class AgentController {
         this.state = 'idle'; this.idleTimer = 0; return;
       }
       const confrontText = decision.sayAloud || decision.reason;
-      // Memory for both
+      // Memory for confronter
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I confronted ${target.config.name}: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
-      const targetCognition = this.world.agents.has(target.id) ? (this as any).cognition : null;
+      // Memory for target
+      const targetCognition = (this.world as any).cognitions?.get?.(target.id);
+      if (targetCognition) {
+        void targetCognition.addMemory({ id: crypto.randomUUID(), agentId: target.id, type: 'action_outcome', content: `${this.agent.config.name} confronted me: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id] });
+      }
       // Witness memories for all nearby
-      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id);
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.id !== target.id);
       for (const witness of nearbyAll) {
-        const wCog = (this as any).world?.cognitions?.get?.(witness.id);
+        const wCog = (this.world as any).cognitions?.get?.(witness.id);
+        if (wCog) {
+          void wCog.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `I saw ${this.agent.config.name} confront ${target.config.name}: "${confrontText}"`, importance: 5, timestamp: Date.now(), relatedAgentIds: [this.agent.id, target.id] });
+        }
       }
       this.adjustTrust(target, this.agent, -15);
       this.adjustTrust(this.agent, target, -15);
@@ -1847,6 +1937,10 @@ export class AgentController {
       }
       // Force target to react
       const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      if (targetCtrl) {
+        targetCtrl.lastTrigger = `${this.agent.config.name} just confronted you: "${confrontText}". How do you respond?`;
+        targetCtrl.idleTimer = targetCtrl.idleThreshold;
+      }
       this.lastOutcome = `You confronted ${target.config.name}.`;
       this.lastTrigger = `You just confronted ${target.config.name}. How do they react?`;
       this.state = 'performing'; this.activityTimer = 5;
@@ -1872,6 +1966,32 @@ export class AgentController {
       this.lastTrigger = outcome.description;
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+      }
+      // PUBLIC: news post + all agents get memory
+      this.world.addBoardPost({
+        id: crypto.randomUUID(),
+        authorId: 'system',
+        authorName: 'Village News',
+        type: 'news',
+        channel: 'all',
+        content: `${this.agent.config.name} was caught stealing from ${target.config.name}!`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      });
+      for (const [id] of this.world.agents) {
+        if (id === this.agent.id) continue;
+        const cog = (this.world as any).cognitions?.get?.(id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: id,
+            type: 'observation',
+            content: `${this.agent.config.name} stole from ${target.config.name}.`,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id, target.id],
+          });
+        }
       }
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `stealing`);
@@ -1978,6 +2098,18 @@ export class AgentController {
         });
       }
 
+      // PUBLIC: news post
+      this.world.addBoardPost({
+        id: crypto.randomUUID(),
+        authorId: 'system',
+        authorName: 'Village News',
+        type: 'news',
+        channel: 'all',
+        content: `${this.agent.config.name} attacked ${target.config.name}! ${outcome.description}`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      });
+
       this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '!', '⚔️');
       this.lastOutcome = outcome.description;
       this.lastTrigger = outcome.success
@@ -2046,6 +2178,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
         authorId: this.agent.id,
         authorName: this.agent.config.name,
         type: 'announcement' as const,
+        channel: 'all' as const,
         content,
         timestamp: Date.now(),
         day: this.world.time.day,
@@ -2065,7 +2198,33 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
     if (actionId === 'call_meeting') {
       const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.alive !== false);
       const names = nearbyAll.map(a => a.config.name).join(', ');
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I called a meeting with ${names}.`, importance: 6, timestamp: Date.now(), relatedAgentIds: nearbyAll.map(a => a.id) });
+      const meetingTopic = decision.reason || 'something important';
+
+      // Caller gets memory
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I called a meeting with ${names}. Topic: ${meetingTopic}`, importance: 6, timestamp: Date.now(), relatedAgentIds: nearbyAll.map(a => a.id) });
+
+      // All nearby agents get notified and forced to react
+      for (const a of nearbyAll) {
+        const cog = (this.world as any).cognitions?.get?.(a.id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: a.id,
+            type: 'observation',
+            content: `${this.agent.config.name} called a meeting: "${meetingTopic}"`,
+            importance: 6,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id, ...nearbyAll.map(n => n.id)],
+          });
+        }
+        // Force nearby agents to react to the meeting
+        const ctrl = (this.world as any).controllers?.get?.(a.id) as AgentController | undefined;
+        if (ctrl) {
+          ctrl.lastTrigger = `${this.agent.config.name} just called a meeting. They said: "${meetingTopic}". ${names} are here. What do you do?`;
+          ctrl.idleTimer = 7;
+        }
+      }
+
       this.lastOutcome = `You called a meeting. ${names} are listening.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 5;
@@ -2102,12 +2261,33 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         authorId: this.agent.id,
         authorName: this.agent.config.name,
         type: 'rule' as const,
+        channel: 'all' as const,
         content: ruleContent,
         timestamp: Date.now(),
         day: this.world.time.day,
+        votes: [] as { agentId: string; vote: 'like' | 'dislike' }[],
+        ruleStatus: 'proposed' as const,
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
+
+      // All agents get a memory about the proposed rule
+      for (const [id, agent] of this.world.agents) {
+        if (id === this.agent.id || agent.alive === false) continue;
+        const cog = (this.world as any).cognitions?.get?.(id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: id,
+            type: 'observation',
+            content: `${this.agent.config.name} proposed a rule: "${ruleContent}"`,
+            importance: 7,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+        }
+      }
+
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed a rule: "${ruleContent.slice(0, 80)}"`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
       this.lastOutcome = `You proposed a rule for the village.`;
       this.lastTrigger = this.lastOutcome;
@@ -2138,6 +2318,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         authorId: this.agent.id,
         authorName: this.agent.config.name,
         type: 'rumor' as const,
+        channel: 'all' as const,
         content: accusation,
         timestamp: Date.now(),
         day: this.world.time.day,
@@ -2154,6 +2335,159 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', 'accusing');
       this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'}`);
+      return;
+    }
+
+    // --- Post Group Chat ---
+    if (actionId === 'post_group') {
+      const group = this.agent.socialLedger?.find(e =>
+        e.type === 'alliance' && e.status === 'accepted'
+      );
+      if (!group) {
+        this.lastTrigger = 'You have no group to post in.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      let content: string;
+      try {
+        content = await this.cognition.llmProvider.complete(
+          'Write only the group message. No preamble.',
+          `You are ${this.agent.config.name}. Write a message for your alliance group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences.`
+        );
+        content = content.replace(/^["']|["']$/g, '').trim();
+        if (content.length < 5 || content.length > 200) content = 'A message for the group.';
+      } catch { content = 'A message for the group.'; }
+
+      const groupId = group.id;
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'announcement' as const,
+        channel: 'group' as const,
+        groupId,
+        content,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+
+      // Only notify group members
+      for (const targetId of group.targetIds) {
+        const cog = (this.world as any).cognitions?.get?.(targetId);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: targetId,
+            type: 'observation',
+            content: `${this.agent.config.name} posted in our group: "${content.slice(0, 60)}"`,
+            importance: 5,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+        }
+      }
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: 'action_outcome',
+        content: `I posted in my group chat: "${content.slice(0, 60)}"`,
+        importance: 4,
+        timestamp: Date.now(),
+        relatedAgentIds: group.targetIds,
+      });
+
+      this.lastOutcome = 'You posted in your group chat.';
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 5;
+      return;
+    }
+
+    // --- Vote on Rule ---
+    if (actionId.startsWith('vote_like_') || actionId.startsWith('vote_dislike_')) {
+      const isLike = actionId.startsWith('vote_like_');
+      const ruleIdPrefix = actionId.replace(/^vote_(like|dislike)_/, '');
+      const rulePost = this.world.getActiveBoard()
+        .find(p => p.id.startsWith(ruleIdPrefix) && p.type === 'rule' && p.ruleStatus === 'proposed');
+
+      if (!rulePost) {
+        this.lastTrigger = 'The rule you wanted to vote on is no longer active.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      // Add vote
+      if (!rulePost.votes) rulePost.votes = [];
+      rulePost.votes.push({ agentId: this.agent.id, vote: isLike ? 'like' : 'dislike' });
+
+      // Check if majority reached
+      const aliveCount = Array.from(this.world.agents.values()).filter(a => a.alive !== false).length;
+      const likeCount = rulePost.votes.filter(v => v.vote === 'like').length;
+      const dislikeCount = rulePost.votes.filter(v => v.vote === 'dislike').length;
+      const totalVotes = likeCount + dislikeCount;
+
+      if (totalVotes >= Math.ceil(aliveCount / 2)) {
+        if (likeCount > dislikeCount) {
+          // RULE PASSES
+          rulePost.ruleStatus = 'passed';
+
+          // Add permanent rule concern to ALL agents
+          for (const [id, agent] of this.world.agents) {
+            if (agent.alive === false) continue;
+            const cog = (this.world as any).cognitions?.get?.(id);
+            if (cog?.fourStream) {
+              cog.fourStream.addConcern({
+                id: crypto.randomUUID(),
+                content: `Village rule: ${rulePost.content}`,
+                category: 'rule',
+                relatedAgentIds: [],
+                createdAt: this.world.time.totalMinutes,
+                permanent: true,
+              });
+            }
+            if (cog) {
+              void cog.addMemory({
+                id: crypto.randomUUID(),
+                agentId: id,
+                type: 'observation',
+                content: `Village rule passed: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`,
+                importance: 8,
+                timestamp: Date.now(),
+                relatedAgentIds: [],
+              });
+            }
+          }
+
+          // News post
+          this.world.addBoardPost({
+            id: crypto.randomUUID(),
+            authorId: 'system',
+            authorName: 'Village News',
+            type: 'news',
+            channel: 'all',
+            content: `Rule passed: "${rulePost.content}" (${likeCount}-${dislikeCount})`,
+            timestamp: Date.now(),
+            day: this.world.time.day,
+          });
+        } else {
+          rulePost.ruleStatus = 'rejected';
+        }
+      }
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: 'action_outcome',
+        content: `I voted ${isLike ? 'for' : 'against'} the rule: "${rulePost.content.slice(0, 60)}"`,
+        importance: 5,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      });
+
+      this.lastOutcome = `You voted ${isLike ? 'for' : 'against'} the proposed rule.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
       return;
     }
 

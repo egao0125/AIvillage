@@ -205,10 +205,34 @@ export class World {
     return this.board.filter(p => !p.revoked);
   }
 
-  getBoardSummary(): string {
-    const active = this.getActiveBoard();
-    if (active.length === 0) return 'The village board is empty.';
-    return active.map(p => `[${p.type.toUpperCase()}] ${p.authorName}: "${p.content}"`).join('\n');
+  getBoardSummary(channel?: 'all' | 'group', groupId?: string): string {
+    let posts = this.getActiveBoard();
+
+    if (channel === 'group' && groupId) {
+      posts = posts.filter(p => p.channel === 'group' && p.groupId === groupId);
+    } else {
+      // Default: show all-channel posts only
+      posts = posts.filter(p => p.channel === 'all' || !p.channel);
+    }
+
+    if (posts.length === 0) return '';
+
+    // Dedup by author (latest per author), cap at 8
+    const latestByAuthor = new Map<string, typeof posts[0]>();
+    for (const post of posts) {
+      const existing = latestByAuthor.get(post.authorId);
+      if (!existing || post.timestamp > existing.timestamp) {
+        latestByAuthor.set(post.authorId, post);
+      }
+    }
+
+    const deduped = Array.from(latestByAuthor.values())
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 8);
+
+    return deduped
+      .map(p => `[${p.type.toUpperCase()}] ${p.authorName}: "${p.content}"`)
+      .join('\n');
   }
 
   revokePost(postId: string): void {

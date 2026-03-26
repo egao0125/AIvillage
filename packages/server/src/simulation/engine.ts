@@ -93,6 +93,8 @@ export class SimulationEngine {
 
     // Create conversation manager
     this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus);
+    // Wire bystander notification when conversations end
+    this.conversationManager.onConversationEnd = (conv) => this.notifyConversationBystanders(conv);
 
     // Restore from Supabase if persistence is enabled
     if (this.persistence) {
@@ -935,7 +937,7 @@ export class SimulationEngine {
 
     // --- Direct calls for subsystems with complex timing ---
 
-    if (this.tickCount % 10 === 0) this.checkOverhearing();
+    // Eavesdropping removed — conversations are private. Bystander notice handled at conversation end.
     this.checkElections();
 
     if (this.tickCount % 600 === 0) {
@@ -1119,59 +1121,28 @@ export class SimulationEngine {
   }
 
   /**
-   * Check if nearby agents can overhear an active conversation.
-   * Agents within 5 tiles who are not in the conversation get a snippet.
+   * Notify nearby bystanders that a conversation happened (without revealing content).
+   * Called when a conversation ends — replaces the old per-tick eavesdropping loop.
    */
-  private checkOverhearing(): void {
-    const activeConversations = this.world.getActiveConversations();
-
-    for (const conv of activeConversations) {
-      if (conv.messages.length === 0) continue;
-
-      const lastMessage = conv.messages[conv.messages.length - 1];
-      const snippet = lastMessage.content.substring(0, 60);
-
-      // Find agents within 5 tiles of conversation location, not in the conversation
-      const nearby = this.world.getNearbyAgents(conv.location, 5);
-      for (const agent of nearby) {
-        if (conv.participants.includes(agent.id)) continue;
-        if (agent.state === 'sleeping') continue;
-        if (this.conversationManager.isInConversation(agent.id)) continue;
-
-        const cognition = this.cognitions.get(agent.id);
-        if (!cognition) continue;
-
-        // Store overheard snippet as a memory
-        void cognition.addMemory({
+  notifyConversationBystanders(conv: { participants: string[]; location: { x: number; y: number } }): void {
+    const nearbyAgents = this.world.getNearbyAgents(conv.location, 5);
+    for (const bystander of nearbyAgents) {
+      if (conv.participants.includes(bystander.id)) continue;
+      if (bystander.state === 'sleeping') continue;
+      const participantNames = conv.participants
+        .map(id => this.world.getAgent(id)?.config.name)
+        .filter(Boolean).join(' and ');
+      const cog = this.cognitions.get(bystander.id);
+      if (cog) {
+        void cog.addMemory({
           id: crypto.randomUUID(),
-          agentId: agent.id,
+          agentId: bystander.id,
           type: 'observation',
-          content: `I overheard ${lastMessage.agentName} say: "${snippet}..."`,
-          importance: 5,
+          content: `I noticed ${participantNames} talking nearby.`,
+          importance: 3,
           timestamp: Date.now(),
           relatedAgentIds: conv.participants,
-        }).catch(() => {});
-
-        // think()-driven overhear decision (one think per agent per conversation, with cooldown)
-        const controller = this.controllers.get(agent.id);
-        if (controller?.isAvailable && !controller.apiExhausted) {
-          const cognition = this.cognitions.get(agent.id);
-          if (cognition) {
-            void cognition.think(
-              `overheard ${lastMessage.agentName} say: "${snippet}"`,
-              `You weren't part of the conversation — you just caught a snippet.`
-            ).then(output => {
-              // Check if the thought suggests joining the conversation
-              const lower = output.thought.toLowerCase();
-              const wantsToJoin = lower.includes('approach') || lower.includes('join') || lower.includes('confront') || lower.includes('talk to') || lower.includes('speak to');
-              if (wantsToJoin && controller.isAvailable) {
-                this.conversationManager.addParticipant(conv.id, agent.id);
-                controller.enterConversation();
-                console.log(`[Engine] ${agent.config.name} overheard and decided to join conversation`);
-              }
-            }).catch(() => {});
-          }
-        }
+        });
       }
     }
   }

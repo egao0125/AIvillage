@@ -33,7 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed }) => {
       case 'villagers':
         return `Villagers (${agents.length})`;
       case 'village':
-        return `Village${villageCount > 0 ? ` (${villageCount})` : ''}`;
+        return `Agent SNS${villageCount > 0 ? ` (${villageCount})` : ''}`;
       case 'confessional':
         return 'Thoughts';
       case 'recap':
