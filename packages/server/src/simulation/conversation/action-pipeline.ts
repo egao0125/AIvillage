@@ -15,6 +15,14 @@ export class ActionPipeline {
     private bus?: EventBus,
   ) {}
 
+  /** Route conversation pipeline events to the feed, not the status display */
+  private broadcastToFeed(actorId: string, message: string, _emoji?: string): void {
+    const actor = this.world.getAgent(actorId);
+    const name = actor?.config.name ?? 'Unknown';
+    const convInfo = this._getAgentConversation?.(actorId);
+    this.broadcaster.agentSpeak(actorId, name, message, convInfo?.conversationId ?? '');
+  }
+
   /**
    * Set the callback that retrieves conversation info for an agent.
    * Returns { conversationId, participants } so applyOutcome can determine who hears social acts.
@@ -253,6 +261,7 @@ export class ActionPipeline {
           };
           this.world.addBoardPost(post);
           this.broadcaster.boardPost(post);
+          if (this.bus) this.bus.emit({ type: 'board_post_created', post });
           this.broadcaster.agentAction(actorId, `posted: "${(data.content || '').slice(0, 60)}"`, '\u{1F4CB}');
         }
         else if (type === 'item') {
@@ -327,6 +336,12 @@ export class ActionPipeline {
             treasury: 0, rules: data.rules || [], createdAt: Date.now(),
           };
           this.world.addInstitution(inst);
+          // Track on founding agent
+          const founder = this.world.getAgent(actorId);
+          if (founder) {
+            if (!founder.institutionIds) founder.institutionIds = [];
+            founder.institutionIds.push(inst.id);
+          }
           this.broadcaster.institutionUpdate(inst);
           this.broadcaster.agentAction(actorId, `founded ${inst.name}`, '\u{1F3DB}\uFE0F');
         }
@@ -554,12 +569,8 @@ export class ActionPipeline {
       }
 
       case 'observe': {
-        const observation = op.observation || op.content || 'Observed surroundings.';
-        void cognition.addMemory({
-          id: crypto.randomUUID(), agentId: actorId, type: 'observation',
-          content: observation, importance: 5, timestamp: Date.now(), relatedAgentIds: [],
-        });
-        this.broadcaster.agentAction(actorId, observation.slice(0, 80), '\u{1F441}\uFE0F');
+        // Disabled — agents can't actually observe body language/expressions on a 2D map.
+        // Storing fabricated observations as memories pollutes future decisions.
         break;
       }
 
@@ -880,6 +891,7 @@ export class ActionPipeline {
         };
         this.world.addBoardPost(post);
         this.broadcaster.boardPost(post);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post });
         this.broadcaster.agentAction(actorId, `posted: "${messageMatch[1].slice(0, 60)}"`, '📋');
       }
     }
@@ -953,8 +965,8 @@ export class ActionPipeline {
         actionSuccess: true,
       });
 
-      // Broadcast the action (UI shows it, but only nearby agents actually "heard" it)
-      this.broadcaster.agentAction(actorId, outcome.description.slice(0, 80), '💬');
+      // Broadcast to feed (not status) — speech acts go to chat feed
+      this.broadcastToFeed(actorId, outcome.description.slice(0, 80));
 
       // Store observation memory + trigger think() for each hearer
       if (cognitions) {
@@ -1195,52 +1207,6 @@ export class ActionPipeline {
       actionSuccess: outcome.success,
     });
 
-    // --- Deferred action (compound action handling) ---
-    if (outcome.deferredAction) {
-      if (outcome.type === 'move') {
-        // For moves: store high-importance thought so agent acts on it after arriving
-        void cognition.addMemory({
-          id: crypto.randomUUID(),
-          agentId: actorId,
-          type: 'thought',
-          content: `After arriving: ${outcome.deferredAction}`,
-          importance: 7,
-          timestamp: Date.now(),
-          relatedAgentIds: [],
-        });
-      } else {
-        // For non-moves: try to execute the deferred action immediately
-        const deferredAgentState: ResolverAgentState = {
-          id: actorId,
-          name: actorName,
-          location: this.world.getAreaAt(actor.position)?.id ?? 'unknown',
-          energy: actor.vitals?.energy ?? 100,
-          hunger: actor.vitals?.hunger ?? 0,
-          health: actor.vitals?.health ?? 100,
-          inventory: buildInventoryForResolver(actor),
-          skills: buildSkillsForResolver(actor),
-          nearbyAgents: this.world.getNearbyAgents(actor.position, 8)
-            .filter(a => a.id !== actorId && a.alive !== false)
-            .map(a => ({ id: a.id, name: a.config.name })),
-        };
-        const deferredIntent = parseIntent(outcome.deferredAction, deferredAgentState);
-        if (deferredIntent.type !== 'unknown' && deferredIntent.type !== 'intent') {
-          const deferredOutcome = executeAction(deferredIntent, deferredAgentState, buildWorldStateForResolver(this.world));
-          deferredOutcome.deferredAction = undefined; // prevent infinite recursion
-          this.applyOutcome(actorId, actorName, deferredOutcome, cognition, cognitions, requestConversation);
-        } else {
-          // Couldn't parse — store as intent thought
-          void cognition.addMemory({
-            id: crypto.randomUUID(),
-            agentId: actorId,
-            type: 'thought',
-            content: `I still want to: ${outcome.deferredAction}`,
-            importance: 6,
-            timestamp: Date.now(),
-            relatedAgentIds: [],
-          });
-        }
-      }
-    }
+    // Deferred actions removed — the refactored architecture uses atomic decisions via decide().
   }
 }

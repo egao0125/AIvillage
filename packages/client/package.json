@@ -9,12 +9,14 @@
   },
   "dependencies": {
     "@ai-village/shared": "workspace:*",
+    "d3-force": "^3.0.0",
     "phaser": "^3.80.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "socket.io-client": "^4.7.0"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.10",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.7.0",

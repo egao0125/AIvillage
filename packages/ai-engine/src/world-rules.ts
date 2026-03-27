@@ -26,11 +26,11 @@ export interface ResourceDef {
 
 export const RESOURCES: Record<string, ResourceDef> = {
   // === Raw gathered resources ===
-  wheat:      { id: 'wheat',      name: 'wheat',       type: 'raw',       perishable: true,  spoilDays: 5,  nutritionValue: 8,  energyValue: 0,  healValue: 0,  baseTradeValue: 2,  weight: 1, stackable: true,  maxStack: 10, description: 'Raw wheat from the farm' },
-  vegetables: { id: 'vegetables', name: 'vegetables',  type: 'raw',       perishable: true,  spoilDays: 3,  nutritionValue: 8,  energyValue: 2,  healValue: 0,  baseTradeValue: 3,  weight: 1, stackable: true,  maxStack: 10, description: 'Fresh vegetables from the farm' },
+  wheat:      { id: 'wheat',      name: 'wheat',       type: 'raw',       perishable: true,  spoilDays: 5,  nutritionValue: 15, energyValue: 0,  healValue: 0,  baseTradeValue: 2,  weight: 1, stackable: true,  maxStack: 10, description: 'Raw wheat from the farm' },
+  vegetables: { id: 'vegetables', name: 'vegetables',  type: 'raw',       perishable: true,  spoilDays: 3,  nutritionValue: 15, energyValue: 2,  healValue: 0,  baseTradeValue: 3,  weight: 1, stackable: true,  maxStack: 10, description: 'Fresh vegetables from the farm' },
   fish:       { id: 'fish',       name: 'fish',        type: 'raw',       perishable: true,  spoilDays: 1,  nutritionValue: 25, energyValue: 0,  healValue: 0,  baseTradeValue: 4,  weight: 1, stackable: true,  maxStack: 5,  description: 'Fresh fish from the lake. Spoils fast.' },
-  mushrooms:  { id: 'mushrooms',  name: 'mushrooms',   type: 'raw',       perishable: true,  spoilDays: 2,  nutritionValue: 6,  energyValue: 0,  healValue: 0,  baseTradeValue: 2,  weight: 1, stackable: true,  maxStack: 10, description: 'Wild mushrooms from the forest floor' },
-  herbs:      { id: 'herbs',      name: 'herbs',       type: 'raw',       perishable: true,  spoilDays: 4,  nutritionValue: 2,  energyValue: 0,  healValue: 5,  baseTradeValue: 5,  weight: 1, stackable: true,  maxStack: 10, description: 'Medicinal herbs from the garden' },
+  mushrooms:  { id: 'mushrooms',  name: 'mushrooms',   type: 'raw',       perishable: true,  spoilDays: 2,  nutritionValue: 12, energyValue: 0,  healValue: 0,  baseTradeValue: 2,  weight: 1, stackable: true,  maxStack: 10, description: 'Wild mushrooms from the forest floor' },
+  herbs:      { id: 'herbs',      name: 'herbs',       type: 'raw',       perishable: true,  spoilDays: 4,  nutritionValue: 5,  energyValue: 0,  healValue: 5,  baseTradeValue: 5,  weight: 1, stackable: true,  maxStack: 10, description: 'Medicinal herbs from the garden' },
   flowers:    { id: 'flowers',    name: 'flowers',     type: 'raw',       perishable: true,  spoilDays: 2,  nutritionValue: 0,  energyValue: 0,  healValue: 0,  baseTradeValue: 1,  weight: 1, stackable: true,  maxStack: 10, description: 'Wildflowers. Pretty but not useful... unless gifted.' },
   wood:       { id: 'wood',       name: 'wood',        type: 'material',  perishable: false, spoilDays: 0,  nutritionValue: 0,  energyValue: 0,  healValue: 0,  baseTradeValue: 3,  weight: 3, stackable: true,  maxStack: 5,  description: 'Lumber from the forest' },
   clay:       { id: 'clay',       name: 'clay',        type: 'material',  perishable: false, spoilDays: 0,  nutritionValue: 0,  energyValue: 0,  healValue: 0,  baseTradeValue: 3,  weight: 2, stackable: true,  maxStack: 5,  description: 'Wet clay from the lake banks' },
@@ -112,12 +112,12 @@ export const GATHERING: GatherDef[] = [
   { id: 'farm_wheat',    location: 'farm', skill: 'farming', minSkillLevel: 0, baseDuration: 45, energyCost: 8,
     baseSuccessChance: 0.6, yields: [{ resource: 'wheat', minQty: 1, maxQty: 3 }],
     toolBonus: 'hoe', seasonModifier: { spring: 0.8, summer: 1.2, autumn: 1.0, winter: 0.0 },
-    dailyStock: 12, description: 'Harvest wheat from the fields' },
+    dailyStock: 15, description: 'Harvest wheat from the fields' },
 
   { id: 'farm_veg',      location: 'farm', skill: 'farming', minSkillLevel: 1, baseDuration: 40, energyCost: 7,
     baseSuccessChance: 0.5, yields: [{ resource: 'vegetables', minQty: 1, maxQty: 2 }],
     toolBonus: 'hoe', seasonModifier: { spring: 1.0, summer: 1.3, autumn: 0.8, winter: 0.0 },
-    dailyStock: 8, description: 'Harvest vegetables from the fields' },
+    dailyStock: 15, description: 'Harvest vegetables from the fields' },
 
   // --- Lake ---
   { id: 'lake_fish',     location: 'lake', skill: 'fishing', minSkillLevel: 0, baseDuration: 60, energyCost: 10,
@@ -138,12 +138,12 @@ export const GATHERING: GatherDef[] = [
   { id: 'forest_wood',   location: 'forest', skill: 'woodwork', minSkillLevel: 0, baseDuration: 50, energyCost: 12,
     baseSuccessChance: 0.7, yields: [{ resource: 'wood', minQty: 1, maxQty: 2 }],
     toolBonus: 'axe', seasonModifier: { spring: 1.0, summer: 1.0, autumn: 1.0, winter: 0.6 },
-    dailyStock: 15, description: 'Chop wood in the forest' },
+    dailyStock: 8, description: 'Chop wood in the forest' },
 
   { id: 'forest_mushroom', location: 'forest', skill: 'foraging', minSkillLevel: 0, baseDuration: 35, energyCost: 5,
     baseSuccessChance: 0.5, yields: [{ resource: 'mushrooms', minQty: 1, maxQty: 3 }],
     seasonModifier: { spring: 0.8, summer: 0.6, autumn: 1.5, winter: 0.2 },
-    dailyStock: 8, description: 'Forage for mushrooms' },
+    dailyStock: 10, description: 'Forage for mushrooms' },
 
   // --- Southern Woods (same as forest but riskier, slightly more yield) ---
   { id: 'south_wood',    location: 'forest_south', skill: 'woodwork', minSkillLevel: 0, baseDuration: 50, energyCost: 14,
@@ -155,7 +155,7 @@ export const GATHERING: GatherDef[] = [
   { id: 'garden_herbs',  location: 'garden', skill: 'foraging', minSkillLevel: 0, baseDuration: 30, energyCost: 4,
     baseSuccessChance: 0.6, yields: [{ resource: 'herbs', minQty: 1, maxQty: 2 }],
     seasonModifier: { spring: 1.2, summer: 1.0, autumn: 0.8, winter: 0.1 },
-    dailyStock: 6, description: 'Gather medicinal herbs' },
+    dailyStock: 8, description: 'Gather medicinal herbs' },
 
   { id: 'garden_flowers', location: 'garden', skill: 'foraging', minSkillLevel: 0, baseDuration: 20, energyCost: 3,
     baseSuccessChance: 0.8, yields: [{ resource: 'flowers', minQty: 1, maxQty: 3 }],

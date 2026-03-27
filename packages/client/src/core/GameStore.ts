@@ -212,6 +212,14 @@ class GameStore {
     this.notify();
   }
 
+  updateBoardPost(post: BoardPost): void {
+    this.state = {
+      ...this.state,
+      board: this.state.board.map(p => p.id === post.id ? post : p),
+    };
+    this.notify();
+  }
+
   // --- Elections ---
 
   setElections(elections: Election[]): void {
