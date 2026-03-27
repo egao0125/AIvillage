@@ -593,6 +593,7 @@ export interface BoardPost {
   revoked?: boolean;      // if a rule/decree was revoked
   votes?: { agentId: string; vote: 'like' | 'dislike' }[];
   ruleStatus?: 'proposed' | 'passed' | 'rejected' | 'repealed';
+  claimTarget?: { type: 'area' | 'building'; id: string };  // if this is a property claim vote
   comments?: { agentId: string; agentName: string; content: string; timestamp: number }[];
 }
 

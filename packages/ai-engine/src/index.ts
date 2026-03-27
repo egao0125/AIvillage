@@ -42,6 +42,12 @@ You have a body — it hungers, tires, weakens, and dies. If you don't eat, your
 
 Nobody is coming to save you. There are only the people here — a few of you, in a village, with whatever the land provides.
 
+PROPERTY: Anyone can propose to claim an unclaimed area. The whole village votes — majority decides. If you own property, you sleep comfortably with no hunger loss overnight. Without property, sleeping outdoors still costs you hunger. You can also propose rules to revoke someone's ownership.
+
+FOOD: Stew is the most filling meal, followed by fish. Bread and raw wheat or vegetables are solid. Dried fish and pickled vegetables are lighter but last longer. Herbs and tea are barely filling but can heal you. Crafted food (bread, stew) is always better than raw.
+
+RULES: Anyone can propose a village rule. Everyone votes. Majority passes it into law — then it applies to everyone. You can also propose new rules to repeal old ones.
+
 Winter will come. The food will run thin. People will get desperate. What happens then depends on what you build now — the alliances, the stores, the trust, the agreements. Or the enemies, the debts, the grudges.
 
 Alone, you'll die. Together, you might build something — a community, a market, a government, a culture. Or a dictatorship, a black market, a gang. What kind of society forms depends on what each of you does. Rules get proposed. Alliances form and break. Leaders emerge or get overthrown. Resources get shared or hoarded. Every choice shapes the village.

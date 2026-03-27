@@ -670,11 +670,14 @@ export class AgentController {
     if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
       this.lastHungerHour = currentHour;
 
-      // Hunger rate: 1.0/hour awake, 0.3/hour sleeping
-      // At 1.0/hour awake: ~19 hunger/day (16 awake + 2.4 sleep)
-      // This makes survival possible with effort
+      // Hunger rate: 1.0/hour awake, 0.3/hour sleeping (0 if sleeping in owned property)
       if (this.state === 'sleeping') {
-        v.hunger = Math.min(100, v.hunger + 0.3);
+        const sleepArea = this.world.getAreaAt(this.agent.position);
+        const ownsProperty = sleepArea && this.world.getPropertyOwner(sleepArea.id) === this.agent.id;
+        if (!ownsProperty) {
+          v.hunger = Math.min(100, v.hunger + 0.3);
+        }
+        // Property owners sleep comfortably — no hunger loss overnight
       } else {
         v.hunger = Math.min(100, v.hunger + 1.0);
       }
@@ -1303,9 +1306,13 @@ export class AgentController {
       foodGroups[item.name] = (foodGroups[item.name] || 0) + 1;
     }
     for (const [name, qty] of Object.entries(foodGroups)) {
+      const resKey = name.toLowerCase().replace(/\s+/g, '_');
+      const resDef = RESOURCES[resKey];
+      const nutrition = resDef?.nutritionValue ?? 0;
+      const hint = nutrition >= 25 ? 'very filling' : nutrition >= 15 ? 'filling' : nutrition >= 8 ? 'light meal' : 'snack';
       actions.push({
-        id: 'eat_' + name.toLowerCase().replace(/\s+/g, '_'),
-        label: 'Eat ' + name + (qty > 1 ? ` (${qty} available)` : ''),
+        id: 'eat_' + resKey,
+        label: `Eat ${name} (${hint}${qty > 1 ? `, ${qty} left` : ''})`,
         category: 'physical',
       });
     }
@@ -2513,60 +2520,78 @@ export class AgentController {
       return;
     }
 
-    // --- Claim Building / Area ---
+    // --- Claim Area (goes to village vote) ---
     if (actionId.startsWith('claim_area_')) {
       const claimAreaId = actionId.replace('claim_area_', '');
-      const prop = this.world.claimProperty(claimAreaId, this.agent.id, this.world.time.day);
-      if (prop) {
-        this.broadcaster.propertyChange(prop);
-        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I claimed ownership of ${claimAreaId}.`, importance: 7, timestamp: Date.now(), relatedAgentIds: [] });
-        const post: BoardPost = {
-          id: crypto.randomUUID(), authorId: this.agent.id, authorName: this.agent.config.name,
-          type: 'announcement' as const, channel: 'all' as const,
-          content: `${this.agent.config.name} has claimed ${claimAreaId} as their property.`,
-          timestamp: Date.now(), day: this.world.time.day,
-        };
-        this.world.addBoardPost(post);
-        this.broadcaster.boardPost(post);
-        if (this.bus) this.bus.emit({ type: 'board_post_created', post });
-        this.lastOutcome = `You claimed ${claimAreaId} as your property.`;
-      } else {
-        this.lastOutcome = `${claimAreaId} is already owned by someone else.`;
+      const areaName = this.world.getAreaAt(this.agent.position)?.name ?? claimAreaId;
+      if (this.world.getPropertyOwner(claimAreaId)) {
+        this.lastOutcome = `${areaName} is already owned by someone.`;
+        this.lastTrigger = this.lastOutcome;
+        this.state = 'performing'; this.activityTimer = 2;
+        return;
       }
+      const post: BoardPost = {
+        id: crypto.randomUUID(), authorId: this.agent.id, authorName: this.agent.config.name,
+        type: 'rule' as const, channel: 'all' as const,
+        content: `${this.agent.config.name} wants to claim ${areaName} as their property.`,
+        timestamp: Date.now(), day: this.world.time.day,
+        votes: [] as { agentId: string; vote: 'like' | 'dislike' }[],
+        ruleStatus: 'proposed' as const,
+        claimTarget: { type: 'area', id: claimAreaId },
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) {
+        this.bus.emit({ type: 'board_post_created', post });
+        this.bus.emit({ type: 'rule_proposed', post });
+      }
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${areaName}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
+      this.lastOutcome = `You proposed claiming ${areaName}. The village will vote on it.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 2;
-      this.world.updateAgentState(this.agent.id, 'active', 'claiming property');
-      this.broadcaster.agentAction(this.agent.id, `claimed ${claimAreaId}`);
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', 'proposing claim');
+      this.broadcaster.agentAction(this.agent.id, `proposed claiming ${areaName}`);
       return;
     }
 
+    // --- Claim Building (goes to village vote) ---
     if (actionId.startsWith('claim_') && !actionId.startsWith('claim_area_')) {
       const buildingId = actionId.replace('claim_', '');
       const building = this.world.getBuilding(buildingId);
-      if (building && (!building.ownerId || building.ownerId === '')) {
-        building.ownerId = this.agent.id;
-        this.broadcaster.buildingUpdate(building);
-        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I claimed ${building.name} (${building.type}) as mine.`, importance: 7, timestamp: Date.now(), relatedAgentIds: [] });
-        const post: BoardPost = {
-          id: crypto.randomUUID(), authorId: this.agent.id, authorName: this.agent.config.name,
-          type: 'announcement' as const, channel: 'all' as const,
-          content: `${this.agent.config.name} has claimed ${building.name}.`,
-          timestamp: Date.now(), day: this.world.time.day,
-        };
-        this.world.addBoardPost(post);
-        this.broadcaster.boardPost(post);
-        if (this.bus) this.bus.emit({ type: 'board_post_created', post });
-        this.lastOutcome = `You claimed ${building.name} as yours.`;
-      } else if (building) {
+      if (!building) {
+        this.lastOutcome = `That building doesn't exist anymore.`;
+        this.lastTrigger = this.lastOutcome;
+        this.state = 'performing'; this.activityTimer = 2;
+        return;
+      }
+      if (building.ownerId && building.ownerId !== '') {
         const owner = this.world.getAgent(building.ownerId);
         this.lastOutcome = `${building.name} is already owned by ${owner?.config.name ?? 'someone'}.`;
-      } else {
-        this.lastOutcome = `That building doesn't exist anymore.`;
+        this.lastTrigger = this.lastOutcome;
+        this.state = 'performing'; this.activityTimer = 2;
+        return;
       }
+      const post: BoardPost = {
+        id: crypto.randomUUID(), authorId: this.agent.id, authorName: this.agent.config.name,
+        type: 'rule' as const, channel: 'all' as const,
+        content: `${this.agent.config.name} wants to claim ${building.name} (${building.type}).`,
+        timestamp: Date.now(), day: this.world.time.day,
+        votes: [] as { agentId: string; vote: 'like' | 'dislike' }[],
+        ruleStatus: 'proposed' as const,
+        claimTarget: { type: 'building', id: buildingId },
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) {
+        this.bus.emit({ type: 'board_post_created', post });
+        this.bus.emit({ type: 'rule_proposed', post });
+      }
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${building.name}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
+      this.lastOutcome = `You proposed claiming ${building.name}. The village will vote on it.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 2;
-      this.world.updateAgentState(this.agent.id, 'active', 'claiming building');
-      this.broadcaster.agentAction(this.agent.id, `claimed a building — "${shortReason}"`);
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', 'proposing claim');
+      this.broadcaster.agentAction(this.agent.id, `proposed claiming ${building.name}`);
       return;
     }
 
