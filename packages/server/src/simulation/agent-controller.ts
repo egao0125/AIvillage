@@ -50,6 +50,7 @@ export class AgentController {
   private reflectingInProgress: boolean = false;
   private currentAreaId: string | null = null; // track where the agent is performing
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
+  private askCooldown: number = 0; // ticks remaining before agent can ask again
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
@@ -230,6 +231,7 @@ export class AgentController {
     }
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
+    if (this.askCooldown > 0) this.askCooldown--;
 
     // Universal sleep check — fires once at exact sleep hour, then winds down gracefully
     if (this.state !== 'sleeping' && this.state !== 'reflecting' && this.state !== 'waking' && this.state !== 'deciding') {
@@ -695,8 +697,14 @@ export class AgentController {
     if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
       this.lastHungerHour = currentHour;
 
-      // Hunger increases every game hour (2.0 per hour — provisions gone by Day 1, desperate by Day 2-3)
-      v.hunger = Math.min(100, v.hunger + 2.0);
+      // Hunger rate: 1.0/hour awake, 0.3/hour sleeping
+      // At 1.0/hour awake: ~19 hunger/day (16 awake + 2.4 sleep)
+      // This makes survival possible with effort
+      if (this.state === 'sleeping') {
+        v.hunger = Math.min(100, v.hunger + 0.3);
+      } else {
+        v.hunger = Math.min(100, v.hunger + 1.0);
+      }
 
       // Cold damage + building effects
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
@@ -1376,7 +1384,10 @@ export class AgentController {
         actions.push({ id: 'give_NAME', label: 'Give something to someone', category: 'social' });
         actions.push({ id: 'trade_NAME', label: 'Trade with someone', category: 'social' });
       }
-      actions.push({ id: 'ask_NAME', label: 'Ask someone for something', category: 'social' });
+      // ask is rate-limited: cooldown after use, hidden when starving
+      if (this.askCooldown <= 0 && (this.agent.vitals?.hunger ?? 0) < 70) {
+        actions.push({ id: 'ask_NAME', label: 'Ask someone for something', category: 'social' });
+      }
       actions.push({ id: 'teach_NAME', label: 'Teach someone a skill', category: 'social' });
       actions.push({ id: 'steal_NAME', label: 'Steal from someone', category: 'social' });
       actions.push({ id: 'confront_NAME', label: 'Confront someone', category: 'social' });
@@ -1979,8 +1990,9 @@ export class AgentController {
           `I asked ${target.config.name} for help.`, this.cognition.llmProvider);
       }
 
-      this.lastOutcome = `You asked ${target.config.name} for help.`;
-      this.lastTrigger = this.lastOutcome;
+      this.lastOutcome = `You asked ${target.config.name} for help. They haven't given you anything yet.`;
+      this.lastTrigger = `You asked for help but got nothing yet. If you need food, you'll have to gather it, trade for it, or take it yourself.`;
+      this.askCooldown = 8;  // Can't ask again for 8 ticks
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `asking ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `asked ${target.config.name} for something`);
