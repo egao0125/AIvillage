@@ -1421,34 +1421,44 @@ export class SimulationEngine {
     // Skip system death notices (too many at once)
     if (post.authorId === 'system' && post.content.includes('has died')) return;
 
+    // Collect eligible agents (skip busy ones)
+    const eligible: string[] = [];
     for (const [agentId, agent] of this.world.agents) {
       if (agent.alive === false) continue;
       if (agentId === post.authorId) continue;
-
-      // Skip group posts for non-members
       if (post.channel === 'group' && post.groupId) {
-        const isMember = agent.socialLedger?.some((e: any) =>
-          e.id === post.groupId && e.type === 'alliance' && e.status === 'accepted'
-        );
-        if (!isMember) continue;
+        const inst = this.world.getInstitution(post.groupId);
+        if (!inst?.members.some(m => m.agentId === agentId)) continue;
       }
-
-      const cognition = this.cognitions.get(agentId);
-      if (!cognition) continue;
-
       const controller = this.controllers.get(agentId);
       if (controller?.apiExhausted) continue;
+      // Skip agents who are busy
+      if ((controller as any)?.state === 'conversing' ||
+          (controller as any)?.state === 'deciding' ||
+          (controller as any)?.state === 'reflecting') continue;
+      eligible.push(agentId);
+    }
+
+    // Pick up to 3 random agents to react
+    const reactors = eligible
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 3);
+
+    console.log(`[PostReaction] ${reactors.length} of ${eligible.length} agents reacting to: "${post.content.slice(0, 50)}"`);
+
+    for (const agentId of reactors) {
+      const agent = this.world.getAgent(agentId);
+      const cognition = this.cognitions.get(agentId);
+      if (!agent || !cognition) continue;
 
       try {
         const attribution = post.authorId === 'system'
-          ? ''
-          : ` — posted by ${post.authorName}`;
+          ? '' : ` — posted by ${post.authorName}`;
         const output = await cognition.think(
-          `A new post appeared on the village board: "${post.content}"${attribution}`,
-          `This is a ${post.type}. React honestly in 1 sentence. What do you think about this?`
+          `New on the village board: "${post.content}"${attribution}`,
+          `React in 1 sentence. What do you think?`
         );
 
-        // Add as comment on the post
         if (!post.comments) post.comments = [];
         post.comments.push({
           agentId,
@@ -1456,13 +1466,13 @@ export class SimulationEngine {
           content: output.thought,
           timestamp: Date.now(),
         });
-
-        // Broadcast updated post so UI refreshes
         this.broadcaster.boardPostUpdate(post);
-
       } catch (err) {
-        console.error(`[PostReaction] ${agent.config.name} failed to react:`, err);
+        console.error(`[PostReaction] ${agent.config.name} failed:`, err);
       }
+
+      // Small delay between reactions to avoid API flooding
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 
@@ -1491,6 +1501,12 @@ export class SimulationEngine {
 
       const controller = this.controllers.get(agentId);
       if (controller?.apiExhausted) continue;
+
+      // Skip agents in conversation — they're busy
+      if ((controller as any)?.state === 'conversing') {
+        console.log(`[RuleVote] ${agent.config.name} abstained (in conversation)`);
+        continue;
+      }
 
       try {
         const result = await cognition.llmProvider.complete(
