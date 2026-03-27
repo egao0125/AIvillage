@@ -1388,13 +1388,11 @@ export class AgentController {
       actions.push({ id: 'post_group', label: `Write in ${myGroup.name} chat`, category: 'creative' });
     }
 
-    // Propose rule — with cooldown
-    const recentRules = this.cognition.fourStream
-      ?.getRecentTimeline(10)
-      .filter(m => m.content.includes('proposed a rule'))
-      .length ?? 0;
-    if (recentRules < 1) {
-      actions.push({ id: 'propose_rule', label: 'Propose a rule for voting', category: 'creative' });
+    // Propose rule / claim — max 1 per day (claims also count)
+    const hasProposedToday = this.world.getActiveBoard()
+      .some(p => p.type === 'rule' && p.authorId === this.agent.id && p.day === this.world.time.day);
+    if (!hasProposedToday) {
+      actions.push({ id: 'propose_rule', label: 'Propose a rule or claim (voted tonight)', category: 'creative' });
     }
 
     // Meeting — only with 3+ people nearby, with cooldown
@@ -1466,6 +1464,10 @@ export class AgentController {
     }
 
     // Build property/building info for current location
+    // Claims also count toward 1-proposal-per-day limit
+    const canPropose = this.world.getActiveBoard()
+      .filter(p => p.type === 'rule' && p.authorId === this.agent.id && p.day === this.world.time.day)
+      .length < 1;
     const lines: string[] = [];
     const areaOwner = this.world.getPropertyOwner(areaId);
     if (areaOwner) {
@@ -1473,7 +1475,9 @@ export class AgentController {
       lines.push(`This area is owned by ${ownerAgent?.config.name ?? 'someone'}.`);
     } else {
       lines.push(`This area is unclaimed.`);
-      actions.push({ id: `claim_area_${areaId}`, label: `Claim ${area?.name ?? areaId} as your property`, category: 'creative' });
+      if (canPropose) {
+        actions.push({ id: `claim_area_${areaId}`, label: `Claim ${area?.name ?? areaId} (voted tonight)`, category: 'creative' });
+      }
     }
 
     const buildingsHere = this.world.getBuildingsAt(areaId);
@@ -1483,8 +1487,8 @@ export class AgentController {
       const effects = b.effects.length > 0 ? ` (${b.effects.join(', ')})` : '';
       lines.push(`- ${b.name} [${b.type}]${effects} — ${ownerName === 'unclaimed' ? 'UNCLAIMED' : `owned by ${ownerName}`}`);
 
-      if (!b.ownerId || b.ownerId === '') {
-        actions.push({ id: `claim_${b.id}`, label: `Claim ${b.name}`, category: 'creative' });
+      if ((!b.ownerId || b.ownerId === '') && canPropose) {
+        actions.push({ id: `claim_${b.id}`, label: `Claim ${b.name} (voted tonight)`, category: 'creative' });
       }
     }
     const propertyInfo = lines.join('\n');
@@ -2543,7 +2547,7 @@ export class AgentController {
       this.broadcaster.boardPost(post);
       if (this.bus) {
         this.bus.emit({ type: 'board_post_created', post });
-        this.bus.emit({ type: 'rule_proposed', post });
+
       }
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${areaName}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
       this.lastOutcome = `You proposed claiming ${areaName}. The village will vote on it.`;
@@ -2584,7 +2588,7 @@ export class AgentController {
       this.broadcaster.boardPost(post);
       if (this.bus) {
         this.bus.emit({ type: 'board_post_created', post });
-        this.bus.emit({ type: 'rule_proposed', post });
+
       }
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${building.name}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
       this.lastOutcome = `You proposed claiming ${building.name}. The village will vote on it.`;
@@ -2843,7 +2847,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.broadcaster.boardPost(post);
       if (this.bus) {
         this.bus.emit({ type: 'board_post_created', post });
-        this.bus.emit({ type: 'rule_proposed', post });
+
       }
 
       // All agents get a memory about the proposed rule

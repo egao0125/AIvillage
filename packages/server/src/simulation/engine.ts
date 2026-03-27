@@ -237,9 +237,11 @@ export class SimulationEngine {
       void this.generatePostReactions(e.post);
     });
 
-    // Rule voting — when a rule is proposed, all agents vote
-    this.bus.on('rule_proposed', (e) => {
-      void this.conductRuleVote(e.post);
+    // Nightly vote — at hour 21, vote on all pending proposals
+    this.bus.on('hour_changed', (e) => {
+      if (e.hour === 21) {
+        void this.resolveNightlyVotes();
+      }
     });
 
     // Periodic save
@@ -1562,6 +1564,21 @@ Answer with ONLY one word: "support" or "oppose".`,
     }
 
     this.broadcaster.boardPostUpdate(rulePost);
+  }
+
+  /**
+   * At hour 21 each night, find all pending proposals and vote on each.
+   */
+  private async resolveNightlyVotes(): Promise<void> {
+    const pending = this.world.getActiveBoard()
+      .filter(p => p.type === 'rule' && p.ruleStatus === 'proposed');
+
+    if (pending.length === 0) return;
+
+    console.log(`[NightlyVote] Resolving ${pending.length} pending proposal(s)...`);
+    for (const post of pending) {
+      await this.conductRuleVote(post);
+    }
   }
 
   async generateWeeklySummary(): Promise<string | null> {
