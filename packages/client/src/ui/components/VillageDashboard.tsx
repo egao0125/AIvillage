@@ -27,6 +27,7 @@ type SNSTab = 'all' | 'trades' | 'groups' | 'news';
 
 export const VillageDashboard: React.FC = () => {
   const [snsTab, setSnsTab] = useState<SNSTab>('all');
+  const [expandedPostId, setExpandedPostId] = useState<string | null>(null);
   const board = useBoard();
   const elections = useElections();
   const properties = useProperties();
@@ -39,7 +40,7 @@ export const VillageDashboard: React.FC = () => {
 
   // SNS filtering
   const allChat = board.filter(p =>
-    (p.type === 'announcement' || p.type === 'rule' || p.type === 'decree' || p.type === 'rumor' || p.type === 'trade' || p.type === 'news')
+    (p.type === 'announcement' || p.type === 'rule')
     && (p.channel === 'all' || !p.channel) && !p.revoked
   );
   const trades = board.filter(p => p.type === 'trade' && !p.revoked);
@@ -56,6 +57,9 @@ export const VillageDashboard: React.FC = () => {
     const likeCount = post.votes?.filter(v => v.vote === 'like').length ?? 0;
     const dislikeCount = post.votes?.filter(v => v.vote === 'dislike').length ?? 0;
 
+    const commentCount = post.comments?.length ?? 0;
+    const isExpanded = expandedPostId === post.id;
+
     return (
       <div key={post.id} style={{
         marginBottom: 6,
@@ -63,11 +67,19 @@ export const VillageDashboard: React.FC = () => {
         background: COLORS.bgCard,
         borderRadius: 4,
         borderLeft: `3px solid ${s.color}`,
+        cursor: commentCount > 0 ? 'pointer' : 'default',
+      }} onClick={() => {
+        if (commentCount > 0) setExpandedPostId(isExpanded ? null : post.id);
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
           <span style={{ fontSize: '10px' }}>{s.icon}</span>
           <span style={{ color: s.color, textTransform: 'uppercase', fontSize: '9px', fontFamily: FONTS.pixel, letterSpacing: 1 }}>{post.type}</span>
           <span style={{ color: COLORS.textDim, fontSize: '11px' }}>by {post.authorName}</span>
+          {commentCount > 0 && !isExpanded && (
+            <span style={{ color: COLORS.textDim, fontSize: '9px', marginLeft: 'auto', fontFamily: FONTS.pixel }}>
+              {commentCount} reaction{commentCount !== 1 ? 's' : ''}
+            </span>
+          )}
         </div>
         <div style={{ color: COLORS.text, lineHeight: '1.5' }}>{post.content}</div>
         {isRule && (
@@ -90,11 +102,8 @@ export const VillageDashboard: React.FC = () => {
             )}
           </div>
         )}
-        {post.comments && post.comments.length > 0 && (
+        {isExpanded && post.comments && post.comments.length > 0 && (
           <div style={{ marginTop: 6, paddingTop: 4, borderTop: `1px solid rgba(255,255,255,0.06)` }}>
-            <div style={{ fontSize: '9px', color: COLORS.textDim, marginBottom: 3, fontFamily: FONTS.pixel, letterSpacing: 0.5 }}>
-              {post.comments.length} reaction{post.comments.length !== 1 ? 's' : ''}
-            </div>
             {post.comments.map((c, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 2, alignItems: 'flex-start' }}>
                 <span style={{
