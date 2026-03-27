@@ -1336,6 +1336,23 @@ export class SimulationEngine {
         timestamp: Date.now(),
         relatedAgentIds: [agentId],
       });
+
+      // Personalized grief concern based on relationship
+      const dossier = cognition.fourStream?.getDossier(agentId);
+      const trust = dossier?.trust ?? 0;
+      let concern: string;
+      if (trust > 50) {
+        concern = `${name} is dead. ${cause}. I lost someone I cared about. Could I have done more?`;
+      } else if (trust < -20) {
+        concern = `${name} is dead. ${cause}. One fewer threat.`;
+      } else {
+        concern = `${name} died of ${cause}. That could be me. I need to survive.`;
+      }
+      cognition.fourStream?.addConcern({
+        id: crypto.randomUUID(), content: concern,
+        category: 'threat', relatedAgentIds: [agentId],
+        createdAt: this.world.time.totalMinutes,
+      });
     }
 
     console.log(`[Engine] ${name} has died: ${cause}. Diary created, all agents notified.`);
@@ -1582,6 +1599,13 @@ Answer with ONLY one word: "support" or "oppose".`,
           importance: isProposer ? 8 : 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
         });
       }
+
+      // Consequence concern for the proposer
+      const proposerCtrl = this.controllers.get(rulePost.authorId);
+      proposerCtrl?.addConsequence(
+        `My ${rulePost.claimTarget ? 'claim' : 'rule'} was rejected. Need allies or different approach.`,
+        'unresolved', []
+      );
 
       // News post so everyone sees it on the board
       const rejNewsPost: BoardPost = {

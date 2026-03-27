@@ -1,4 +1,4 @@
-import type { BoardPostType, Conversation, Item, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
+import type { BoardPost, BoardPostType, Conversation, Item, Secret, Artifact, Building, Institution, Agent } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
 import { AgentCognition, parseIntent, executeAction, RESOURCES, BUILDINGS, getGatherOptions, type ActionOutcome, type AgentState as ResolverAgentState, type WorldState as ResolverWorldState } from '@ai-village/ai-engine';
 import type { World } from '../world.js';
@@ -618,6 +618,39 @@ export class ActionPipeline {
     }
   }
 
+  /** Check village-wide passed rules for violations (steal, fight) */
+  private checkVillageRuleViolations(actor: Agent, outcome: ActionOutcome): void {
+    if (!this.bus) return;
+    const rules = this.world.board
+      .filter((p: any) => p.type === 'rule' && p.ruleStatus === 'passed')
+      .map((p: any) => (p.content as string).toLowerCase());
+
+    for (const rule of rules) {
+      let violated = false;
+      if (outcome.type === 'steal' && (
+        rule.includes('no steal') || rule.includes('no theft') || rule.includes('stealing'))) violated = true;
+      if (outcome.type === 'fight' && (
+        rule.includes('no fight') || rule.includes('no violen') || rule.includes('no attack'))) violated = true;
+
+      if (violated) {
+        const violationPost: BoardPost = {
+          id: crypto.randomUUID(),
+          authorId: 'system',
+          authorName: 'Village News',
+          type: 'news',
+          channel: 'all',
+          content: `RULE VIOLATION: ${actor.config.name} broke village rule by ${outcome.type === 'steal' ? 'stealing' : 'fighting'}!`,
+          timestamp: Date.now(),
+          day: (this.world as any).time?.day ?? 0,
+        };
+        this.world.addBoardPost(violationPost);
+        this.broadcaster.boardPost(violationPost);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post: violationPost });
+        break;
+      }
+    }
+  }
+
   /**
    * Apply a deterministic ActionOutcome to the world state.
    * Handles item creation/removal, skill XP, vitals, trades, builds, and memory feedback.
@@ -989,12 +1022,7 @@ export class ActionPipeline {
           void witnessCognition.think(
             `${actorName} just said: "${rawText}"`,
             `You are at ${this.world.getAreaAt(witness.position)?.id ?? 'somewhere'}. ${actorName} is nearby.`,
-          ).then(output => {
-            if (output.mood) {
-              witness.mood = output.mood;
-              this.broadcaster.agentMood(witness.id, output.mood);
-            }
-          }).catch(() => {});
+          ).catch(() => {});
         }
       }
 
@@ -1150,6 +1178,7 @@ export class ActionPipeline {
     // --- Fix 5: Check institutional rule violations ---
     if (outcome.success && this.bus) {
       this.checkInstitutionalViolations(actor, outcome);
+      this.checkVillageRuleViolations(actor, outcome);
     }
 
     // --- Broadcast action ---
