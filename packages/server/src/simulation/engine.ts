@@ -1401,8 +1401,8 @@ export class SimulationEngine {
    * reaction that becomes a comment on the post.
    */
   private async generatePostReactions(post: BoardPost): Promise<void> {
-    // Skip system death notices (too many at once) and system-only posts
-    if (post.authorId === 'system' && post.content.includes('has died')) return;
+    // Skip all system posts (news, death notices) — agents don't react to system events
+    if (post.authorId === 'system') return;
 
     for (const [agentId, agent] of this.world.agents) {
       if (agent.alive === false) continue;
