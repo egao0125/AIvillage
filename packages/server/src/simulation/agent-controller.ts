@@ -1,4 +1,4 @@
-import type { Agent, BoardPost, DriveState, GameTime, Institution, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Institution, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
@@ -1014,41 +1014,6 @@ export class AgentController {
     }
   }
 
-  /**
-   * Infer mood from reflection text based on keyword matching.
-   */
-  private parseMoodFromReflection(reflection: string): Mood | null {
-    if (!reflection) return null;
-    const lower = reflection.toLowerCase();
-
-    const moodKeywords: Record<Mood, string[]> = {
-      happy: ['happy', 'joy', 'pleased', 'delighted', 'wonderful', 'great day', 'grateful', 'love'],
-      angry: ['angry', 'furious', 'rage', 'outraged', 'infuriated', 'livid', 'hate'],
-      sad: ['sad', 'lonely', 'depressed', 'heartbroken', 'miss', 'grief', 'sorrow', 'melancholy'],
-      anxious: ['anxious', 'worried', 'nervous', 'uneasy', 'dread', 'fear', 'stress', 'tense'],
-      excited: ['excited', 'thrilled', 'eager', 'can\'t wait', 'anticipat', 'energized'],
-      scheming: ['scheming', 'plotting', 'plan', 'manipulat', 'leverage', 'exploit', 'advantage'],
-      afraid: ['afraid', 'terrified', 'scared', 'frighten', 'danger', 'threat'],
-      neutral: [],
-    };
-
-    let bestMood: Mood = 'neutral';
-    let bestCount = 0;
-
-    for (const [mood, keywords] of Object.entries(moodKeywords) as [Mood, string[]][]) {
-      if (mood === 'neutral') continue;
-      let count = 0;
-      for (const kw of keywords) {
-        if (lower.includes(kw)) count++;
-      }
-      if (count > bestCount) {
-        bestCount = count;
-        bestMood = mood;
-      }
-    }
-
-    return bestCount > 0 ? bestMood : 'neutral';
-  }
 
   private static readonly SLEEP_AREAS = ['park', 'garden', 'church', 'tavern', 'forest'];
 
