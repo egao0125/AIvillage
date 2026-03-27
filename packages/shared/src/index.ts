@@ -593,6 +593,7 @@ export interface BoardPost {
   revoked?: boolean;      // if a rule/decree was revoked
   votes?: { agentId: string; vote: 'like' | 'dislike' }[];
   ruleStatus?: 'proposed' | 'passed' | 'rejected' | 'repealed';
+  comments?: { agentId: string; agentName: string; content: string; timestamp: number }[];
 }
 
 export interface WorldSnapshot {

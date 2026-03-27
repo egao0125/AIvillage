@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useBoard, useElections, useProperties, useInstitutions, useAgents, useWeather, useWorldTime } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
+import { nameToColor, hexToString } from '../../utils/color';
 
 const sectionLabel: React.CSSProperties = {
   color: COLORS.textAccent,
@@ -87,6 +88,34 @@ export const VillageDashboard: React.FC = () => {
                 {likeCount} for / {dislikeCount} against
               </span>
             )}
+          </div>
+        )}
+        {post.comments && post.comments.length > 0 && (
+          <div style={{ marginTop: 6, paddingTop: 4, borderTop: `1px solid rgba(255,255,255,0.06)` }}>
+            <div style={{ fontSize: '9px', color: COLORS.textDim, marginBottom: 3, fontFamily: FONTS.pixel, letterSpacing: 0.5 }}>
+              {post.comments.length} reaction{post.comments.length !== 1 ? 's' : ''}
+            </div>
+            {post.comments.map((c, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 2, alignItems: 'flex-start' }}>
+                <span style={{
+                  fontFamily: FONTS.pixel,
+                  fontSize: '8px',
+                  color: hexToString(nameToColor(c.agentName)),
+                  flexShrink: 0,
+                  paddingTop: 1,
+                }}>
+                  {c.agentName}
+                </span>
+                <span style={{
+                  fontSize: '11px',
+                  color: '#b0a0c0',
+                  fontStyle: 'italic',
+                  lineHeight: 1.3,
+                }}>
+                  {c.content}
+                </span>
+              </div>
+            ))}
           </div>
         )}
         <div style={{ color: COLORS.textDim, fontSize: '10px', marginTop: 3 }}>Day {post.day}</div>

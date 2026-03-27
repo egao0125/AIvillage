@@ -261,6 +261,7 @@ export class ActionPipeline {
           };
           this.world.addBoardPost(post);
           this.broadcaster.boardPost(post);
+          if (this.bus) this.bus.emit({ type: 'board_post_created', post });
           this.broadcaster.agentAction(actorId, `posted: "${(data.content || '').slice(0, 60)}"`, '\u{1F4CB}');
         }
         else if (type === 'item') {
@@ -884,6 +885,7 @@ export class ActionPipeline {
         };
         this.world.addBoardPost(post);
         this.broadcaster.boardPost(post);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post });
         this.broadcaster.agentAction(actorId, `posted: "${messageMatch[1].slice(0, 60)}"`, '📋');
       }
     }
