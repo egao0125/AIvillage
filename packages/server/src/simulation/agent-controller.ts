@@ -1811,9 +1811,19 @@ export class AgentController {
         reasonLower.includes(i.name.toLowerCase())
       ) || this.agent.inventory[0];
 
+      // Try to extract what the agent wants in return from their reason
+      const requestItems: { resource: string; qty: number }[] = [];
+      const targetInv = target.inventory || [];
+      for (const ti of targetInv) {
+        if (reasonLower.includes(ti.name.toLowerCase()) && ti.name.toLowerCase() !== item.name.toLowerCase()) {
+          requestItems.push({ resource: ti.name.toLowerCase().replace(/\s+/g, '_'), qty: 1 });
+          break;
+        }
+      }
+
       const agentState = this.buildAgentStateForResolver(situation);
       const worldState = this.buildWorldState();
-      const intent = { type: 'trade_offer' as const, offerItems: [{ resource: item.name.toLowerCase().replace(/\s+/g, '_'), qty: 1 }], requestItems: [], targetAgent: target.config.name.split(' ')[0], raw: `trade ${item.name} with ${target.config.name}` };
+      const intent = { type: 'trade_offer' as const, offerItems: [{ resource: item.name.toLowerCase().replace(/\s+/g, '_'), qty: 1 }], requestItems, targetAgent: target.config.name.split(' ')[0], raw: `trade ${item.name} with ${target.config.name}` };
       const outcome = executeAction(intent, agentState, worldState);
       this.applyOutcomeToWorld(outcome);
       this.lastOutcome = outcome.description;
