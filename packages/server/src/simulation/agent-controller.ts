@@ -1681,6 +1681,10 @@ export class AgentController {
   /** Step 5: Execute a structured decision — dispatch to game systems */
   private async executeDecision(decision: AgentDecision, situation: AgentSituation): Promise<void> {
     const actionId = decision.actionId;
+    // Truncated reason for action broadcasts — "action — reason"
+    const shortReason = decision.reason?.length > 80
+      ? decision.reason.slice(0, 77) + '...'
+      : (decision.reason || '');
 
     // --- Gather ---
     if (actionId.startsWith('gather_')) {
@@ -1712,6 +1716,7 @@ export class AgentController {
       this.currentPerformingActivity = `gathering ${resource}`;
       this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+      this.broadcaster.agentAction(this.agent.id, `gathering ${resource} — "${shortReason}"`);
       return;
     }
 
@@ -1741,6 +1746,7 @@ export class AgentController {
       this.currentPerformingActivity = 'eating';
       this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'eating');
+      this.broadcaster.agentAction(this.agent.id, `eating ${foodName} — "${shortReason}"`);
       return;
     }
 
@@ -1777,6 +1783,7 @@ export class AgentController {
       this.currentPerformingActivity = `crafting ${recipe.name}`;
       this.activityTimer = 8;
       this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+      this.broadcaster.agentAction(this.agent.id, `crafting ${recipe.name} — "${shortReason}"`);
       return;
     }
 
@@ -1787,7 +1794,7 @@ export class AgentController {
       this.startMoveTo(targetPos);
       // Store the reason for going — so the agent remembers WHY it went there when decide() fires on arrival
       this.pendingArrivalIntent = decision.reason;
-      this.broadcaster.agentAction(this.agent.id, `heading to ${targetAreaId}`);
+      this.broadcaster.agentAction(this.agent.id, `heading to ${targetAreaId} — "${shortReason}"`);
       return;
     }
 
@@ -1818,7 +1825,7 @@ export class AgentController {
       }
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name} — "${shortReason}"`);
       return;
     }
 
@@ -1891,7 +1898,7 @@ export class AgentController {
       }
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `traded with ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `traded with ${target.config.name} — "${shortReason}"`);
       return;
     }
 
@@ -1914,7 +1921,7 @@ export class AgentController {
       this.adjustTrust(target, this.agent, 5);
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `teaching ${skill.name} to ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `teaching ${skill.name} to ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `teaching ${skill.name} to ${target.config.name} — "${shortReason}"`);
       return;
     }
 
@@ -1970,7 +1977,7 @@ export class AgentController {
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `threatening ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `threatened ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `threatened ${target.config.name} — "${shortReason}"`);
       return;
     }
 
@@ -2017,7 +2024,7 @@ export class AgentController {
       this.askCooldown = 8;  // Can't ask again for 8 ticks
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `asking ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `asked ${target.config.name} for something`);
+      this.broadcaster.agentAction(this.agent.id, `asked ${target.config.name} for something — "${shortReason}"`);
       return;
     }
 
@@ -2092,7 +2099,7 @@ export class AgentController {
       this.lastTrigger = `You just confronted ${target.config.name}. How do they react?`;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `confronting ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `confronted ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `confronted ${target.config.name} — "${shortReason}"`);
       return;
     }
 
@@ -2261,7 +2268,7 @@ export class AgentController {
       this.world.addBoardPost(fightPost);
       this.broadcaster.boardPost(fightPost);
 
-      this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '!', '⚔️');
+      this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '! — "' + shortReason + '"', '⚔️');
       this.lastOutcome = outcome.description;
       this.lastTrigger = outcome.success
         ? 'You just fought ' + target.config.name + '. You took damage too. Everyone saw.'
@@ -2296,7 +2303,7 @@ export class AgentController {
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `forming alliance with ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `formed alliance with ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `formed alliance with ${target.config.name} — "${shortReason}"`);
       return;
     }
 
@@ -2367,7 +2374,7 @@ export class AgentController {
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `betraying ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `broke alliance with ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `broke alliance with ${target.config.name} — "${shortReason}"`);
       return;
     }
 
@@ -2405,7 +2412,7 @@ export class AgentController {
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'accusing');
-      this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'}`);
+      this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'} — "${shortReason}"`);
       return;
     }
 
@@ -2455,7 +2462,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'posting on board');
-      this.broadcaster.agentAction(this.agent.id, `posted on village board`);
+      this.broadcaster.agentAction(this.agent.id, `posted on village board — "${shortReason}"`);
       return;
     }
 
@@ -2567,7 +2574,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'calling meeting');
-      this.broadcaster.agentAction(this.agent.id, `called a meeting`);
+      this.broadcaster.agentAction(this.agent.id, `called a meeting — "${shortReason}"`);
       return;
     }
 
@@ -2636,7 +2643,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'proposing rule');
-      this.broadcaster.agentAction(this.agent.id, `proposed a village rule`);
+      this.broadcaster.agentAction(this.agent.id, `proposed a village rule — "${shortReason}"`);
       return;
     }
 
@@ -2725,7 +2732,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         relatedAgentIds: [],
       });
 
-      this.broadcaster.agentAction(this.agent.id, `voted ${isLike ? 'for' : 'against'} a rule`);
+      this.broadcaster.agentAction(this.agent.id, `voted ${isLike ? 'for' : 'against'} a rule — "${shortReason}"`);
       this.lastOutcome = `You voted ${isLike ? 'for' : 'against'} the proposed rule.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
@@ -2739,7 +2746,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.activityTimer = 20;
       this.world.updateAgentState(this.agent.id, 'active', 'resting');
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] });
-      this.broadcaster.agentAction(this.agent.id, 'resting');
+      this.broadcaster.agentAction(this.agent.id, `resting — "${shortReason}"`);
       return;
     }
 
@@ -2781,9 +2788,6 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         this.agent.mood = decision.mood as any;
         this.broadcaster.agentMood(this.agent.id, decision.mood as any);
       }
-
-      // Broadcast thought
-      this.broadcaster.agentThought(this.agent.id, decision.reason);
 
       await this.executeDecision(decision, situation);
 
