@@ -597,9 +597,11 @@ Energy: ${energy}/100
 Inventory: ${invStr}`;
 
     if (hunger >= 70 && !hasFood) {
-      vitalsSection += '\n\n⚠ You are starving and have no food. You will die if you don\'t eat soon. Gather it, ask for it, trade for it, or take it.';
+      vitalsSection += '\n\n⚠ YOU ARE DYING. You have NO food. Go gather wheat at the farm, or take food from someone nearby. Every turn you spend NOT getting food brings you closer to death.';
     } else if (hunger >= 70 && hasFood) {
-      vitalsSection += '\n\n⚠ You are starving. You have food — eat it now.';
+      const foodToEat = situation.inventory.find(i => i.type === 'food');
+      const eatId = foodToEat ? 'eat_' + foodToEat.name.toLowerCase().replace(/\s+/g, '_') : '';
+      vitalsSection += `\n\n⚠ YOU ARE DYING. You have food in your inventory — ${foodToEat?.name || 'food'}. Pick ${eatId} NOW or you will die.`;
     } else if (hunger >= 50) {
       vitalsSection += '\n\nYou\'re getting hungry. You should find food before it becomes desperate.';
     }
