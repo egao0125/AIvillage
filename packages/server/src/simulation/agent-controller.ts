@@ -1665,7 +1665,7 @@ export class AgentController {
     const actionId = decision.actionId;
     // Truncated reason for action broadcasts — "action — reason"
     const shortReason = decision.reason?.length > 80
-      ? decision.reason.slice(0, 77) + '...'
+      ? this.truncateAtSentence(decision.reason, 80)
       : (decision.reason || '');
 
     // --- Gather ---
@@ -2660,11 +2660,11 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
         content = content.replace(/^["']|["']$/g, '').trim();
         if (content.length < 3 || content.length > 300) {
           console.warn(`[PostBoard] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
-          content = decision.reason.slice(0, 200);
+          content = this.truncateAtSentence(decision.reason, 200);
         }
       } catch (err) {
         console.error(`[PostBoard] ${this.agent.config.name} LLM call failed:`, err);
-        content = decision.reason.slice(0, 200);
+        content = this.truncateAtSentence(decision.reason, 200);
       }
 
       const post = {
@@ -2708,11 +2708,11 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
         content = content.replace(/^["']|["']$/g, '').trim();
         if (content.length < 3 || content.length > 300) {
           console.warn(`[PostGroup] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
-          content = decision.reason.slice(0, 200);
+          content = this.truncateAtSentence(decision.reason, 200);
         }
       } catch (err) {
         console.error(`[PostGroup] ${this.agent.config.name} LLM call failed:`, err);
-        content = decision.reason.slice(0, 200);
+        content = this.truncateAtSentence(decision.reason, 200);
       }
 
       const post = {
@@ -2824,11 +2824,11 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
         if (ruleContent.length < 3 || ruleContent.length > 300) {
           console.warn(`[ProposeRule] ${this.agent.config.name} content length out of range (${ruleContent.length}), using reason`);
-          ruleContent = decision.reason.slice(0, 200);
+          ruleContent = this.truncateAtSentence(decision.reason, 200);
         }
       } catch (err) {
         console.error(`[ProposeRule] ${this.agent.config.name} LLM call failed:`, err);
-        ruleContent = decision.reason.slice(0, 200);
+        ruleContent = this.truncateAtSentence(decision.reason, 200);
       }
 
       const post = {
@@ -2976,6 +2976,19 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       skills: this.buildSkillsForResolver(),
       nearbyAgents: situation.nearbyAgents.map(a => ({ id: a.id, name: a.name })),
     };
+  }
+
+  /** Truncate text at the last complete sentence within maxLen */
+  private truncateAtSentence(text: string, maxLen: number): string {
+    if (text.length <= maxLen) return text;
+    const cut = text.slice(0, maxLen);
+    // Find last sentence-ending punctuation
+    const lastPeriod = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+    if (lastPeriod > maxLen * 0.3) return cut.slice(0, lastPeriod + 1).trim();
+    // Fallback: cut at last space
+    const lastSpace = cut.lastIndexOf(' ');
+    if (lastSpace > maxLen * 0.3) return cut.slice(0, lastSpace).trim() + '...';
+    return cut.trim() + '...';
   }
 
   /** Adjust one agent's mental model trust toward another */
