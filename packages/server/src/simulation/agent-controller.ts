@@ -802,7 +802,7 @@ export class AgentController {
       const lower = this.currentPerformingActivity.toLowerCase();
       const isResting = lower.includes('rest') || lower.includes('relax') || lower.includes('nap') || lower.includes('sit') || lower.includes('meditat');
       if (isResting) {
-        v.energy = Math.min(100, v.energy + 0.1);
+        v.energy = Math.min(100, v.energy + 0.3);
       } else {
         v.energy = Math.max(0, v.energy - 0.03);
       }
@@ -3309,7 +3309,9 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
     if (actionId === 'rest') {
       this.state = 'performing';
       this.currentPerformingActivity = 'resting';
-      this.activityTimer = 20;
+      // Rest longer when more exhausted — 20 ticks base, up to 60 when nearly depleted
+      const energy = this.agent.vitals?.energy ?? 50;
+      this.activityTimer = energy < 20 ? 60 : energy < 40 ? 40 : 20;
       this.world.updateAgentState(this.agent.id, 'active', 'resting');
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] });
       this.broadcaster.agentAction(this.agent.id, `resting — "${shortReason}"`);
