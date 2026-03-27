@@ -75,7 +75,9 @@ export const VillageDashboard: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
           <span style={{ fontSize: '10px' }}>{s.icon}</span>
           <span style={{ color: s.color, textTransform: 'uppercase', fontSize: '9px', fontFamily: FONTS.pixel, letterSpacing: 1 }}>{post.type}</span>
-          <span style={{ color: COLORS.textDim, fontSize: '11px' }}>by {post.authorName}</span>
+          {post.type !== 'news' && (
+            <span style={{ color: COLORS.textDim, fontSize: '11px' }}>by {post.authorName}</span>
+          )}
           {commentCount > 0 && !isExpanded && (
             <span style={{ color: COLORS.textDim, fontSize: '9px', marginLeft: 'auto', fontFamily: FONTS.pixel }}>
               {commentCount} reaction{commentCount !== 1 ? 's' : ''}
