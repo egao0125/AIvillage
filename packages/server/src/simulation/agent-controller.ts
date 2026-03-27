@@ -2646,18 +2646,21 @@ export class AgentController {
         const identity = this.cognition.identityBlock;
         const postPrompt = `${identity}
 
-You decided to write a message on the village board.
+You are writing a PUBLIC message on the village board for everyone to read.
 
-Your reason for posting: ${decision.reason}
+Your motivation: ${decision.reason}
 
-Write the ACTUAL MESSAGE you would post. This is public — other villagers read it. Not your inner thoughts — what you actually write down. Stay in character.
+Write what you would ACTUALLY PIN on the board — a short, concrete message directed at the village. NOT your inner thoughts or feelings. What would you write on a notice board for others to read?
 
-Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
+Examples of good posts: "Looking for someone to trade wheat for fish." / "Meeting at the plaza tomorrow morning." / "Stay away from the forest at night."
+
+1-2 sentences max. Write ONLY the message.`;
         content = await this.cognition.llmProvider.complete(
-          `You are ${this.agent.config.name}. Write only the board message. No preamble, no quotes.`,
+          `You are ${this.agent.config.name}. Write ONLY a short public notice (1-2 sentences). No inner monologue. No quotes around it.`,
           postPrompt,
         );
         content = content.replace(/^["']|["']$/g, '').trim();
+        content = this.ensureCompleteSentence(content);
         if (content.length < 3 || content.length > 300) {
           console.warn(`[PostBoard] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
           content = this.truncateAtSentence(decision.reason, 200);
@@ -2706,6 +2709,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
           `${identity}\n\nWrite a private message for your ${group.name} group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences. Write ONLY the message text.`
         );
         content = content.replace(/^["']|["']$/g, '').trim();
+        content = this.ensureCompleteSentence(content);
         if (content.length < 3 || content.length > 300) {
           console.warn(`[PostGroup] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
           content = this.truncateAtSentence(decision.reason, 200);
@@ -2822,6 +2826,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
           rulePrompt,
         );
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
+        ruleContent = this.ensureCompleteSentence(ruleContent);
         if (ruleContent.length < 3 || ruleContent.length > 300) {
           console.warn(`[ProposeRule] ${this.agent.config.name} content length out of range (${ruleContent.length}), using reason`);
           ruleContent = this.truncateAtSentence(decision.reason, 200);
@@ -2976,6 +2981,17 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       skills: this.buildSkillsForResolver(),
       nearbyAgents: situation.nearbyAgents.map(a => ({ id: a.id, name: a.name })),
     };
+  }
+
+  /** If text doesn't end with sentence-ending punctuation, cut to last complete sentence */
+  private ensureCompleteSentence(text: string): string {
+    const trimmed = text.trim();
+    if (/[.!?]$/.test(trimmed)) return trimmed;
+    // Find last sentence boundary
+    const lastEnd = Math.max(trimmed.lastIndexOf('. '), trimmed.lastIndexOf('! '), trimmed.lastIndexOf('? '));
+    if (lastEnd > trimmed.length * 0.3) return trimmed.slice(0, lastEnd + 1).trim();
+    // No sentence boundary — just add a period
+    return trimmed + '.';
   }
 
   /** Truncate text at the last complete sentence within maxLen */
