@@ -301,8 +301,12 @@ export class AgentController {
         if (this.activityTimer <= 0) {
           this.currentPerformingActivity = '';
           this.state = 'idle';
-          this.idleTimer = 0;
           this.world.updateAgentState(this.agent.id, 'idle', '');
+          // Action completed → decide immediately
+          // The outcome memory is already stored, trigger is set
+          if (!this.decidingInProgress && !this.apiExhausted) {
+            void this.decideAndAct();
+          }
         }
         break;
       }
@@ -326,7 +330,9 @@ export class AgentController {
 
       case 'idle': {
         this.idleTimer++;
-        if (this.idleTimer >= 8 && !this.decidingInProgress) {
+        // Fallback: if nothing triggered a decision for 20 ticks,
+        // force one. This is a safety net, not the primary trigger.
+        if (this.idleTimer >= 20 && !this.decidingInProgress) {
           this.idleTimer = 0;
           // If no goals yet, plan first
           if (this.currentGoals.length === 0 && !this.planningInProgress) {
@@ -504,8 +510,11 @@ export class AgentController {
         this.lastTrigger = `You arrived at ${areaName}. Look around and decide what to do.`;
       }
       this.state = 'idle';
-      this.idleTimer = 6;
       this.world.updateAgentState(this.agent.id, 'idle', '');
+      // Already at destination → decide immediately
+      if (!this.decidingInProgress && !this.apiExhausted) {
+        void this.decideAndAct();
+      }
       return;
     }
 
@@ -535,8 +544,11 @@ export class AgentController {
         const area = getAreaAt(this.agent.position);
         this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + ' but couldn\'t find who you were looking for.';
         this.state = 'idle';
-        this.idleTimer = 6;
         this.world.updateAgentState(this.agent.id, 'idle', '');
+        // Target not found → decide immediately
+        if (!this.decidingInProgress && !this.apiExhausted) {
+          void this.decideAndAct();
+        }
       } else {
         const area = getAreaAt(this.agent.position);
         const areaName = area?.name ?? 'your destination';
@@ -547,8 +559,11 @@ export class AgentController {
           this.lastTrigger = `You arrived at ${areaName}. Look around and decide what to do.`;
         }
         this.state = 'idle';
-        this.idleTimer = 6;
         this.world.updateAgentState(this.agent.id, 'idle', '');
+        // Arrived → decide immediately with arrival context
+        if (!this.decidingInProgress && !this.apiExhausted) {
+          void this.decideAndAct();
+        }
       }
       return;
     }
@@ -585,10 +600,13 @@ export class AgentController {
   leaveConversation(): void {
     if (this.state === 'conversing') {
       this.state = 'idle';
-      this.idleTimer = 0;
       this.conversationCooldown = 60; // ~5 seconds before this agent can talk again
       this.lastTrigger = 'You just finished a conversation. What now?';
       this.world.updateAgentState(this.agent.id, 'idle', '');
+      // Conversation ended → decide what to do next
+      if (!this.decidingInProgress && !this.apiExhausted) {
+        void this.decideAndAct();
+      }
     }
   }
 
@@ -1692,7 +1710,7 @@ export class AgentController {
         : `You tried to gather ${resource} but failed. ${outcome.description}`;
       this.state = 'performing';
       this.currentPerformingActivity = `gathering ${resource}`;
-      this.activityTimer = 10;
+      this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
       return;
     }
@@ -1721,7 +1739,7 @@ export class AgentController {
         : `You tried to eat but couldn't. ${outcome.description}`;
       this.state = 'performing';
       this.currentPerformingActivity = 'eating';
-      this.activityTimer = 5;
+      this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'eating');
       return;
     }
@@ -1757,7 +1775,7 @@ export class AgentController {
         : `You tried to craft ${recipe.name} but failed. ${outcome.description}`;
       this.state = 'performing';
       this.currentPerformingActivity = `crafting ${recipe.name}`;
-      this.activityTimer = 15;
+      this.activityTimer = 8;
       this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
       return;
     }
@@ -1798,7 +1816,7 @@ export class AgentController {
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider);
       }
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name}`);
       return;
@@ -1871,7 +1889,7 @@ export class AgentController {
         this.world.addBoardPost(tradePost);
         this.broadcaster.boardPost(tradePost);
       }
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `traded with ${target.config.name}`);
       return;
@@ -1894,7 +1912,7 @@ export class AgentController {
       this.lastOutcome = outcome.description;
       this.lastTrigger = outcome.description;
       this.adjustTrust(target, this.agent, 5);
-      this.state = 'performing'; this.activityTimer = 10;
+      this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `teaching ${skill.name} to ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `teaching ${skill.name} to ${target.config.name}`);
       return;
@@ -1950,7 +1968,7 @@ export class AgentController {
 
       this.lastOutcome = `You threatened ${target.config.name}.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `threatening ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `threatened ${target.config.name}`);
       return;
@@ -1997,7 +2015,7 @@ export class AgentController {
       this.lastOutcome = `You asked ${target.config.name} for help. They haven't given you anything yet.`;
       this.lastTrigger = `You asked for help but got nothing yet. If you need food, you'll have to gather it, trade for it, or take it yourself.`;
       this.askCooldown = 8;  // Can't ask again for 8 ticks
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `asking ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `asked ${target.config.name} for something`);
       return;
@@ -2030,7 +2048,7 @@ export class AgentController {
 
       this.lastOutcome = observation;
       this.lastTrigger = `You observed ${target.config.name}. ${observation}`;
-      this.state = 'performing'; this.activityTimer = 8;
+      this.state = 'performing'; this.activityTimer = 4;
       this.world.updateAgentState(this.agent.id, 'active', `observing ${target.config.name}`);
       return;
     }
@@ -2072,7 +2090,7 @@ export class AgentController {
       }
       this.lastOutcome = `You confronted ${target.config.name}.`;
       this.lastTrigger = `You just confronted ${target.config.name}. How do they react?`;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `confronting ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `confronted ${target.config.name}`);
       return;
@@ -2124,7 +2142,7 @@ export class AgentController {
           });
         }
       }
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `stealing`);
       return;
     }
@@ -2248,7 +2266,7 @@ export class AgentController {
       this.lastTrigger = outcome.success
         ? 'You just fought ' + target.config.name + '. You took damage too. Everyone saw.'
         : 'Fight failed: ' + (outcome.reason || 'too exhausted');
-      this.state = 'performing'; this.activityTimer = 10;
+      this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `fighting ${target.config.name}`);
       return;
     }
@@ -2276,7 +2294,7 @@ export class AgentController {
       }
       this.lastOutcome = `You formed an alliance with ${target.config.name}.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `forming alliance with ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `formed alliance with ${target.config.name}`);
       return;
@@ -2347,7 +2365,7 @@ export class AgentController {
 
       this.lastOutcome = `You betrayed your alliance with ${target.config.name}.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `betraying ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `broke alliance with ${target.config.name}`);
       return;
@@ -2385,7 +2403,7 @@ export class AgentController {
       }
       this.lastOutcome = `You publicly accused ${accused?.config.name ?? 'someone'}.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'accusing');
       this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'}`);
       return;
@@ -2435,7 +2453,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I posted on the village board: "${content.slice(0, 80)}"`, importance: 4, timestamp: Date.now(), relatedAgentIds: [] });
       this.lastOutcome = `You posted on the village board.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'posting on board');
       this.broadcaster.agentAction(this.agent.id, `posted on village board`);
       return;
@@ -2510,7 +2528,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
 
       this.lastOutcome = 'You posted in your group chat.';
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       return;
     }
 
@@ -2547,7 +2565,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
 
       this.lastOutcome = `You called a meeting. ${names} are listening.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'calling meeting');
       this.broadcaster.agentAction(this.agent.id, `called a meeting`);
       return;
@@ -2616,7 +2634,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed a rule: "${ruleContent.slice(0, 80)}"`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
       this.lastOutcome = `You proposed a rule for the village.`;
       this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 5;
+      this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'proposing rule');
       this.broadcaster.agentAction(this.agent.id, `proposed a village rule`);
       return;
