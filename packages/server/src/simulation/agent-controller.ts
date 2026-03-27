@@ -1459,31 +1459,28 @@ export class AgentController {
     }
 
     // Build property/building info for current location
-    let propertyInfo: string | undefined;
-    const buildingsHere = this.world.getBuildingsAt(areaId);
-    if (buildingsHere.length > 0) {
-      const lines: string[] = [];
-      for (const b of buildingsHere) {
-        const owner = b.ownerId ? this.world.getAgent(b.ownerId) : undefined;
-        const ownerName = owner ? owner.config.name : 'unclaimed';
-        const effects = b.effects.length > 0 ? ` (${b.effects.join(', ')})` : '';
-        lines.push(`- ${b.name} [${b.type}]${effects} — ${ownerName === 'unclaimed' ? 'UNCLAIMED' : `owned by ${ownerName}`}`);
-
-        // Add claim action for unclaimed buildings
-        if (!b.ownerId || b.ownerId === '') {
-          actions.push({ id: `claim_${b.id}`, label: `Claim ${b.name}`, category: 'creative' });
-        }
-      }
-      propertyInfo = lines.join('\n');
-    }
-    // Also check if the area itself is unclaimed
+    const lines: string[] = [];
     const areaOwner = this.world.getPropertyOwner(areaId);
-    if (!areaOwner && areaId) {
-      // Only add area claim if there are buildings here or it's a notable area
-      if (buildingsHere.length > 0) {
-        actions.push({ id: `claim_area_${areaId}`, label: `Claim this area (${area?.name ?? areaId})`, category: 'creative' });
+    if (areaOwner) {
+      const ownerAgent = this.world.getAgent(areaOwner);
+      lines.push(`This area is owned by ${ownerAgent?.config.name ?? 'someone'}.`);
+    } else {
+      lines.push(`This area is unclaimed.`);
+      actions.push({ id: `claim_area_${areaId}`, label: `Claim ${area?.name ?? areaId} as your property`, category: 'creative' });
+    }
+
+    const buildingsHere = this.world.getBuildingsAt(areaId);
+    for (const b of buildingsHere) {
+      const owner = b.ownerId ? this.world.getAgent(b.ownerId) : undefined;
+      const ownerName = owner ? owner.config.name : 'unclaimed';
+      const effects = b.effects.length > 0 ? ` (${b.effects.join(', ')})` : '';
+      lines.push(`- ${b.name} [${b.type}]${effects} — ${ownerName === 'unclaimed' ? 'UNCLAIMED' : `owned by ${ownerName}`}`);
+
+      if (!b.ownerId || b.ownerId === '') {
+        actions.push({ id: `claim_${b.id}`, label: `Claim ${b.name}`, category: 'creative' });
       }
     }
+    const propertyInfo = lines.join('\n');
 
     // Build village rules from passed board posts
     let villageRules: string | undefined;
