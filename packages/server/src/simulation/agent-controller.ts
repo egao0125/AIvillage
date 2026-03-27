@@ -1390,23 +1390,6 @@ export class AgentController {
       actions.push({ id: 'propose_rule', label: 'Propose a rule for voting', category: 'creative' });
     }
 
-    // Vote on pending rules
-    const pendingRules = this.world.getActiveBoard()
-      .filter(p => p.type === 'rule' && p.ruleStatus === 'proposed'
-        && !p.votes?.some(v => v.agentId === this.agent.id));
-    for (const rule of pendingRules.slice(0, 3)) {
-      actions.push({
-        id: 'vote_like_' + rule.id.slice(0, 8),
-        label: `Support rule: "${rule.content.slice(0, 40)}..."`,
-        category: 'creative',
-      });
-      actions.push({
-        id: 'vote_dislike_' + rule.id.slice(0, 8),
-        label: `Oppose rule: "${rule.content.slice(0, 40)}..."`,
-        category: 'creative',
-      });
-    }
-
     // Meeting — only with 3+ people nearby, with cooldown
     if (nearby.length >= 2) {
       const recentMeetings = this.cognition.fourStream
@@ -1502,6 +1485,14 @@ export class AgentController {
       }
     }
 
+    // Build village rules from passed board posts
+    let villageRules: string | undefined;
+    const passedRules = this.world.getActiveBoard()
+      .filter(p => p.type === 'rule' && p.ruleStatus === 'passed');
+    if (passedRules.length > 0) {
+      villageRules = passedRules.map((r, i) => `${i + 1}. ${r.content}`).join('\n');
+    }
+
     // Build group info from Institution membership
     let groupInfo: string | undefined;
     const gId = this.agent.institutionIds?.[0];
@@ -1536,6 +1527,7 @@ export class AgentController {
       boardPosts,
       groupInfo,
       propertyInfo,
+      villageRules,
     };
   }
 
@@ -2827,7 +2819,10 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
-      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+      if (this.bus) {
+        this.bus.emit({ type: 'board_post_created', post });
+        this.bus.emit({ type: 'rule_proposed', post });
+      }
 
       // All agents get a memory about the proposed rule
       for (const [id, agent] of this.world.agents) {
@@ -2852,99 +2847,6 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'proposing rule');
       this.broadcaster.agentAction(this.agent.id, `proposed a village rule — "${shortReason}"`);
-      return;
-    }
-
-    // --- Vote on Rule ---
-    if (actionId.startsWith('vote_like_') || actionId.startsWith('vote_dislike_')) {
-      const isLike = actionId.startsWith('vote_like_');
-      const ruleIdPrefix = actionId.replace(/^vote_(like|dislike)_/, '');
-      const rulePost = this.world.getActiveBoard()
-        .find(p => p.id.startsWith(ruleIdPrefix) && p.type === 'rule' && p.ruleStatus === 'proposed');
-
-      if (!rulePost) {
-        this.lastTrigger = 'The rule you wanted to vote on is no longer active.';
-        this.state = 'idle'; this.idleTimer = 0; return;
-      }
-
-      // Add vote
-      if (!rulePost.votes) rulePost.votes = [];
-      rulePost.votes.push({ agentId: this.agent.id, vote: isLike ? 'like' : 'dislike' });
-
-      // Check if majority reached
-      const aliveCount = Array.from(this.world.agents.values()).filter(a => a.alive !== false).length;
-      const likeCount = rulePost.votes.filter(v => v.vote === 'like').length;
-      const dislikeCount = rulePost.votes.filter(v => v.vote === 'dislike').length;
-      const totalVotes = likeCount + dislikeCount;
-
-      if (totalVotes >= Math.ceil(aliveCount / 2)) {
-        if (likeCount > dislikeCount) {
-          // RULE PASSES
-          rulePost.ruleStatus = 'passed';
-
-          // Add permanent rule concern to ALL agents
-          for (const [id, agent] of this.world.agents) {
-            if (agent.alive === false) continue;
-            const cog = (this.world as any).cognitions?.get?.(id);
-            if (cog?.fourStream) {
-              cog.fourStream.addConcern({
-                id: crypto.randomUUID(),
-                content: `Village rule: ${rulePost.content}`,
-                category: 'rule',
-                relatedAgentIds: [],
-                createdAt: this.world.time.totalMinutes,
-                permanent: true,
-              });
-            }
-            if (cog) {
-              void cog.addMemory({
-                id: crypto.randomUUID(),
-                agentId: id,
-                type: 'observation',
-                content: `Village rule passed: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`,
-                importance: 8,
-                timestamp: Date.now(),
-                relatedAgentIds: [],
-              });
-            }
-          }
-
-          // News post
-          const ruleNewsPost: BoardPost = {
-            id: crypto.randomUUID(),
-            authorId: 'system',
-            authorName: 'Village News',
-            type: 'news',
-            channel: 'all',
-            content: `Rule passed: "${rulePost.content}" (${likeCount}-${dislikeCount})`,
-            timestamp: Date.now(),
-            day: this.world.time.day,
-          };
-          this.world.addBoardPost(ruleNewsPost);
-          this.broadcaster.boardPost(ruleNewsPost);
-          if (this.bus) this.bus.emit({ type: 'board_post_created', post: ruleNewsPost });
-        } else {
-          rulePost.ruleStatus = 'rejected';
-        }
-      }
-
-      // Broadcast updated rule post (with new vote / status) to clients
-      this.broadcaster.boardPostUpdate(rulePost);
-
-      void this.cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: this.agent.id,
-        type: 'action_outcome',
-        content: `I voted ${isLike ? 'for' : 'against'} the rule: "${rulePost.content.slice(0, 60)}"`,
-        importance: 5,
-        timestamp: Date.now(),
-        relatedAgentIds: [],
-      });
-
-      this.broadcaster.agentAction(this.agent.id, `voted ${isLike ? 'for' : 'against'} a rule — "${shortReason}"`);
-      this.lastOutcome = `You voted ${isLike ? 'for' : 'against'} the proposed rule.`;
-      this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 3;
       return;
     }
 

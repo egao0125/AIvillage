@@ -67,6 +67,7 @@ export interface AgentSituation {
   boardPosts?: string;        // recent village board posts
   groupInfo?: string;         // agent's group/institution membership
   propertyInfo?: string;      // buildings/properties at current location
+  villageRules?: string;      // official passed rules
 }
 
 export interface AvailableAction {
@@ -624,6 +625,7 @@ Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDar
 Season: ${situation.season}.
 
 ${vitalsSection}
+${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
