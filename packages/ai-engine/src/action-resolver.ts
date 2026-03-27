@@ -911,11 +911,17 @@ function executeTradeOffer(intent: ParsedIntent, agent: AgentState, world: World
   };
 
   const offerStr = intent.offerItems.map(i => `${i.qty} ${i.resource}`).join(', ');
-  const requestStr = intent.requestItems.map(i => `${i.qty} ${i.resource}`).join(', ');
+  const requestStr = intent.requestItems.length > 0
+    ? intent.requestItems.map(i => `${i.qty} ${i.resource}`).join(', ')
+    : null;
+
+  const description = requestStr
+    ? `Offered ${nearby.name} a trade: my ${offerStr} for their ${requestStr}.`
+    : `Offered ${nearby.name} ${offerStr} as a trade.`;
 
   return {
     ...base, success: true,
-    description: `Offered ${nearby.name} a trade: my ${offerStr} for their ${requestStr}.`,
+    description,
     tradeProposal: proposal,
   } as ActionOutcome;
 }
