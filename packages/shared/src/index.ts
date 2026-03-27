@@ -82,6 +82,10 @@ export interface Agent {
   partnerId?: string;
   parentIds?: string[];
   childIds?: string[];
+
+  // --- Four Stream Memory ---
+  dossiers?: RelationshipDossier[];
+  activeConcerns?: ActiveConcern[];
 }
 
 export type AgentState =
@@ -152,6 +156,32 @@ export interface MentalModel {
   emotionalStance: string; // "wary", "admiring", "resentful", "indifferent"
   notes: string[];         // Running log: "Lied to me on day 3", "Shared food when I was starving"
   lastUpdated: number;
+}
+
+// --- Four Stream Memory Types ---
+
+/** Per-person synthesized relationship profile */
+export interface RelationshipDossier {
+  agentId: string;        // who owns this dossier
+  targetId: string;       // who it's about
+  targetName: string;
+  summary: string;        // 3-5 sentences: who they are to me, history, trust
+  trust: number;          // -100 to 100
+  activeCommitments: string[];
+  lastInteraction: number;
+  lastUpdated: number;
+}
+
+/** Something on the agent's mind right now */
+export interface ActiveConcern {
+  id: string;
+  content: string;        // "I promised Wren 2 wheat by tomorrow"
+  category: 'commitment' | 'need' | 'threat' | 'unresolved' | 'goal' | 'rule';
+  relatedAgentIds: string[];
+  createdAt: number;
+  expiresAt?: number;
+  resolved?: boolean;
+  permanent?: boolean;    // rules and commitments don't expire
 }
 
 // --- Items & Materials ---
@@ -547,18 +577,23 @@ export interface ThinkOutput {
 
 // --- Village Board ---
 
-export type BoardPostType = 'decree' | 'rule' | 'announcement' | 'rumor' | 'threat' | 'alliance' | 'bounty';
+export type BoardPostType = 'decree' | 'rule' | 'announcement' | 'rumor' | 'threat' | 'alliance' | 'bounty' | 'trade' | 'news';
 
 export interface BoardPost {
   id: string;
   authorId: string;
   authorName: string;
   type: BoardPostType;
+  channel?: 'all' | 'group';
+  groupId?: string;
   content: string;
   timestamp: number;
   day: number;
   targetIds?: string[];   // agents this post is about
   revoked?: boolean;      // if a rule/decree was revoked
+  votes?: { agentId: string; vote: 'like' | 'dislike' }[];
+  ruleStatus?: 'proposed' | 'passed' | 'rejected' | 'repealed';
+  comments?: { agentId: string; agentName: string; content: string; timestamp: number }[];
 }
 
 export interface WorldSnapshot {

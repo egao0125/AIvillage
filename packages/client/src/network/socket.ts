@@ -71,6 +71,10 @@ export function connectSocket(): Socket {
     eventBus.emit('board:post', post);
   });
 
+  socket.on('board:update', (post: BoardPost) => {
+    gameStore.updateBoardPost(post);
+  });
+
   socket.on(
     'agent:move',
     (data: {

@@ -7,3 +7,6 @@ dist/
 coverage/
 *.db
 *.tsbuildinfo
+package-lock.json
+docs/
+packages/server/src/test-*.ts

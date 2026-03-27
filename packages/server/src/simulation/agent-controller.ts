@@ -1,4 +1,4 @@
-import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Institution, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
@@ -50,6 +50,7 @@ export class AgentController {
   private reflectingInProgress: boolean = false;
   private currentAreaId: string | null = null; // track where the agent is performing
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
+  private askCooldown: number = 0; // ticks remaining before agent can ask again
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
@@ -62,13 +63,19 @@ export class AgentController {
   private lastHungerBand: number = 0;
   private lastEnergyBand: number = 0;
   private lastHealthBand: number = 0;
+  private lastHungerConcernBand: number = 0;
   public lastOutcomeDescription: string = '';
   decisionQueue?: DecisionQueue;  // Infra 3: injected by engine
   // Refactor v2: structured decision system
   public currentGoals: string[] = [];
   private decidingInProgress: boolean = false;
-  private lastTrigger: string = 'You just arrived. Look around and decide what to do.';
+  lastTrigger: string = 'You just arrived. Look around and decide what to do.';
   private lastOutcome: string | undefined;
+  // Four Stream Memory: importance accumulator for belief generation
+  private importanceAccum: number = 0;
+  // Sequential actions: store why agent is moving so arrival trigger includes intent
+  private pendingArrivalIntent: string | null = null;
+  private lastBeliefTick: number = 0;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -141,28 +148,14 @@ export class AgentController {
 
   private logTransitionMemory(from: ControllerState, to: ControllerState): void {
     if (from === to) return;
-    const skip: ControllerState[] = ['waking', 'planning', 'reflecting'];
-    if (skip.includes(from) || skip.includes(to)) return;
+    // Only log transitions that matter narratively — skip idle/moving/performing churn
+    if (to !== 'sleeping' && to !== 'conversing') return;
 
     const area = getAreaAt(this.agent.position);
     const location = area?.name ?? 'the village';
-    let content: string;
-
-    if (to === 'moving') {
-      content = `I'm heading somewhere.`;
-    } else if (to === 'performing') {
-      content = `I started ${this.shortActivity(this.currentPerformingActivity)} at ${location}.`;
-    } else if (to === 'idle' && from === 'performing') {
-      content = `I finished what I was doing at ${location}.`;
-    } else if (to === 'idle' && from === 'moving') {
-      content = `I arrived at ${location}.`;
-    } else if (to === 'conversing') {
-      content = `I started a conversation at ${location}.`;
-    } else if (to === 'idle' && from === 'conversing') {
-      content = `I finished talking at ${location}.`;
-    } else {
-      return;
-    }
+    const content = to === 'sleeping'
+      ? `I went to sleep at ${location}.`
+      : `I started a conversation at ${location}.`;
 
     void this.cognition.addMemory({
       id: crypto.randomUUID(),
@@ -238,6 +231,7 @@ export class AgentController {
     }
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
+    if (this.askCooldown > 0) this.askCooldown--;
 
     // Universal sleep check — fires once at exact sleep hour, then winds down gracefully
     if (this.state !== 'sleeping' && this.state !== 'reflecting' && this.state !== 'waking' && this.state !== 'deciding') {
@@ -307,8 +301,12 @@ export class AgentController {
         if (this.activityTimer <= 0) {
           this.currentPerformingActivity = '';
           this.state = 'idle';
-          this.idleTimer = 0;
           this.world.updateAgentState(this.agent.id, 'idle', '');
+          // Action completed → decide immediately
+          // The outcome memory is already stored, trigger is set
+          if (!this.decidingInProgress && !this.apiExhausted) {
+            void this.decideAndAct();
+          }
         }
         break;
       }
@@ -332,7 +330,9 @@ export class AgentController {
 
       case 'idle': {
         this.idleTimer++;
-        if (this.idleTimer >= 8 && !this.decidingInProgress) {
+        // Fallback: if nothing triggered a decision for 20 ticks,
+        // force one. This is a safety net, not the primary trigger.
+        if (this.idleTimer >= 20 && !this.decidingInProgress) {
           this.idleTimer = 0;
           // If no goals yet, plan first
           if (this.currentGoals.length === 0 && !this.planningInProgress) {
@@ -343,6 +343,16 @@ export class AgentController {
         }
         break;
       }
+    }
+
+    // Four Stream: trigger belief generation when importance accumulates
+    if (this.cognition.fourStream &&
+        this.importanceAccum >= 100 &&
+        this.world.time.totalMinutes - this.lastBeliefTick > 480 &&
+        this.state === 'idle' && !this.decidingInProgress) {
+      this.importanceAccum = 0;
+      this.lastBeliefTick = this.world.time.totalMinutes;
+      void this.cognition.fourStream.generateBeliefs(this.cognition.llmProvider);
     }
 
     // Log transition memories when state changes (zero LLM cost)
@@ -358,29 +368,6 @@ export class AgentController {
     this.sleepTriggered = false; // reset for next night
     console.log(`[Agent] ${this.agent.config.name} wakes up`);
 
-    // Think on waking — include pre-sleep context for narrative continuity
-    if (!this.apiExhausted) {
-      try {
-        const area = getAreaAt(this.agent.position);
-        const v = this.agent.vitals;
-        const vitalsNote = v ? `Health: ${Math.round(v.health)}, Hunger: ${Math.round(v.hunger)}, Energy: ${Math.round(v.energy)}.` : '';
-        const preSleepNote = this.preSleepArea
-          ? ` Last night you were ${this.preSleepActivity ?? 'busy'} at ${this.preSleepArea} before heading to bed.`
-          : '';
-        const output = await this.cognition.think(
-          `You just woke up at the ${area?.name ?? 'village'}. It's morning on day ${this.world.time.day}.${preSleepNote}`,
-          `Location: ${area?.name ?? 'unknown'}. ${vitalsNote}`
-        );
-        this.handleApiSuccess();
-        if (output.mood) {
-          this.agent.mood = output.mood;
-          this.broadcaster.agentMood(this.agent.id, output.mood);
-        }
-        this.broadcaster.agentThought(this.agent.id, output.thought);
-      } catch (err) {
-        this.handleApiFailure(err);
-      }
-    }
     // Clear pre-sleep context after use
     this.preSleepArea = null;
     this.preSleepActivity = null;
@@ -492,10 +479,19 @@ export class AgentController {
     if (path.length <= 1) {
       // Already there or no path found — go idle so decideAndAct picks up
       const area = getAreaAt(this.agent.position);
-      this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + '.';
+      const areaName = area?.name ?? 'your destination';
+      if (this.pendingArrivalIntent) {
+        this.lastTrigger = `You arrived at ${areaName}. You came here because: ${this.pendingArrivalIntent}`;
+        this.pendingArrivalIntent = null;
+      } else {
+        this.lastTrigger = `You arrived at ${areaName}. Look around and decide what to do.`;
+      }
       this.state = 'idle';
-      this.idleTimer = 6;
       this.world.updateAgentState(this.agent.id, 'idle', '');
+      // Already at destination → decide immediately
+      if (!this.decidingInProgress && !this.apiExhausted) {
+        void this.decideAndAct();
+      }
       return;
     }
 
@@ -525,14 +521,26 @@ export class AgentController {
         const area = getAreaAt(this.agent.position);
         this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + ' but couldn\'t find who you were looking for.';
         this.state = 'idle';
-        this.idleTimer = 6;
         this.world.updateAgentState(this.agent.id, 'idle', '');
+        // Target not found → decide immediately
+        if (!this.decidingInProgress && !this.apiExhausted) {
+          void this.decideAndAct();
+        }
       } else {
         const area = getAreaAt(this.agent.position);
-        this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + '.';
+        const areaName = area?.name ?? 'your destination';
+        if (this.pendingArrivalIntent) {
+          this.lastTrigger = `You arrived at ${areaName}. You came here because: ${this.pendingArrivalIntent}`;
+          this.pendingArrivalIntent = null;
+        } else {
+          this.lastTrigger = `You arrived at ${areaName}. Look around and decide what to do.`;
+        }
         this.state = 'idle';
-        this.idleTimer = 6;
         this.world.updateAgentState(this.agent.id, 'idle', '');
+        // Arrived → decide immediately with arrival context
+        if (!this.decidingInProgress && !this.apiExhausted) {
+          void this.decideAndAct();
+        }
       }
       return;
     }
@@ -569,10 +577,13 @@ export class AgentController {
   leaveConversation(): void {
     if (this.state === 'conversing') {
       this.state = 'idle';
-      this.idleTimer = 0;
       this.conversationCooldown = 60; // ~5 seconds before this agent can talk again
       this.lastTrigger = 'You just finished a conversation. What now?';
       this.world.updateAgentState(this.agent.id, 'idle', '');
+      // Conversation ended → decide what to do next
+      if (!this.decidingInProgress && !this.apiExhausted) {
+        void this.decideAndAct();
+      }
     }
   }
 
@@ -582,29 +593,7 @@ export class AgentController {
    * Event-driven think — immediate, bypasses the 60-minute cooldown.
    * Used for: witnessing events, vital threshold crossings, conversation endings.
    */
-  async thinkOnEvent(trigger: string, context: string, causedByMemoryId?: string): Promise<void> {
-    if (this.apiExhausted || this.state === 'sleeping' || this.state === 'conversing') return;
-
-    try {
-      const output = await this.cognition.think(trigger, context);
-      this.handleApiSuccess();
-
-      // Guard: agent may have entered a conversation while we were awaiting the LLM
-      if ((this.state as ControllerState) === 'conversing') return;
-
-      if (output.mood) {
-        this.agent.mood = output.mood;
-        this.broadcaster.agentMood(this.agent.id, output.mood);
-      }
-      this.broadcaster.agentThought(this.agent.id, output.thought);
-
-      // If the thought suggests urgency, trigger decideAndAct quickly
-      this.lastTrigger = trigger;
-      this.idleTimer = 6;
-    } catch (err) {
-      this.handleApiFailure(err);
-    }
-  }
+  // thinkOnEvent removed — think() now fires only as board post reactions
 
   // (replanAfterConversation removed in refactor v2)
 
@@ -659,6 +648,10 @@ export class AgentController {
         this.broadcaster.agentMood(this.agent.id, mood);
         console.log(`[Agent] ${this.agent.config.name} mood: ${mood}`);
       }
+      // Four Stream: nightly compression — beliefs + prune timeline + prune concerns
+      if (this.cognition.fourStream) {
+        await this.cognition.fourStream.nightlyCompression(this.cognition.llmProvider);
+      }
     } catch (err) {
       console.error(`[Agent] ${this.agent.config.name} failed to reflect:`, err);
       this.handleApiFailure(err);
@@ -678,8 +671,14 @@ export class AgentController {
     if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
       this.lastHungerHour = currentHour;
 
-      // Hunger increases every game hour (0.5 per hour — agents last longer)
-      v.hunger = Math.min(100, v.hunger + 0.5);
+      // Hunger rate: 1.0/hour awake, 0.3/hour sleeping
+      // At 1.0/hour awake: ~19 hunger/day (16 awake + 2.4 sleep)
+      // This makes survival possible with effort
+      if (this.state === 'sleeping') {
+        v.hunger = Math.min(100, v.hunger + 0.3);
+      } else {
+        v.hunger = Math.min(100, v.hunger + 1.0);
+      }
 
       // Cold damage + building effects
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
@@ -760,7 +759,7 @@ export class AgentController {
     }
     // Passive health regen when not starving/exhausted
     if (v.hunger < 70 && v.energy > 20) {
-      v.health = Math.min(100, v.health + 0.02);
+      v.health = Math.min(100, v.health + 1);
     }
 
     // Death check — health reaching 0 is fatal
@@ -786,11 +785,6 @@ export class AgentController {
         importance: hungerBand === 2 ? 7 : 5,
         timestamp: Date.now(), relatedAgentIds: [],
       });
-      void this.thinkOnEvent(
-        `You're getting ${hungerBand === 2 ? 'very hungry — your health is starting to drop' : 'hungry'}.`,
-        `Hunger: ${Math.round(v.hunger)}/100. Food in inventory: ${foodCount} items.`,
-        vitalsMemId,
-      );
     }
     if (energyBand > this.lastEnergyBand) {
       const vitalsMemId = crypto.randomUUID();
@@ -800,11 +794,6 @@ export class AgentController {
         importance: energyBand === 2 ? 7 : 5,
         timestamp: Date.now(), relatedAgentIds: [],
       });
-      void this.thinkOnEvent(
-        `You're ${energyBand === 2 ? 'completely exhausted' : 'getting tired'}.`,
-        `Energy: ${Math.round(v.energy)}/100.`,
-        vitalsMemId,
-      );
     }
     if (healthBand > this.lastHealthBand) {
       const vitalsMemId = crypto.randomUUID();
@@ -814,11 +803,46 @@ export class AgentController {
         importance: healthBand === 2 ? 8 : 6,
         timestamp: Date.now(), relatedAgentIds: [],
       });
-      void this.thinkOnEvent(
-        `You're ${healthBand === 2 ? 'critically injured' : 'hurt and need care'}.`,
-        `Health: ${Math.round(v.health)}/100.`,
-        vitalsMemId,
-      );
+    }
+
+    // Four Stream: add vitals as concerns at threshold crossings
+    // At 1 hunger/hour: band 1 ~Day 1, band 2 ~Day 2-3, band 3 ~Day 3-4 (desperate enough to steal)
+    if (this.cognition.fourStream) {
+      const hungerConcernBand = v.hunger >= 85 ? 3 : v.hunger >= 60 ? 2 : v.hunger >= 35 ? 1 : 0;
+      if (hungerConcernBand > this.lastHungerConcernBand) {
+        const urgency = hungerConcernBand === 3 ? 'I\'m starving. I need food NOW — I\'d do anything to eat.'
+          : hungerConcernBand === 2 ? 'I\'m really hungry. I need to find food urgently.'
+          : 'I\'m getting hungry. I should look for food.';
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: urgency,
+          category: 'need',
+          relatedAgentIds: [],
+          createdAt: this.world.time.totalMinutes,
+          expiresAt: this.world.time.totalMinutes + 480,
+        });
+      }
+      this.lastHungerConcernBand = hungerConcernBand;
+
+      if (energyBand > this.lastEnergyBand && energyBand >= 1) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: energyBand === 2 ? 'I can barely stand. I need rest desperately.' : 'I\'m getting tired. Should rest soon.',
+          category: 'need',
+          relatedAgentIds: [],
+          createdAt: this.world.time.totalMinutes,
+          expiresAt: this.world.time.totalMinutes + 480,
+        });
+      }
+      if (healthBand > this.lastHealthBand && healthBand >= 1) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: healthBand === 2 ? 'I\'m critically injured. I might die.' : 'I\'m hurt and need medicine or rest.',
+          category: 'threat',
+          relatedAgentIds: [],
+          createdAt: this.world.time.totalMinutes,
+        });
+      }
     }
 
     this.lastHungerBand = hungerBand;
@@ -886,6 +910,21 @@ export class AgentController {
 
     this.broadcaster.agentDeath(this.agent.id, cause);
     this.broadcaster.agentAction(this.agent.id, `died: ${cause}`, '\u{1F480}');
+
+    // PUBLIC: news post for death
+    const deathPost: BoardPost = {
+      id: crypto.randomUUID(),
+      authorId: 'system',
+      authorName: 'Village News',
+      type: 'news',
+      channel: 'all',
+      content: `${this.agent.config.name} has died of ${cause}.`,
+      timestamp: Date.now(),
+      day: this.world.time.day,
+    };
+    this.world.addBoardPost(deathPost);
+    this.broadcaster.boardPost(deathPost);
+    if (this.bus) this.bus.emit({ type: 'board_post_created', post: deathPost });
 
     // Fix 4: Emit agent_died event for nearby witness perception
     if (this.bus) {
@@ -1032,7 +1071,7 @@ export class AgentController {
     const active = ledger.filter(e => e.status === 'proposed' || e.status === 'accepted');
     if (active.length === 0) return '';
     const lines = active.map(e => {
-      const others = e.targetIds.map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
+      const others = (e.targetIds ?? []).map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
       const tag = e.source === 'secondhand' ? ' (secondhand)' : '';
       return `- [${e.status}] ${e.description}${tag}`;
     });
@@ -1045,7 +1084,7 @@ export class AgentController {
     const today = ledger.filter(e => e.day === this.world.time.day || e.status === 'accepted');
     if (today.length === 0) return '';
     const lines = today.map(e => {
-      const others = e.targetIds.map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
+      const others = (e.targetIds ?? []).map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
       return `- [${e.status}] ${e.description} (with ${others})`;
     });
     return `\nSOCIAL COMMITMENTS TODAY:\n${lines.join('\n')}`;
@@ -1202,84 +1241,36 @@ export class AgentController {
   // =====================================================================
 
   /** Surface unresolved interpersonal dynamics for the decide prompt */
-  private buildSocialPressure(): string {
-    const lines: string[] = [];
-
-    // Broken/expired promises
-    const ledger = this.agent.socialLedger ?? [];
-    const broken = ledger.filter(e =>
-      e.status === 'broken' ||
-      (e.status === 'expired' && e.resolvedAt && this.world.time.totalMinutes - e.resolvedAt < 1440)
-    );
-    for (const b of broken.slice(0, 3)) {
-      lines.push(`UNRESOLVED: ${b.description} — this was ${b.status}`);
-    }
-
-    // Commitments due soon (within 2 game hours)
-    const due = ledger.filter(e =>
-      e.status === 'accepted' && e.expiresAt &&
-      e.expiresAt - this.world.time.totalMinutes < 120 &&
-      e.expiresAt > this.world.time.totalMinutes
-    );
-    for (const d of due.slice(0, 2)) {
-      lines.push(`DUE SOON: ${d.description}`);
-    }
-
-    // Interpersonal tensions and bonds from mental models
-    const knownPeople = this.agent.mentalModels ?? [];
-    for (const model of knownPeople) {
-      const name = this.world.getAgent(model.targetId)?.config.name;
-      if (!name) continue;
-      if (model.trust < -20) {
-        lines.push(`TENSION: You don't trust ${name} (trust: ${model.trust})`);
-      } else if (model.trust > 30) {
-        lines.push(`BOND: You trust ${name} (trust: ${model.trust})`);
-      }
-    }
-
-    // Drive pressures (belonging, status, meaning)
-    const d = this.agent.drives;
-    if (d) {
-      if (d.belonging >= 60) lines.push('You feel isolated. You haven\'t connected with anyone recently.');
-      if (d.status >= 60) lines.push('Nobody seems to value what you contribute.');
-      if (d.meaning >= 70) lines.push('You\'ve been doing the same thing every day. You need purpose.');
-    }
-
-    return lines.length > 0 ? '\nWHAT\'S ON YOUR MIND:\n' + lines.join('\n') : '';
-  }
-
-  /** Time-of-day trigger — creates natural daily rhythm */
-  private getTimeOfDayTrigger(hour: number): string {
-    if (hour >= 6 && hour <= 9) return 'It\'s early. A new day. What matters today?';
-    if (hour >= 10 && hour <= 14) return 'Middle of the day. How\'s it going?';
-    if (hour >= 15 && hour <= 18) return 'Afternoon. Getting toward evening.';
-    if (hour >= 19 && hour <= 22) return 'Evening is coming. The day is almost done. Did you do what you set out to? Is there anyone you need to see before dark?';
-    return 'What now?';
-  }
-
   /** Step 3: Build the full situation object for the LLM decide() call */
   private buildSituation(trigger: string, recentOutcome?: string): AgentSituation {
     const area = getAreaAt(this.agent.position);
     const areaId = area?.id ?? 'plaza';
     const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
     const currentSeason = SEASON_ORDER[seasonIdx];
+    const hour = this.world.time.hour;
 
     const actions: AvailableAction[] = [];
 
-    // 1. GATHER actions
+    // ========================================
+    // 1. PHYSICAL ACTIONS (location + skill + inventory checks)
+    // ========================================
+
+    // Gather — filtered by location and skill
     const gatherOpts = getGatherOptions(areaId);
     for (const gDef of gatherOpts) {
       const seasonMod = gDef.seasonModifier?.[currentSeason] ?? 1.0;
       const chance = Math.round(gDef.baseSuccessChance * seasonMod * 100);
       const agentSkillLevel = this.agent.skills?.find(s => s.name === gDef.skill)?.level ?? 0;
       if (agentSkillLevel >= gDef.minSkillLevel && chance > 0) {
-        actions.push({ id: 'gather_' + gDef.yields[0].resource, label: 'Gather ' + gDef.yields[0].resource + ' (' + chance + '% chance)', category: 'physical' });
-      } else if (gDef.minSkillLevel > 0) {
-        actions.push({ id: 'gather_' + gDef.yields[0].resource, label: 'Gather ' + gDef.yields[0].resource + ' (need ' + gDef.skill + ' Lv' + gDef.minSkillLevel + ')', category: 'physical' });
+        actions.push({
+          id: 'gather_' + gDef.yields[0].resource,
+          label: 'Gather ' + gDef.yields[0].resource + ' (' + chance + '% chance)',
+          category: 'physical',
+        });
       }
     }
 
-    // 2. CRAFT actions
+    // Craft — filtered by location and skill and ingredients
     const agentSkillMap: Record<string, number> = {};
     for (const s of this.agent.skills ?? []) {
       agentSkillMap[s.name] = s.level;
@@ -1288,7 +1279,6 @@ export class AgentController {
     let craftCount = 0;
     for (const recipe of recipes) {
       if (craftCount >= 3) break;
-      // Check if agent has at least 1 input or recipe needs 0 skill
       const hasAnyInput = recipe.inputs.some(inp =>
         this.agent.inventory.some(i => i.name.toLowerCase().replace(/\s+/g, '_') === inp.resource)
       );
@@ -1302,16 +1292,15 @@ export class AgentController {
       const hasAll = missing.length === 0;
       actions.push({
         id: 'craft_' + recipe.id,
-        label: recipe.name + (hasAll ? ' ✓ ready' : ' (need: ' + missing.join(', ') + ')'),
+        label: recipe.name + (hasAll ? ' (ready)' : ' (need: ' + missing.join(', ') + ')'),
         category: 'physical',
       });
       craftCount++;
     }
 
-    // 3. EAT actions
-    const foodItems = this.agent.inventory.filter(i => i.type === 'food');
+    // Eat — filtered by actual food in inventory
     const foodGroups: Record<string, number> = {};
-    for (const item of foodItems) {
+    for (const item of this.agent.inventory.filter(i => i.type === 'food')) {
       foodGroups[item.name] = (foodGroups[item.name] || 0) + 1;
     }
     for (const [name, qty] of Object.entries(foodGroups)) {
@@ -1322,43 +1311,139 @@ export class AgentController {
       });
     }
 
-    // 4. SOCIAL actions
+    // ========================================
+    // 2. SOCIAL ACTIONS — pattern-based, listed ONCE (not per agent)
+    //    The LLM fills in the name from the nearby list.
+    // ========================================
+
     const nearby = this.world.getNearbyAgents(this.agent.position, 5)
       .filter(a => a.id !== this.agent.id && a.alive !== false && a.state !== 'sleeping');
     const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
+
     for (const a of nearby) {
-      nearbyForSituation.push({ name: a.config.name, activity: a.currentAction || 'idle', id: a.id });
-      if (this.conversationCooldown <= 0) {
-        const firstName = a.config.name.split(' ')[0].toLowerCase();
-        actions.push({ id: 'talk_' + firstName, label: 'Talk to ' + a.config.name, category: 'social' });
-      }
+      const otherInv = a.inventory.length > 0
+        ? a.inventory.reduce((acc: Record<string, number>, item) => {
+            acc[item.name] = (acc[item.name] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>)
+        : {};
+      const otherInvStr = Object.entries(otherInv).length > 0
+        ? ' [carrying: ' + Object.entries(otherInv).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') + ']'
+        : ' [carrying nothing]';
+      nearbyForSituation.push({
+        name: a.config.name,
+        activity: (a.currentAction || 'idle') + otherInvStr,
+        id: a.id,
+      });
     }
 
-    // 5. MOVEMENT actions
+    // Social action patterns — listed ONCE, not per agent
+    if (nearby.length > 0) {
+      if (this.conversationCooldown <= 0) {
+        actions.push({ id: 'talk_NAME', label: 'Talk to someone', category: 'social' });
+      }
+      if (this.agent.inventory.length > 0) {
+        actions.push({ id: 'give_NAME', label: 'Give something to someone', category: 'social' });
+        actions.push({ id: 'trade_NAME', label: 'Trade with someone', category: 'social' });
+      }
+      // ask is rate-limited: cooldown after use, hidden when starving
+      if (this.askCooldown <= 0 && (this.agent.vitals?.hunger ?? 0) < 70) {
+        actions.push({ id: 'ask_NAME', label: 'Ask someone for something', category: 'social' });
+      }
+      actions.push({ id: 'teach_NAME', label: 'Teach someone a skill', category: 'social' });
+      actions.push({ id: 'steal_NAME', label: 'Steal from someone', category: 'social' });
+      actions.push({ id: 'confront_NAME', label: 'Confront someone', category: 'social' });
+      actions.push({ id: 'threaten_NAME', label: 'Threaten someone', category: 'social' });
+      actions.push({ id: 'ally_NAME', label: 'Propose alliance with someone', category: 'social' });
+      actions.push({ id: 'betray_NAME', label: 'Break an alliance with someone', category: 'social' });
+      actions.push({ id: 'fight_NAME', label: 'Attack someone', category: 'social' });
+      actions.push({ id: 'observe_NAME', label: 'Watch someone without interacting', category: 'social' });
+    }
+
+    // ========================================
+    // 3. COMMUNITY ACTIONS (with cooldowns)
+    // ========================================
+
+    // Board post — with cooldown
+    let showBoardPost = true;
+    if (this.cognition.fourStream) {
+      const recentPosts = this.cognition.fourStream.getRecentTimeline(10)
+        .filter(m => m.content.includes('posted on the village board'));
+      if (recentPosts.length >= 2) showBoardPost = false;
+    }
+    if (showBoardPost) {
+      actions.push({ id: 'post_board', label: 'Write on all-agent chat', category: 'creative' });
+    }
+
+    // Group post — only if agent is in an active institution/group
+    const myGroupId = this.agent.institutionIds?.[0];
+    const myGroup = myGroupId ? this.world.getInstitution(myGroupId) : undefined;
+    if (myGroup && !myGroup.dissolved) {
+      actions.push({ id: 'post_group', label: `Write in ${myGroup.name} chat`, category: 'creative' });
+    }
+
+    // Propose rule — with cooldown
+    const recentRules = this.cognition.fourStream
+      ?.getRecentTimeline(10)
+      .filter(m => m.content.includes('proposed a rule'))
+      .length ?? 0;
+    if (recentRules < 1) {
+      actions.push({ id: 'propose_rule', label: 'Propose a rule for voting', category: 'creative' });
+    }
+
+    // Vote on pending rules
+    const pendingRules = this.world.getActiveBoard()
+      .filter(p => p.type === 'rule' && p.ruleStatus === 'proposed'
+        && !p.votes?.some(v => v.agentId === this.agent.id));
+    for (const rule of pendingRules.slice(0, 3)) {
+      actions.push({
+        id: 'vote_like_' + rule.id.slice(0, 8),
+        label: `Support rule: "${rule.content.slice(0, 40)}..."`,
+        category: 'creative',
+      });
+      actions.push({
+        id: 'vote_dislike_' + rule.id.slice(0, 8),
+        label: `Oppose rule: "${rule.content.slice(0, 40)}..."`,
+        category: 'creative',
+      });
+    }
+
+    // Meeting — only with 3+ people nearby, with cooldown
+    if (nearby.length >= 2) {
+      const recentMeetings = this.cognition.fourStream
+        ?.getRecentTimeline(10)
+        .filter(m => m.content.includes('called a meeting'))
+        .length ?? 0;
+      if (recentMeetings < 1) {
+        actions.push({ id: 'call_meeting', label: 'Call everyone here to discuss', category: 'creative' });
+      }
+      actions.push({ id: 'accuse_someone', label: 'Publicly accuse someone', category: 'social' });
+    }
+
+    // ========================================
+    // 4. MOVEMENT ACTIONS
+    // ========================================
+
     for (const [areaKey, desc] of this.cognition.knownPlaces) {
       if (areaKey === areaId) continue;
       const areaName = desc.split(' — ')[0] || areaKey;
       actions.push({ id: 'go_' + areaKey, label: 'Go to ' + areaName, category: 'movement' });
     }
 
-    // 6. ALWAYS available
+    // ========================================
+    // 5. ALWAYS AVAILABLE
+    // ========================================
+
     actions.push({ id: 'rest', label: 'Rest and recover energy', category: 'rest' });
 
-    // Evening rhythm: put social actions FIRST (before physical) to create natural social time
-    const hour = this.world.time.hour;
-    let orderedActions: AvailableAction[];
-    if (hour >= 19 && hour <= 22) {
-      const social = actions.filter(a => a.category === 'social');
-      const movement = actions.filter(a => a.category === 'movement');
-      const rest = actions.filter(a => a.category === 'rest');
-      const physical = actions.filter(a => a.category === 'physical');
-      const creative = actions.filter(a => a.category === 'creative');
-      orderedActions = [...social, ...movement, ...rest, ...physical, ...creative];
-    } else {
-      orderedActions = actions;
-    }
+    // ========================================
+    // NO ACTION ORDERING.
+    // Actions stay in the order generated above:
+    // physical → social (grouped by person) → community → movement → rest
+    // The LLM's personality and memory determine what it picks.
+    // ========================================
 
-    // Build inventory groups
+    // Build inventory groups for the situation output
     const invGroups: Record<string, { name: string; type: string; qty: number }> = {};
     for (const item of this.agent.inventory) {
       const key = item.name;
@@ -1366,21 +1451,51 @@ export class AgentController {
       invGroups[key].qty++;
     }
 
-    // Enrich trigger with time-of-day rhythm if it's the generic arrival/idle trigger
-    const enrichedTrigger = trigger.startsWith('You just arrived')
-      || trigger === 'You just finished a conversation. What now?'
-      || trigger === 'What now?'
-      ? trigger + ' ' + this.getTimeOfDayTrigger(hour)
-      : trigger;
+    // Today summary — what the agent has done today
+    let todaySummary: string | undefined;
+    if (this.cognition.fourStream) {
+      const allRecent = this.cognition.fourStream.getRecentTimeline(20);
+      if (allRecent.length > 0) {
+        todaySummary = allRecent
+          .slice(-10) // last 10 events
+          .map(m => m.content)
+          .join('. ');
+      }
+    }
 
-    // Social pressure and commitments
-    const socialPressure = this.buildSocialPressure();
-    const commitments = this.buildLedgerContext();
+    // Time calculations
+    const hoursUntilDark = Math.max(0, 19 - hour);
+    const hoursUntilSleep = Math.max(0, 22 - hour);
+
+    // Board posts
+    let boardPosts: string | undefined;
+    if (this.cognition.knownPlaces.has('plaza')) {
+      const summary = this.world.getBoardSummary();
+      if (summary && summary !== 'The village board is empty.') {
+        boardPosts = summary;
+      }
+    }
+
+    // Build group info from Institution membership
+    let groupInfo: string | undefined;
+    const gId = this.agent.institutionIds?.[0];
+    const grp = gId ? this.world.getInstitution(gId) : undefined;
+    if (grp && !grp.dissolved) {
+      const memberNames = grp.members
+        .map(m => this.world.getAgent(m.agentId)?.config.name ?? 'Unknown')
+        .join(', ');
+      groupInfo = `${grp.name} (${grp.members.length} members: ${memberNames})`;
+      if (grp.description) groupInfo += `\nPurpose: ${grp.description}`;
+      if (grp.rules.length > 0) groupInfo += `\nRules: ${grp.rules.join('; ')}`;
+    }
 
     return {
       location: area?.name ?? 'Unknown',
       areaId,
-      time: { day: this.world.time.day, hour: this.world.time.hour },
+      time: { day: this.world.time.day, hour },
+      hoursUntilDark,
+      hoursUntilSleep,
+      season: currentSeason,
       vitals: {
         hunger: this.agent.vitals?.hunger ?? 0,
         energy: this.agent.vitals?.energy ?? 100,
@@ -1388,12 +1503,12 @@ export class AgentController {
       },
       inventory: Object.values(invGroups),
       nearbyAgents: nearbyForSituation,
-      availableActions: orderedActions,
+      availableActions: actions,  // NO ordering applied
       recentOutcome,
-      trigger: enrichedTrigger,
-      goals: this.currentGoals.length > 0 ? this.currentGoals : undefined,
-      socialPressure: socialPressure || undefined,
-      commitments: commitments || undefined,
+      trigger,  // No enrichedTrigger — just the raw trigger
+      todaySummary,
+      boardPosts,
+      groupInfo,
     };
   }
 
@@ -1500,16 +1615,19 @@ export class AgentController {
       }
     }
 
-    // Store outcome as memory
+    // Store outcome as memory — action_outcome so it enters the four-stream timeline
+    const outcomeImportance = outcome.success ? 4 : 6;
     void this.cognition.addMemory({
       id: crypto.randomUUID(),
       agentId: actor.id,
-      type: 'observation',
+      type: 'action_outcome',
       content: outcome.description,
-      importance: outcome.success ? 4 : 6,
+      importance: outcomeImportance,
       timestamp: Date.now(),
       relatedAgentIds: [],
     });
+    // Four Stream: accumulate importance for belief generation
+    this.importanceAccum += outcomeImportance;
 
     // Broadcast
     this.broadcaster.agentAction(actor.id, outcome.description);
@@ -1518,6 +1636,10 @@ export class AgentController {
   /** Step 5: Execute a structured decision — dispatch to game systems */
   private async executeDecision(decision: AgentDecision, situation: AgentSituation): Promise<void> {
     const actionId = decision.actionId;
+    // Truncated reason for action broadcasts — "action — reason"
+    const shortReason = decision.reason?.length > 80
+      ? decision.reason.slice(0, 77) + '...'
+      : (decision.reason || '');
 
     // --- Gather ---
     if (actionId.startsWith('gather_')) {
@@ -1547,8 +1669,9 @@ export class AgentController {
         : `You tried to gather ${resource} but failed. ${outcome.description}`;
       this.state = 'performing';
       this.currentPerformingActivity = `gathering ${resource}`;
-      this.activityTimer = 10;
+      this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+      this.broadcaster.agentAction(this.agent.id, `gathering ${resource} — "${shortReason}"`);
       return;
     }
 
@@ -1576,8 +1699,9 @@ export class AgentController {
         : `You tried to eat but couldn't. ${outcome.description}`;
       this.state = 'performing';
       this.currentPerformingActivity = 'eating';
-      this.activityTimer = 5;
+      this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'eating');
+      this.broadcaster.agentAction(this.agent.id, `eating ${foodName} — "${shortReason}"`);
       return;
     }
 
@@ -1612,8 +1736,9 @@ export class AgentController {
         : `You tried to craft ${recipe.name} but failed. ${outcome.description}`;
       this.state = 'performing';
       this.currentPerformingActivity = `crafting ${recipe.name}`;
-      this.activityTimer = 15;
+      this.activityTimer = 8;
       this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
+      this.broadcaster.agentAction(this.agent.id, `crafting ${recipe.name} — "${shortReason}"`);
       return;
     }
 
@@ -1622,20 +1747,51 @@ export class AgentController {
       const targetAreaId = actionId.replace('go_', '');
       const targetPos = getRandomPositionInArea(targetAreaId);
       this.startMoveTo(targetPos);
-      this.broadcaster.agentAction(this.agent.id, `heading to ${targetAreaId}`);
+      // Store the reason for going — so the agent remembers WHY it went there when decide() fires on arrival
+      this.pendingArrivalIntent = decision.reason;
+      this.broadcaster.agentAction(this.agent.id, `heading to ${targetAreaId} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Give ---
+    if (actionId.startsWith('give_')) {
+      const firstName = actionId.replace('give_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target || this.agent.inventory.length === 0) {
+        this.lastTrigger = 'You wanted to give something but couldn\'t.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Pick item from decision.reason if mentioned, else first non-food
+      const reasonLower = (decision.reason || '').toLowerCase();
+      const item = this.agent.inventory.find(i =>
+        reasonLower.includes(i.name.toLowerCase())
+      ) || this.agent.inventory.find(i => i.type !== 'food') || this.agent.inventory[0];
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'give' as const, resource: item.name.toLowerCase().replace(/\s+/g, '_'), targetAgent: target.config.name.split(' ')[0], quantity: 1, raw: `give ${item.name} to ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      // Adjust trust: target trusts giver more
+      this.adjustTrust(target, this.agent, 10);
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider);
+      }
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name} — "${shortReason}"`);
       return;
     }
 
     // --- Social (talk) ---
     if (actionId.startsWith('talk_')) {
       const firstName = actionId.replace('talk_', '');
-      // Find the agent by first name
       for (const agent of this.world.agents.values()) {
         if (agent.id !== this.agent.id &&
             agent.config.name.split(' ')[0].toLowerCase() === firstName) {
           this.pendingConversationTarget = agent.id;
           this.pendingConversationPurpose = decision.reason;
-          // Move toward target if far
           const dist = Math.abs(this.agent.position.x - agent.position.x) + Math.abs(this.agent.position.y - agent.position.y);
           if (dist > 3) {
             this.startMoveTo({ ...agent.position });
@@ -1649,10 +1805,1062 @@ export class AgentController {
           return;
         }
       }
-      // Agent not found — go idle
       this.lastTrigger = `You looked around but couldn't find who you wanted to talk to.`;
       this.state = 'idle';
       this.idleTimer = 0;
+      return;
+    }
+
+    // --- Trade ---
+    if (actionId.startsWith('trade_')) {
+      const firstName = actionId.replace('trade_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target || this.agent.inventory.length === 0) {
+        this.lastTrigger = 'You wanted to trade but couldn\'t.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Pick item from decision.reason if mentioned, else first item
+      const reasonLower = (decision.reason || '').toLowerCase();
+      const item = this.agent.inventory.find(i =>
+        reasonLower.includes(i.name.toLowerCase())
+      ) || this.agent.inventory[0];
+
+      // Try to extract what the agent wants in return from their reason
+      const requestItems: { resource: string; qty: number }[] = [];
+      const targetInv = target.inventory || [];
+      for (const ti of targetInv) {
+        if (reasonLower.includes(ti.name.toLowerCase()) && ti.name.toLowerCase() !== item.name.toLowerCase()) {
+          requestItems.push({ resource: ti.name.toLowerCase().replace(/\s+/g, '_'), qty: 1 });
+          break;
+        }
+      }
+
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'trade_offer' as const, offerItems: [{ resource: item.name.toLowerCase().replace(/\s+/g, '_'), qty: 1 }], requestItems, targetAgent: target.config.name.split(' ')[0], raw: `trade ${item.name} with ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      // Dossier update
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+      }
+      // PUBLIC: trade post if successful
+      if (outcome.success) {
+        const tradePost: BoardPost = {
+          id: crypto.randomUUID(),
+          authorId: 'system',
+          authorName: 'Village Trades',
+          type: 'trade',
+          channel: 'all',
+          content: `${this.agent.config.name} traded ${item.name} with ${target.config.name}. ${outcome.description}`,
+          timestamp: Date.now(),
+          day: this.world.time.day,
+        };
+        this.world.addBoardPost(tradePost);
+        this.broadcaster.boardPost(tradePost);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post: tradePost });
+      }
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `traded with ${target.config.name} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Teach ---
+    if (actionId.startsWith('teach_')) {
+      const firstName = actionId.replace('teach_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      const skill = this.agent.skills?.find(s => s.level >= 1);
+      if (!target || !skill) {
+        this.lastTrigger = 'You wanted to teach but couldn\'t.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'teach' as const, skill: skill.name, targetAgent: target.config.name.split(' ')[0], raw: `teach ${skill.name} to ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      this.adjustTrust(target, this.agent, 5);
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `teaching ${skill.name} to ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `teaching ${skill.name} to ${target.config.name} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Threaten ---
+    if (actionId.startsWith('threaten_')) {
+      const firstName = actionId.replace('threaten_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to threaten someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const threatText = decision.reason;
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+        content: `I threatened ${target.config.name}: ${threatText}`,
+        importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
+      });
+
+      const targetCog = (this.world as any).cognitions?.get?.(target.id);
+      if (targetCog) {
+        void targetCog.addMemory({
+          id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+          content: `${this.agent.config.name} threatened me: ${threatText}`,
+          importance: 9, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+        });
+        if (targetCog.fourStream) {
+          targetCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${this.agent.config.name} threatened me. I need to decide how to respond.`,
+            category: 'threat', relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      this.adjustTrust(this.agent, target, -25);
+      this.adjustTrust(target, this.agent, -25);
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          `I threatened ${target.config.name}: ${threatText}`, this.cognition.llmProvider);
+      }
+
+      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      if (targetCtrl) {
+        targetCtrl.lastTrigger = `${this.agent.config.name} just threatened you: "${threatText}". What do you do?`;
+        targetCtrl.idleTimer = 7;
+      }
+
+      this.lastOutcome = `You threatened ${target.config.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `threatening ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `threatened ${target.config.name} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Ask ---
+    if (actionId.startsWith('ask_')) {
+      const firstName = actionId.replace('ask_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to ask someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+        content: `I asked ${target.config.name} for help: ${decision.reason}`,
+        importance: 6, timestamp: Date.now(), relatedAgentIds: [target.id],
+      });
+
+      const targetCog = (this.world as any).cognitions?.get?.(target.id);
+      if (targetCog) {
+        void targetCog.addMemory({
+          id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+          content: `${this.agent.config.name} asked me for help: ${decision.reason}`,
+          importance: 6, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+        });
+        if (targetCog.fourStream) {
+          targetCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${this.agent.config.name} asked me for something. I should respond.`,
+            category: 'unresolved', relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes,
+            expiresAt: this.world.time.totalMinutes + 480,
+          });
+        }
+      }
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          `I asked ${target.config.name} for help.`, this.cognition.llmProvider);
+      }
+
+      this.lastOutcome = `You asked ${target.config.name} for help. They haven't given you anything yet.`;
+      this.lastTrigger = `You asked for help but got nothing yet. If you need food, you'll have to gather it, trade for it, or take it yourself.`;
+      this.askCooldown = 8;  // Can't ask again for 8 ticks
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `asking ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `asked ${target.config.name} for something — "${shortReason}"`);
+      return;
+    }
+
+    // --- Observe ---
+    if (actionId.startsWith('observe_')) {
+      const firstName = actionId.replace('observe_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to observe someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const targetActivity = target.currentAction || 'idle';
+      const targetInv = target.inventory.length > 0
+        ? target.inventory.map(i => i.name).join(', ') : 'nothing';
+      const observation = `I watched ${target.config.name}. They were ${targetActivity}. They were carrying: ${targetInv}.`;
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'observation',
+        content: observation, importance: 5, timestamp: Date.now(),
+        relatedAgentIds: [target.id],
+      });
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          observation, this.cognition.llmProvider);
+      }
+
+      this.lastOutcome = observation;
+      this.lastTrigger = `You observed ${target.config.name}. ${observation}`;
+      this.state = 'performing'; this.activityTimer = 4;
+      this.world.updateAgentState(this.agent.id, 'active', `observing ${target.config.name}`);
+      return;
+    }
+
+    // --- Confront ---
+    if (actionId.startsWith('confront_')) {
+      const firstName = actionId.replace('confront_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to confront someone but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const confrontText = decision.sayAloud || decision.reason;
+      // Memory for confronter
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I confronted ${target.config.name}: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
+      // Memory for target
+      const targetCognition = (this.world as any).cognitions?.get?.(target.id);
+      if (targetCognition) {
+        void targetCognition.addMemory({ id: crypto.randomUUID(), agentId: target.id, type: 'action_outcome', content: `${this.agent.config.name} confronted me: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id] });
+      }
+      // Witness memories for all nearby
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.id !== target.id);
+      for (const witness of nearbyAll) {
+        const wCog = (this.world as any).cognitions?.get?.(witness.id);
+        if (wCog) {
+          void wCog.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `I saw ${this.agent.config.name} confront ${target.config.name}: "${confrontText}"`, importance: 5, timestamp: Date.now(), relatedAgentIds: [this.agent.id, target.id] });
+        }
+      }
+      this.adjustTrust(target, this.agent, -15);
+      this.adjustTrust(this.agent, target, -15);
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I confronted ${target.config.name}: ${confrontText}`, this.cognition.llmProvider);
+      }
+      // Force target to react
+      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      if (targetCtrl) {
+        targetCtrl.lastTrigger = `${this.agent.config.name} just confronted you: "${confrontText}". How do you respond?`;
+        targetCtrl.idleTimer = targetCtrl.idleThreshold;
+      }
+      this.lastOutcome = `You confronted ${target.config.name}.`;
+      this.lastTrigger = `You just confronted ${target.config.name}. How do they react?`;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `confronting ${target.config.name}`);
+      this.broadcaster.agentAction(this.agent.id, `confronted ${target.config.name} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Steal ---
+    if (actionId.startsWith('steal_')) {
+      const firstName = actionId.replace('steal_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to steal but the target wasn\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'steal' as const, targetAgent: target.config.name.split(' ')[0], raw: `steal from ${target.config.name}` };
+      const outcome = executeAction(intent, agentState, worldState);
+      this.applyOutcomeToWorld(outcome);
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.description;
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+      }
+      // PUBLIC: news post + all agents get memory
+      const stealPost: BoardPost = {
+        id: crypto.randomUUID(),
+        authorId: 'system',
+        authorName: 'Village News',
+        type: 'news',
+        channel: 'all',
+        content: `${this.agent.config.name} was caught stealing from ${target.config.name}!`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(stealPost);
+      this.broadcaster.boardPost(stealPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: stealPost });
+      for (const [id] of this.world.agents) {
+        if (id === this.agent.id) continue;
+        const cog = (this.world as any).cognitions?.get?.(id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: id,
+            type: 'observation',
+            content: `${this.agent.config.name} stole from ${target.config.name}.`,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id, target.id],
+          });
+        }
+      }
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `stealing`);
+      return;
+    }
+
+    // --- Fight ---
+    if (actionId.startsWith('fight_')) {
+      const firstName = actionId.replace('fight_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to fight but the target wasn\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const agentState = this.buildAgentStateForResolver(situation);
+      const worldState = this.buildWorldState();
+      const intent = { type: 'fight' as const, targetAgent: target.config.name, raw: 'fight ' + target.config.name };
+      const outcome = executeAction(intent, agentState, worldState);
+
+      // Apply effects to SELF (health loss from retaliation, energy spent)
+      this.applyOutcomeToWorld(outcome);
+
+      // Apply effects to TARGET (health damage)
+      if (outcome.success && outcome.targetAgentId) {
+        const targetAgent = this.world.getAgent(outcome.targetAgentId);
+        if (targetAgent && targetAgent.vitals && outcome.targetHealthChange) {
+          targetAgent.vitals.health = Math.max(0, Math.min(100,
+            targetAgent.vitals.health + outcome.targetHealthChange));
+
+          // Check if target died from the fight
+          if (targetAgent.vitals.health <= 0) {
+            console.log(`[Fight] ${target.config.name} health dropped to 0 from fight with ${this.agent.config.name}`);
+          }
+        }
+
+        // Target gets a memory of being attacked
+        const targetCog = (this as any).world?.cognitions?.get?.(outcome.targetAgentId);
+        if (targetCog) {
+          void targetCog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: outcome.targetAgentId,
+            type: 'observation',
+            content: this.agent.config.name + ' attacked me! I took ' + Math.abs(outcome.targetHealthChange ?? 0) + ' damage.',
+            importance: 9,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+        }
+
+        // Force target to react immediately
+        const targetCtrl = (this.world as any).controllers?.get?.(outcome.targetAgentId) as AgentController | undefined;
+        if (targetCtrl && targetAgent) {
+          targetCtrl.lastTrigger = this.agent.config.name + ' just attacked you! Health: ' + Math.round(targetAgent.vitals?.health ?? 0) + '/100. What do you do?';
+          targetCtrl.idleTimer = 7;
+        }
+      }
+
+      // ALL nearby agents witness the fight
+      const witnesses = this.world.getNearbyAgents(this.agent.position, 5)
+        .filter(a => a.id !== this.agent.id && a.id !== target.id && a.alive !== false);
+      for (const w of witnesses) {
+        const wCog = (this as any).world?.cognitions?.get?.(w.id);
+        if (wCog) {
+          void wCog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: w.id,
+            type: 'observation',
+            content: 'I saw ' + this.agent.config.name + ' attack ' + target.config.name + '! ' + outcome.description,
+            importance: 8,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id, target.id],
+          });
+        }
+        // Force witnesses to react
+        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        if (wCtrl) {
+          wCtrl.lastTrigger = this.agent.config.name + ' just attacked ' + target.config.name + ' right in front of you! What do you do?';
+          wCtrl.idleTimer = 7;
+        }
+      }
+
+      // Trust destruction — fighting destroys trust for everyone who saw
+      this.adjustTrust(this.agent, target, -40);
+      this.adjustTrust(target, this.agent, -40);
+      // Witnesses lose trust in the attacker
+      for (const w of witnesses) {
+        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        if (wCtrl) {
+          wCtrl.adjustTrust(w, this.agent, -20);
+        }
+      }
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+      }
+
+      // Emit fight event for engine-level handling
+      if (this.bus) {
+        this.bus.emit({
+          type: 'fight_occurred',
+          attackerId: this.agent.id,
+          defenderId: target.id,
+          outcome: outcome.description,
+          location: this.agent.position,
+        });
+      }
+
+      // PUBLIC: news post
+      const fightPost: BoardPost = {
+        id: crypto.randomUUID(),
+        authorId: 'system',
+        authorName: 'Village News',
+        type: 'news',
+        channel: 'all',
+        content: `${this.agent.config.name} attacked ${target.config.name}! ${outcome.description}`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(fightPost);
+      this.broadcaster.boardPost(fightPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: fightPost });
+
+      this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '! — "' + shortReason + '"', '⚔️');
+      this.lastOutcome = outcome.description;
+      this.lastTrigger = outcome.success
+        ? 'You just fought ' + target.config.name + '. You took damage too. Everyone saw.'
+        : 'Fight failed: ' + (outcome.reason || 'too exhausted');
+      this.state = 'performing'; this.activityTimer = 5;
+      this.world.updateAgentState(this.agent.id, 'active', `fighting ${target.config.name}`);
+      return;
+    }
+
+    // --- Alliance ---
+    if (actionId.startsWith('ally_')) {
+      const firstName = actionId.replace('ally_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to form a group but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      // Check if I'm already in a group
+      const myGroupId = this.agent.institutionIds?.[0];
+      const myGroup = myGroupId ? this.world.getInstitution(myGroupId) : undefined;
+
+      // Check if target is already in MY group
+      if (myGroup && myGroup.members.some(m => m.agentId === target.id)) {
+        this.lastTrigger = `${target.config.name} is already in your group.`;
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      if (myGroup && !myGroup.dissolved) {
+        // I'm in a group → INVITE target to join
+        this.world.addInstitutionMember(myGroup.id, {
+          agentId: target.id, role: 'member', joinedAt: Date.now(),
+        });
+
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+          content: `I invited ${target.config.name} to join ${myGroup.name}. They're now a member.`,
+          importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id],
+        });
+        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        if (targetCog) {
+          void targetCog.addMemory({
+            id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+            content: `${this.agent.config.name} invited me to join ${myGroup.name}. I'm now a member.`,
+            importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+          });
+          if (targetCog.fourStream) {
+            targetCog.fourStream.addConcern({
+              id: crypto.randomUUID(),
+              content: `I joined ${myGroup.name}. I should participate and follow the group's purpose.`,
+              category: 'commitment',
+              relatedAgentIds: myGroup.members.map((m: any) => m.agentId),
+              createdAt: this.world.time.totalMinutes,
+              permanent: true,
+            });
+          }
+        }
+        this.adjustTrust(this.agent, target, 15);
+        this.adjustTrust(target, this.agent, 15);
+        if (this.cognition.fourStream) {
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `${target.config.name} joined ${myGroup.name}.`, this.cognition.llmProvider);
+        }
+
+        const newsPost: BoardPost = {
+          id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+          type: 'news', channel: 'all',
+          content: `${target.config.name} joined ${myGroup.name} (now ${myGroup.members.length} members).`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(newsPost);
+        this.broadcaster.boardPost(newsPost);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
+
+        this.broadcaster.institutionUpdate(myGroup);
+        this.lastOutcome = `${target.config.name} joined ${myGroup.name}.`;
+        this.lastTrigger = this.lastOutcome;
+        this.state = 'performing'; this.activityTimer = 3;
+        this.world.updateAgentState(this.agent.id, 'active', `inviting ${target.config.name} to ${myGroup.name}`);
+        this.broadcaster.agentAction(this.agent.id, `invited ${target.config.name} to join ${myGroup.name}`);
+        return;
+
+      } else {
+        // Neither of us has a group → CREATE new group
+        let groupName: string;
+        try {
+          groupName = await this.cognition.llmProvider.complete(
+            'Generate a short group/community name (2-4 words). No quotes, no preamble.',
+            `${this.agent.config.name} and ${target.config.name} are forming a group. Reason: ${decision.reason}\n\nWhat would they name it? Examples: "The Farm Collective", "Lakeside Pact", "Builders Guild", "The Survivors". Write ONLY the name.`
+          );
+          groupName = groupName.replace(/^["']|["']$/g, '').trim();
+          if (groupName.length < 3 || groupName.length > 40) {
+            groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
+          }
+        } catch {
+          groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
+        }
+
+        const group: Institution = {
+          id: crypto.randomUUID(),
+          name: groupName,
+          type: 'community',
+          description: decision.reason || 'A group formed for mutual benefit.',
+          founderId: this.agent.id,
+          members: [
+            { agentId: this.agent.id, role: 'founder', joinedAt: Date.now() },
+            { agentId: target.id, role: 'member', joinedAt: Date.now() },
+          ],
+          treasury: 0,
+          rules: [],
+          createdAt: Date.now(),
+        };
+        this.world.addInstitution(group);
+        if (!this.agent.institutionIds) this.agent.institutionIds = [];
+        this.agent.institutionIds.push(group.id);
+        if (!target.institutionIds) target.institutionIds = [];
+        target.institutionIds.push(group.id);
+
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+          content: `I founded ${groupName} with ${target.config.name}. ${decision.reason}`,
+          importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
+        });
+        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        if (targetCog) {
+          void targetCog.addMemory({
+            id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+            content: `${this.agent.config.name} and I founded ${groupName}. ${decision.reason}`,
+            importance: 8, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+          });
+        }
+        if (this.cognition.fourStream) {
+          this.cognition.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `I founded ${groupName} with ${target.config.name}. I should build this community.`,
+            category: 'commitment', relatedAgentIds: [target.id],
+            createdAt: this.world.time.totalMinutes, permanent: true,
+          });
+        }
+        if (targetCog?.fourStream) {
+          targetCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `I'm part of ${groupName} with ${this.agent.config.name}. I should contribute.`,
+            category: 'commitment', relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes, permanent: true,
+          });
+        }
+        this.adjustTrust(this.agent, target, 20);
+        this.adjustTrust(target, this.agent, 20);
+        if (this.cognition.fourStream) {
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `We founded ${groupName} together.`, this.cognition.llmProvider);
+        }
+
+        const newsPost: BoardPost = {
+          id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+          type: 'news', channel: 'all',
+          content: `${this.agent.config.name} and ${target.config.name} founded "${groupName}".`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(newsPost);
+        this.broadcaster.boardPost(newsPost);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
+
+        this.broadcaster.institutionUpdate(group);
+        this.lastOutcome = `You founded ${groupName} with ${target.config.name}.`;
+        this.lastTrigger = this.lastOutcome;
+        this.state = 'performing'; this.activityTimer = 3;
+        this.world.updateAgentState(this.agent.id, 'active', `founding ${groupName}`);
+        this.broadcaster.agentAction(this.agent.id, `founded "${groupName}" with ${target.config.name}`);
+        return;
+      }
+    }
+
+    // --- Betray ---
+    if (actionId.startsWith('betray_')) {
+      const firstName = actionId.replace('betray_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      if (!target) {
+        this.lastTrigger = 'You wanted to leave but they weren\'t here.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      // Find a shared group
+      const sharedGroupId = this.agent.institutionIds?.find(id => {
+        const inst = this.world.getInstitution(id);
+        return inst && !inst.dissolved && inst.members.some(m => m.agentId === target.id);
+      });
+      if (!sharedGroupId) {
+        this.lastTrigger = `You share no group with ${target.config.name}.`;
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const group = this.world.getInstitution(sharedGroupId)!;
+      this.world.removeInstitutionMember(sharedGroupId, this.agent.id);
+
+      // If only 1 member left, dissolve
+      if (group.members.length <= 1) {
+        this.world.dissolveInstitution(sharedGroupId);
+      }
+
+      // Trust destruction with all remaining members
+      for (const member of group.members) {
+        if (member.agentId === this.agent.id) continue;
+        const memberAgent = this.world.getAgent(member.agentId);
+        if (memberAgent) {
+          this.adjustTrust(this.agent, memberAgent, -30);
+          this.adjustTrust(memberAgent, this.agent, -30);
+        }
+      }
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+        content: `I left ${group.name}.`,
+        importance: 8, timestamp: Date.now(),
+        relatedAgentIds: group.members.map(m => m.agentId),
+      });
+
+      for (const member of group.members) {
+        if (member.agentId === this.agent.id) continue;
+        const memberCog = (this.world as any).cognitions?.get?.(member.agentId);
+        if (memberCog) {
+          void memberCog.addMemory({
+            id: crypto.randomUUID(), agentId: member.agentId, type: 'observation',
+            content: `${this.agent.config.name} left ${group.name}.${group.dissolved ? ' The group has dissolved.' : ''}`,
+            importance: 8, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+          });
+          if (memberCog.fourStream) {
+            memberCog.fourStream.addConcern({
+              id: crypto.randomUUID(),
+              content: `${this.agent.config.name} left ${group.name}. ${group.dissolved ? 'The group is gone.' : 'We need to decide what to do.'}`,
+              category: 'threat', relatedAgentIds: [this.agent.id],
+              createdAt: this.world.time.totalMinutes,
+            });
+          }
+        }
+      }
+
+      if (this.cognition.fourStream) {
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
+          `I left ${group.name}.`, this.cognition.llmProvider);
+      }
+
+      const betrayPost: BoardPost = {
+        id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+        type: 'news', channel: 'all',
+        content: `${this.agent.config.name} left ${group.name}.${group.dissolved ? ' The group has dissolved.' : ''}`,
+        timestamp: Date.now(), day: this.world.time.day,
+      };
+      this.world.addBoardPost(betrayPost);
+      this.broadcaster.boardPost(betrayPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: betrayPost });
+
+      this.broadcaster.institutionUpdate(group);
+      this.lastOutcome = `You left ${group.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `leaving ${group.name}`);
+      this.broadcaster.agentAction(this.agent.id, `left ${group.name} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Accuse ---
+    if (actionId === 'accuse_someone') {
+      const accusation = decision.sayAloud || decision.reason || 'I accuse someone.';
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.alive !== false);
+      let accused: typeof nearbyAll[0] | undefined;
+      for (const a of nearbyAll) {
+        if (accusation.toLowerCase().includes(a.config.name.split(' ')[0].toLowerCase())) {
+          accused = a; break;
+        }
+      }
+      for (const witness of nearbyAll) {
+        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `${this.agent.config.name} publicly accused ${accused?.config.name ?? 'someone'}: "${accusation.slice(0, 80)}"`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id, ...(accused ? [accused.id] : [])] });
+      }
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'rumor' as const,
+        channel: 'all' as const,
+        content: accusation,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+        targetIds: accused ? [accused.id] : undefined,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+      if (accused) {
+        this.adjustTrust(this.agent, accused, -15);
+        this.adjustTrust(accused, this.agent, -15);
+      }
+      this.lastOutcome = `You publicly accused ${accused?.config.name ?? 'someone'}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', 'accusing');
+      this.broadcaster.agentAction(this.agent.id, `accused ${accused?.config.name ?? 'someone'} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Post Board ---
+    if (actionId === 'post_board') {
+      // Generate public post content via LLM — decision.reason is private inner thought
+      let content: string;
+      try {
+        const identity = this.cognition.identityBlock;
+        const postPrompt = `${identity}
+
+You decided to write a message on the village board.
+
+Your reason for posting: ${decision.reason}
+
+Write the ACTUAL MESSAGE you would post. This is public — other villagers read it. Not your inner thoughts — what you actually write down. Stay in character.
+
+Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
+        content = await this.cognition.llmProvider.complete(
+          `You are ${this.agent.config.name}. Write only the board message. No preamble, no quotes.`,
+          postPrompt,
+        );
+        content = content.replace(/^["']|["']$/g, '').trim();
+        if (content.length < 3 || content.length > 300) {
+          console.warn(`[PostBoard] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
+          content = decision.reason.slice(0, 200);
+        }
+      } catch (err) {
+        console.error(`[PostBoard] ${this.agent.config.name} LLM call failed:`, err);
+        content = decision.reason.slice(0, 200);
+      }
+
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'announcement' as const,
+        channel: 'all' as const,
+        content,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I posted on the village board: "${content.slice(0, 80)}"`, importance: 4, timestamp: Date.now(), relatedAgentIds: [] });
+      this.lastOutcome = `You posted on the village board.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', 'posting on board');
+      this.broadcaster.agentAction(this.agent.id, `posted on village board — "${shortReason}"`);
+      return;
+    }
+
+    // --- Post Group Chat ---
+    if (actionId === 'post_group') {
+      const groupId = this.agent.institutionIds?.[0];
+      const group = groupId ? this.world.getInstitution(groupId) : undefined;
+      if (!group || group.dissolved) {
+        this.lastTrigger = 'You have no group to post in.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      let content: string;
+      try {
+        const identity = this.cognition.identityBlock;
+        content = await this.cognition.llmProvider.complete(
+          `You are ${this.agent.config.name}. Write only the group message. No preamble, no quotes.`,
+          `${identity}\n\nWrite a private message for your ${group.name} group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences. Write ONLY the message text.`
+        );
+        content = content.replace(/^["']|["']$/g, '').trim();
+        if (content.length < 3 || content.length > 300) {
+          console.warn(`[PostGroup] ${this.agent.config.name} content length out of range (${content.length}), using reason`);
+          content = decision.reason.slice(0, 200);
+        }
+      } catch (err) {
+        console.error(`[PostGroup] ${this.agent.config.name} LLM call failed:`, err);
+        content = decision.reason.slice(0, 200);
+      }
+
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'announcement' as const,
+        channel: 'group' as const,
+        groupId: group.id,
+        content,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+
+      for (const member of group.members) {
+        if (member.agentId === this.agent.id) continue;
+        const cog = (this.world as any).cognitions?.get?.(member.agentId);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: member.agentId,
+            type: 'observation',
+            content: `${this.agent.config.name} posted in ${group.name}: "${content.slice(0, 60)}"`,
+            importance: 5,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+        }
+      }
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: 'action_outcome',
+        content: `I posted in ${group.name}: "${content.slice(0, 60)}"`,
+        importance: 4,
+        timestamp: Date.now(),
+        relatedAgentIds: group.members.map(m => m.agentId).filter(id => id !== this.agent.id),
+      });
+
+      this.lastOutcome = `You posted in ${group.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `posting in ${group.name}`);
+      this.broadcaster.agentAction(this.agent.id, `posted in ${group.name} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Call Meeting ---
+    if (actionId === 'call_meeting') {
+      const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.alive !== false);
+      const names = nearbyAll.map(a => a.config.name).join(', ');
+      const meetingTopic = decision.reason || 'something important';
+
+      // Caller gets memory
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I called a meeting with ${names}. Topic: ${meetingTopic}`, importance: 6, timestamp: Date.now(), relatedAgentIds: nearbyAll.map(a => a.id) });
+
+      // All nearby agents get notified and forced to react
+      for (const a of nearbyAll) {
+        const cog = (this.world as any).cognitions?.get?.(a.id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: a.id,
+            type: 'observation',
+            content: `${this.agent.config.name} called a meeting: "${meetingTopic}"`,
+            importance: 6,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id, ...nearbyAll.map(n => n.id)],
+          });
+        }
+        // Force nearby agents to react to the meeting
+        const ctrl = (this.world as any).controllers?.get?.(a.id) as AgentController | undefined;
+        if (ctrl) {
+          ctrl.lastTrigger = `${this.agent.config.name} just called a meeting. They said: "${meetingTopic}". ${names} are here. What do you do?`;
+          ctrl.idleTimer = 7;
+        }
+      }
+
+      this.lastOutcome = `You called a meeting. ${names} are listening.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', 'calling meeting');
+      this.broadcaster.agentAction(this.agent.id, `called a meeting — "${shortReason}"`);
+      return;
+    }
+
+    // --- Propose Rule ---
+    if (actionId === 'propose_rule') {
+      let ruleContent: string;
+      try {
+        const identity = this.cognition.identityBlock;
+        const rulePrompt = `${identity}
+
+You decided to propose a rule for the village.
+
+Your reason: ${decision.reason}
+
+Write the ACTUAL RULE you would propose. This is a public proposal — other villagers will read and vote on it. Not your inner thoughts — what you actually write down. Stay in character.
+
+Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
+        ruleContent = await this.cognition.llmProvider.complete(
+          `You are ${this.agent.config.name}. Write only the proposed rule. No preamble, no quotes.`,
+          rulePrompt,
+        );
+        ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
+        if (ruleContent.length < 3 || ruleContent.length > 300) {
+          console.warn(`[ProposeRule] ${this.agent.config.name} content length out of range (${ruleContent.length}), using reason`);
+          ruleContent = decision.reason.slice(0, 200);
+        }
+      } catch (err) {
+        console.error(`[ProposeRule] ${this.agent.config.name} LLM call failed:`, err);
+        ruleContent = decision.reason.slice(0, 200);
+      }
+
+      const post = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'rule' as const,
+        channel: 'all' as const,
+        content: ruleContent,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+        votes: [] as { agentId: string; vote: 'like' | 'dislike' }[],
+        ruleStatus: 'proposed' as const,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+
+      // All agents get a memory about the proposed rule
+      for (const [id, agent] of this.world.agents) {
+        if (id === this.agent.id || agent.alive === false) continue;
+        const cog = (this.world as any).cognitions?.get?.(id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(),
+            agentId: id,
+            type: 'observation',
+            content: `${this.agent.config.name} proposed a rule: "${ruleContent}"`,
+            importance: 7,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+        }
+      }
+
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed a rule: "${ruleContent.slice(0, 80)}"`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
+      this.lastOutcome = `You proposed a rule for the village.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', 'proposing rule');
+      this.broadcaster.agentAction(this.agent.id, `proposed a village rule — "${shortReason}"`);
+      return;
+    }
+
+    // --- Vote on Rule ---
+    if (actionId.startsWith('vote_like_') || actionId.startsWith('vote_dislike_')) {
+      const isLike = actionId.startsWith('vote_like_');
+      const ruleIdPrefix = actionId.replace(/^vote_(like|dislike)_/, '');
+      const rulePost = this.world.getActiveBoard()
+        .find(p => p.id.startsWith(ruleIdPrefix) && p.type === 'rule' && p.ruleStatus === 'proposed');
+
+      if (!rulePost) {
+        this.lastTrigger = 'The rule you wanted to vote on is no longer active.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      // Add vote
+      if (!rulePost.votes) rulePost.votes = [];
+      rulePost.votes.push({ agentId: this.agent.id, vote: isLike ? 'like' : 'dislike' });
+
+      // Check if majority reached
+      const aliveCount = Array.from(this.world.agents.values()).filter(a => a.alive !== false).length;
+      const likeCount = rulePost.votes.filter(v => v.vote === 'like').length;
+      const dislikeCount = rulePost.votes.filter(v => v.vote === 'dislike').length;
+      const totalVotes = likeCount + dislikeCount;
+
+      if (totalVotes >= Math.ceil(aliveCount / 2)) {
+        if (likeCount > dislikeCount) {
+          // RULE PASSES
+          rulePost.ruleStatus = 'passed';
+
+          // Add permanent rule concern to ALL agents
+          for (const [id, agent] of this.world.agents) {
+            if (agent.alive === false) continue;
+            const cog = (this.world as any).cognitions?.get?.(id);
+            if (cog?.fourStream) {
+              cog.fourStream.addConcern({
+                id: crypto.randomUUID(),
+                content: `Village rule: ${rulePost.content}`,
+                category: 'rule',
+                relatedAgentIds: [],
+                createdAt: this.world.time.totalMinutes,
+                permanent: true,
+              });
+            }
+            if (cog) {
+              void cog.addMemory({
+                id: crypto.randomUUID(),
+                agentId: id,
+                type: 'observation',
+                content: `Village rule passed: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`,
+                importance: 8,
+                timestamp: Date.now(),
+                relatedAgentIds: [],
+              });
+            }
+          }
+
+          // News post
+          const ruleNewsPost: BoardPost = {
+            id: crypto.randomUUID(),
+            authorId: 'system',
+            authorName: 'Village News',
+            type: 'news',
+            channel: 'all',
+            content: `Rule passed: "${rulePost.content}" (${likeCount}-${dislikeCount})`,
+            timestamp: Date.now(),
+            day: this.world.time.day,
+          };
+          this.world.addBoardPost(ruleNewsPost);
+          this.broadcaster.boardPost(ruleNewsPost);
+          if (this.bus) this.bus.emit({ type: 'board_post_created', post: ruleNewsPost });
+        } else {
+          rulePost.ruleStatus = 'rejected';
+        }
+      }
+
+      // Broadcast updated rule post (with new vote / status) to clients
+      this.broadcaster.boardPostUpdate(rulePost);
+
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: this.agent.id,
+        type: 'action_outcome',
+        content: `I voted ${isLike ? 'for' : 'against'} the rule: "${rulePost.content.slice(0, 60)}"`,
+        importance: 5,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      });
+
+      this.broadcaster.agentAction(this.agent.id, `voted ${isLike ? 'for' : 'against'} a rule — "${shortReason}"`);
+      this.lastOutcome = `You voted ${isLike ? 'for' : 'against'} the proposed rule.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
       return;
     }
 
@@ -1662,24 +2870,12 @@ export class AgentController {
       this.currentPerformingActivity = 'resting';
       this.activityTimer = 20;
       this.world.updateAgentState(this.agent.id, 'active', 'resting');
-      // Resting energy recovery is handled by tickVitals
-      this.broadcaster.agentAction(this.agent.id, 'resting');
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] });
+      this.broadcaster.agentAction(this.agent.id, `resting — "${shortReason}"`);
       return;
     }
 
-    // --- Custom (route through existing action pipeline) ---
-    if (actionId === 'custom' && decision.customAction && this.soloActionExecutor) {
-      this.soloActionExecutor.executeSocialAction(
-        this.agent.id, this.agent.config.name, '', decision.customAction, this.cognition
-      );
-      this.state = 'performing';
-      this.currentPerformingActivity = decision.customAction.slice(0, 60);
-      this.activityTimer = 10;
-      this.world.updateAgentState(this.agent.id, 'active', this.currentPerformingActivity);
-      return;
-    }
-
-    // Unrecognized
+    // Unrecognized — fall back to idle
     console.warn(`[Agent] ${this.agent.config.name} unrecognized actionId: ${actionId}`);
     this.state = 'idle';
     this.idleTimer = 0;
@@ -1696,6 +2892,7 @@ export class AgentController {
 
       const decision = await this.cognition.decide(situation);
       this.handleApiSuccess();
+      console.log(`[Decision] ${this.agent.config.name} → ${decision.actionId} | ${decision.reason.slice(0, 120)}`);
 
       // Guard: agent may have entered a conversation while awaiting LLM
       if (this.state === 'conversing') return;
@@ -1717,35 +2914,7 @@ export class AgentController {
         this.broadcaster.agentMood(this.agent.id, decision.mood as any);
       }
 
-      // Broadcast thought
-      this.broadcaster.agentThought(this.agent.id, decision.reason);
-
-      // Execute the decision FIRST — then broadcast sayAloud only if action succeeded
       await this.executeDecision(decision, situation);
-
-      // Say aloud AFTER execution — but validate against reality first
-      if (decision.sayAloud) {
-        const nearby = this.world.getNearbyAgents(this.agent.position, 5)
-          .filter(a => a.id !== this.agent.id && a.alive !== false);
-        const nearbyNames = new Set(nearby.map(a => a.config.name.split(' ')[0].toLowerCase()));
-        const allAgentNames = new Set(
-          Array.from(this.world.agents.values()).map(a => a.config.name.split(' ')[0].toLowerCase())
-        );
-        const invNames = new Set(this.agent.inventory.map(i => i.name.toLowerCase()));
-
-        // Check for references to people not nearby or items not owned
-        const words = decision.sayAloud.toLowerCase().split(/[\s,!?.'"—]+/);
-        const mentionsMissingPerson = words.some(w => w.length > 2 && allAgentNames.has(w) && !nearbyNames.has(w));
-        const mentionsUnknownName = /\b[A-Z][a-z]{2,}\b/.test(decision.sayAloud) &&
-          nearby.length === 0 && (this.agent.mentalModels?.length ?? 0) === 0;
-
-        if (mentionsMissingPerson || mentionsUnknownName) {
-          console.warn(`[Sanitize] ${this.agent.config.name} sayAloud references absent person: "${decision.sayAloud.substring(0, 60)}..."`);
-          // Don't broadcast confabulated speech
-        } else {
-          this.broadcaster.agentAction(this.agent.id, `says: "${decision.sayAloud}"`);
-        }
-      }
 
     } catch (err) {
       this.handleApiFailure(err);
@@ -1776,6 +2945,43 @@ export class AgentController {
   }
 
   /** Helper: build WorldState for action-resolver */
+  /** Find a nearby agent by first name (lowercase) */
+  private findNearbyByFirstName(firstName: string): Agent | undefined {
+    const nearby = this.world.getNearbyAgents(this.agent.position, 5);
+    return nearby.find(a => a.id !== this.agent.id && a.config.name.split(' ')[0].toLowerCase() === firstName);
+  }
+
+  /** Build AgentState for the action resolver */
+  private buildAgentStateForResolver(situation: AgentSituation): AgentState {
+    return {
+      id: this.agent.id,
+      name: this.agent.config.name,
+      location: situation.areaId,
+      energy: this.agent.vitals?.energy ?? 100,
+      hunger: this.agent.vitals?.hunger ?? 0,
+      health: this.agent.vitals?.health ?? 100,
+      inventory: this.buildInventoryForResolver(),
+      skills: this.buildSkillsForResolver(),
+      nearbyAgents: situation.nearbyAgents.map(a => ({ id: a.id, name: a.name })),
+    };
+  }
+
+  /** Adjust one agent's mental model trust toward another */
+  adjustTrust(agent: Agent, toward: Agent, delta: number): void {
+    if (!agent.mentalModels) agent.mentalModels = [];
+    const existing = agent.mentalModels.find(m => m.targetId === toward.id);
+    if (existing) {
+      existing.trust = Math.max(-100, Math.min(100, existing.trust + delta));
+      existing.lastUpdated = Date.now();
+    } else {
+      agent.mentalModels.push({ targetId: toward.id, trust: delta, predictedGoal: '', emotionalStance: 'neutral', notes: [], lastUpdated: Date.now() });
+    }
+    // Four Stream: sync trust to dossier (only for this controller's agent)
+    if (agent.id === this.agent.id) {
+      this.cognition.fourStream?.adjustTrust(toward.id, delta);
+    }
+  }
+
   private buildWorldState(): WorldState {
     const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
     return {

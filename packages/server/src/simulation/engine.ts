@@ -1,7 +1,7 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
+import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, SEASONS } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
@@ -93,6 +93,8 @@ export class SimulationEngine {
 
     // Create conversation manager
     this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus);
+    // Wire bystander notification when conversations end
+    this.conversationManager.onConversationEnd = (conv) => this.notifyConversationBystanders(conv);
 
     // Restore from Supabase if persistence is enabled
     if (this.persistence) {
@@ -230,6 +232,11 @@ export class SimulationEngine {
       console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}"`);
     });
 
+    // Board post reactions — each alive agent generates a 1-2 sentence comment
+    this.bus.on('board_post_created', (e) => {
+      void this.generatePostReactions(e.post);
+    });
+
     // Periodic save
     this.bus.on('save_requested', () => {
       if (this.persistence) {
@@ -343,7 +350,7 @@ export class SimulationEngine {
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
         const freshParts = buildStartingWorldViewParts(spawnArea as any);
         cognition.resetExperience(freshParts.myExperience);
-        this.wireTieredMemory(cognition, agent, sharedMemoryStore);
+        this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
         this.cognitions.set(agent.id, cognition);
 
         // Restore controller
@@ -427,12 +434,14 @@ export class SimulationEngine {
     agent.vitals = { health: 100, hunger: 0, energy: 100 };
     agent.alive = true;
     agent.mentalModels = [];
+    agent.activeConcerns = [];
+    agent.dossiers = [];
     agent.institutionIds = [];
 
     this.world.addAgent(agent);
 
-    // Starting provisions — 5 bread so new agents don't starve immediately
-    for (let i = 0; i < 5; i++) {
+    // Starting provisions — 2 bread; at 1 hunger/hour they run out by Day 2
+    for (let i = 0; i < 2; i++) {
       this.world.addItem({
         id: crypto.randomUUID(),
         name: 'Bread',
@@ -456,7 +465,7 @@ export class SimulationEngine {
     const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Broadcast spawn AFTER cognition is set so getSnapshot() can enrich with worldView
@@ -630,7 +639,7 @@ export class SimulationEngine {
     // Preserve worldViewParts from old cognition if available
     const oldCognition = this.cognitions.get(id);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Recreate controller with default wake/sleep hours
@@ -701,6 +710,8 @@ export class SimulationEngine {
     agent.drives = { survival: 50, safety: 60, belonging: 40, status: 30, meaning: 20 };
     agent.mentalModels = [];
     agent.socialLedger = [];
+    agent.activeConcerns = [];
+    agent.dossiers = [];
     agent.inventory = [];
     agent.skills = [];
 
@@ -741,7 +752,7 @@ export class SimulationEngine {
     ];
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
     // Recreate controller
@@ -806,7 +817,9 @@ export class SimulationEngine {
         timestamp: Date.now(),
         day: this.world.time.day,
       });
-      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+      const recoveryPost = this.world.board[this.world.board.length - 1];
+      this.broadcaster.boardPost(recoveryPost);
+      this.bus.emit({ type: 'board_post_created', post: recoveryPost });
       console.log(`[Engine] Removed ${deathPostIndices.length} death notice(s) for ${agentName}`);
     }
 
@@ -931,7 +944,7 @@ export class SimulationEngine {
 
     // --- Direct calls for subsystems with complex timing ---
 
-    if (this.tickCount % 10 === 0) this.checkOverhearing();
+    // Eavesdropping removed — conversations are private. Bystander notice handled at conversation end.
     this.checkElections();
 
     if (this.tickCount % 600 === 0) {
@@ -1077,6 +1090,7 @@ export class SimulationEngine {
           return;
         }
 
+
       }
     }
   }
@@ -1114,59 +1128,28 @@ export class SimulationEngine {
   }
 
   /**
-   * Check if nearby agents can overhear an active conversation.
-   * Agents within 5 tiles who are not in the conversation get a snippet.
+   * Notify nearby bystanders that a conversation happened (without revealing content).
+   * Called when a conversation ends — replaces the old per-tick eavesdropping loop.
    */
-  private checkOverhearing(): void {
-    const activeConversations = this.world.getActiveConversations();
-
-    for (const conv of activeConversations) {
-      if (conv.messages.length === 0) continue;
-
-      const lastMessage = conv.messages[conv.messages.length - 1];
-      const snippet = lastMessage.content.substring(0, 60);
-
-      // Find agents within 5 tiles of conversation location, not in the conversation
-      const nearby = this.world.getNearbyAgents(conv.location, 5);
-      for (const agent of nearby) {
-        if (conv.participants.includes(agent.id)) continue;
-        if (agent.state === 'sleeping') continue;
-        if (this.conversationManager.isInConversation(agent.id)) continue;
-
-        const cognition = this.cognitions.get(agent.id);
-        if (!cognition) continue;
-
-        // Store overheard snippet as a memory
-        void cognition.addMemory({
+  notifyConversationBystanders(conv: { participants: string[]; location: { x: number; y: number } }): void {
+    const nearbyAgents = this.world.getNearbyAgents(conv.location, 5);
+    for (const bystander of nearbyAgents) {
+      if (conv.participants.includes(bystander.id)) continue;
+      if (bystander.state === 'sleeping') continue;
+      const participantNames = conv.participants
+        .map(id => this.world.getAgent(id)?.config.name)
+        .filter(Boolean).join(' and ');
+      const cog = this.cognitions.get(bystander.id);
+      if (cog) {
+        void cog.addMemory({
           id: crypto.randomUUID(),
-          agentId: agent.id,
+          agentId: bystander.id,
           type: 'observation',
-          content: `I overheard ${lastMessage.agentName} say: "${snippet}..."`,
-          importance: 5,
+          content: `I noticed ${participantNames} talking nearby.`,
+          importance: 3,
           timestamp: Date.now(),
           relatedAgentIds: conv.participants,
-        }).catch(() => {});
-
-        // think()-driven overhear decision (one think per agent per conversation, with cooldown)
-        const controller = this.controllers.get(agent.id);
-        if (controller?.isAvailable && !controller.apiExhausted) {
-          const cognition = this.cognitions.get(agent.id);
-          if (cognition) {
-            void cognition.think(
-              `overheard ${lastMessage.agentName} say: "${snippet}"`,
-              `You weren't part of the conversation — you just caught a snippet.`
-            ).then(output => {
-              // Check if the thought suggests joining the conversation
-              const lower = output.thought.toLowerCase();
-              const wantsToJoin = lower.includes('approach') || lower.includes('join') || lower.includes('confront') || lower.includes('talk to') || lower.includes('speak to');
-              if (wantsToJoin && controller.isAvailable) {
-                this.conversationManager.addParticipant(conv.id, agent.id);
-                controller.enterConversation();
-                console.log(`[Engine] ${agent.config.name} overheard and decided to join conversation`);
-              }
-            }).catch(() => {});
-          }
-        }
+        });
       }
     }
   }
@@ -1222,7 +1205,9 @@ export class SimulationEngine {
         timestamp: Date.now(),
         day: this.world.time.day,
       });
-      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+      const seasonPost = this.world.board[this.world.board.length - 1];
+      this.broadcaster.boardPost(seasonPost);
+      this.bus.emit({ type: 'board_post_created', post: seasonPost });
 
       // Inject memory into all living agents
       for (const [id, cognition] of this.cognitions) {
@@ -1325,7 +1310,9 @@ export class SimulationEngine {
       timestamp: Date.now(),
       day: this.world.time.day,
     });
-    this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+    const deathPost = this.world.board[this.world.board.length - 1];
+    this.broadcaster.boardPost(deathPost);
+    this.bus.emit({ type: 'board_post_created', post: deathPost });
 
     // Create a memory for every living agent so they know about the death
     for (const [id, cognition] of this.cognitions) {
@@ -1402,6 +1389,56 @@ export class SimulationEngine {
     }
   }
 
+  /**
+   * When a board post appears, each alive agent generates a 1-2 sentence
+   * reaction that becomes a comment on the post.
+   */
+  private async generatePostReactions(post: BoardPost): Promise<void> {
+    // Skip system death notices (too many at once) and system-only posts
+    if (post.authorId === 'system' && post.content.includes('has died')) return;
+
+    for (const [agentId, agent] of this.world.agents) {
+      if (agent.alive === false) continue;
+      if (agentId === post.authorId) continue;
+
+      // Skip group posts for non-members
+      if (post.channel === 'group' && post.groupId) {
+        const isMember = agent.socialLedger?.some((e: any) =>
+          e.id === post.groupId && e.type === 'alliance' && e.status === 'accepted'
+        );
+        if (!isMember) continue;
+      }
+
+      const cognition = this.cognitions.get(agentId);
+      if (!cognition) continue;
+
+      const controller = this.controllers.get(agentId);
+      if (controller?.apiExhausted) continue;
+
+      try {
+        const output = await cognition.think(
+          `A new post appeared on the village board: "${post.content}" — posted by ${post.authorName}`,
+          `This is a ${post.type}. React honestly in 1 sentence. What do you think about this?`
+        );
+
+        // Add as comment on the post
+        if (!post.comments) post.comments = [];
+        post.comments.push({
+          agentId,
+          agentName: agent.config.name,
+          content: output.thought,
+          timestamp: Date.now(),
+        });
+
+        // Broadcast updated post so UI refreshes
+        this.broadcaster.boardPostUpdate(post);
+
+      } catch (err) {
+        console.error(`[PostReaction] ${agent.config.name} failed to react:`, err);
+      }
+    }
+  }
+
   async generateWeeklySummary(): Promise<string | null> {
     const time = this.world.time;
     const weekStart = Math.max(0, time.day - 7);
@@ -1470,6 +1507,13 @@ export class SimulationEngine {
     cognition.tieredMemory = tiered;
   }
 
+  /** Four Stream Memory: categorical retrieval replacing TF-IDF flat pool */
+  private wireFourStreamMemory(cognition: AgentCognition, agent: Agent, memoryStore: import('@ai-village/ai-engine').MemoryStore): void {
+    const fourStream = new FourStreamMemory(agent.id, memoryStore, agent);
+    fourStream.seedIdentity(agent.config);
+    cognition.fourStream = fourStream;
+  }
+
   private createActionExecutor() {
     const requestConv = (initiatorId: string, targetId: string): boolean => {
         // Block self-conversations
@@ -1529,7 +1573,7 @@ export class SimulationEngine {
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
-    this.wireTieredMemory(cognition, agent, memoryStore);
+    this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(agentId, cognition);
 
     // Reset controller's API state
@@ -1648,6 +1692,8 @@ export class SimulationEngine {
       agent.skills = [];
       agent.mentalModels = [];
       agent.socialLedger = [];
+      agent.activeConcerns = [];
+      agent.dossiers = [];
       agent.institutionIds = [];
       agent.joinedDay = 1;
 
@@ -1658,7 +1704,7 @@ export class SimulationEngine {
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
       const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts);
-      this.wireTieredMemory(cognition, agent, sharedMemoryStore);
+      this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
       // Seed identity memories — await so they exist in Supabase before first decide()

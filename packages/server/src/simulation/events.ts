@@ -139,6 +139,10 @@ export class EventBroadcaster {
     this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId: post.authorId, type: 'board_post', description: `Posted ${post.type}: ${post.content.substring(0, 80)}`, relatedAgentIds: post.targetIds ?? [], timestamp: Date.now(), day: post.day });
   }
 
+  boardPostUpdate(post: BoardPost): void {
+    this.io.emit('board:update', post);
+  }
+
   worldSnapshot(snapshot: WorldSnapshot): void {
     this.io.emit('world:snapshot', snapshot);
   }

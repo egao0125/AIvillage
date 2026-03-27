@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useBoard, useElections, useProperties, useInstitutions, useAgents, useWeather, useWorldTime } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
+import { nameToColor, hexToString } from '../../utils/color';
 
 const sectionLabel: React.CSSProperties = {
   color: COLORS.textAccent,
@@ -17,9 +18,16 @@ const TYPE_STYLES: Record<string, { icon: string; color: string }> = {
   rule: { icon: '\u{2696}', color: '#fbbf24' },
   announcement: { icon: '\u{1F4E2}', color: '#60a5fa' },
   alliance: { icon: '\u{1F91D}', color: '#4ade80' },
+  trade: { icon: '\u{1F4B1}', color: '#a78bfa' },
+  news: { icon: '\u{1F4F0}', color: '#f472b6' },
+  rumor: { icon: '\u{1F5E3}', color: '#fb923c' },
 };
 
+type SNSTab = 'all' | 'trades' | 'groups' | 'news';
+
 export const VillageDashboard: React.FC = () => {
+  const [snsTab, setSnsTab] = useState<SNSTab>('all');
+  const [expandedPostId, setExpandedPostId] = useState<string | null>(null);
   const board = useBoard();
   const elections = useElections();
   const properties = useProperties();
@@ -30,14 +38,124 @@ export const VillageDashboard: React.FC = () => {
 
   const aliveAgents = agents.filter(a => a.alive !== false);
 
-  const rules = board.filter(p => (p.type === 'decree' || p.type === 'rule') && !p.revoked);
-  const alliances = board.filter(p => p.type === 'alliance' && !p.revoked);
-  const announcements = board.filter(p => p.type === 'announcement' && !p.revoked);
+  // SNS filtering
+  const allChat = board.filter(p =>
+    (p.type === 'announcement' || p.type === 'rule')
+    && (p.channel === 'all' || !p.channel) && !p.revoked
+  );
+  const trades = board.filter(p => p.type === 'trade' && !p.revoked);
+  const groups = board.filter(p => p.channel === 'group' && !p.revoked);
+  const news = board.filter(p => p.type === 'news' && !p.revoked);
 
   const activeElections = elections.filter(e => e.active);
   const pastElections = elections.filter(e => !e.active && e.winner);
-
   const activeInstitutions = institutions.filter(i => !i.dissolved);
+
+  const renderPost = (post: typeof board[0]) => {
+    const s = TYPE_STYLES[post.type] || TYPE_STYLES.announcement;
+    const isRule = post.type === 'rule' && post.ruleStatus;
+    const likeCount = post.votes?.filter(v => v.vote === 'like').length ?? 0;
+    const dislikeCount = post.votes?.filter(v => v.vote === 'dislike').length ?? 0;
+
+    const commentCount = post.comments?.length ?? 0;
+    const isExpanded = expandedPostId === post.id;
+
+    return (
+      <div key={post.id} style={{
+        marginBottom: 6,
+        padding: '8px 10px',
+        background: COLORS.bgCard,
+        borderRadius: 4,
+        borderLeft: `3px solid ${s.color}`,
+        cursor: commentCount > 0 ? 'pointer' : 'default',
+      }} onClick={() => {
+        if (commentCount > 0) setExpandedPostId(isExpanded ? null : post.id);
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+          <span style={{ fontSize: '10px' }}>{s.icon}</span>
+          <span style={{ color: s.color, textTransform: 'uppercase', fontSize: '9px', fontFamily: FONTS.pixel, letterSpacing: 1 }}>{post.type}</span>
+          <span style={{ color: COLORS.textDim, fontSize: '11px' }}>by {post.authorName}</span>
+          {commentCount > 0 && !isExpanded && (
+            <span style={{ color: COLORS.textDim, fontSize: '9px', marginLeft: 'auto', fontFamily: FONTS.pixel }}>
+              {commentCount} reaction{commentCount !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+        <div style={{ color: COLORS.text, lineHeight: '1.5' }}>{post.content}</div>
+        {isRule && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+            <span style={{
+              fontSize: '10px',
+              padding: '1px 6px',
+              borderRadius: 3,
+              background: post.ruleStatus === 'passed' ? '#4ade8030' : post.ruleStatus === 'rejected' ? '#ff6b6b30' : '#fbbf2430',
+              color: post.ruleStatus === 'passed' ? '#4ade80' : post.ruleStatus === 'rejected' ? '#ff6b6b' : '#fbbf24',
+              textTransform: 'uppercase',
+              fontFamily: FONTS.pixel,
+            }}>
+              {post.ruleStatus}
+            </span>
+            {(likeCount > 0 || dislikeCount > 0) && (
+              <span style={{ color: COLORS.textDim, fontSize: '10px' }}>
+                {likeCount} for / {dislikeCount} against
+              </span>
+            )}
+          </div>
+        )}
+        {isExpanded && post.comments && post.comments.length > 0 && (
+          <div style={{ marginTop: 6, paddingTop: 4, borderTop: `1px solid rgba(255,255,255,0.06)` }}>
+            {post.comments.map((c, i) => (
+              <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 2, alignItems: 'flex-start' }}>
+                <span style={{
+                  fontFamily: FONTS.pixel,
+                  fontSize: '8px',
+                  color: hexToString(nameToColor(c.agentName)),
+                  flexShrink: 0,
+                  paddingTop: 1,
+                }}>
+                  {c.agentName}
+                </span>
+                <span style={{
+                  fontSize: '11px',
+                  color: '#b0a0c0',
+                  fontStyle: 'italic',
+                  lineHeight: 1.3,
+                }}>
+                  {c.content}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ color: COLORS.textDim, fontSize: '10px', marginTop: 3 }}>Day {post.day}</div>
+      </div>
+    );
+  };
+
+  const tabStyle = (tab: SNSTab): React.CSSProperties => ({
+    flex: 1,
+    padding: '6px 4px',
+    border: 'none',
+    cursor: 'pointer',
+    background: snsTab === tab ? COLORS.bgCard : 'transparent',
+    color: snsTab === tab ? COLORS.textAccent : COLORS.textDim,
+    fontFamily: FONTS.pixel,
+    fontSize: '8px',
+    borderBottom: snsTab === tab ? `2px solid ${COLORS.accent}` : '2px solid transparent',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  });
+
+  const getTabPosts = () => {
+    switch (snsTab) {
+      case 'all': return allChat;
+      case 'trades': return trades;
+      case 'groups': return groups;
+      case 'news': return news;
+    }
+  };
+
+  const tabPosts = getTabPosts();
 
   return (
     <div style={{ padding: 12, fontFamily: FONTS.body, fontSize: '13px', color: COLORS.text }}>
@@ -67,31 +185,21 @@ export const VillageDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Active Rules & Decrees */}
-      {rules.length > 0 && (
-        <>
-          <div style={sectionLabel}>RULES & DECREES ({rules.length})</div>
-          {[...rules].reverse().map(post => {
-            const s = TYPE_STYLES[post.type] || TYPE_STYLES.announcement;
-            return (
-              <div key={post.id} style={{
-                marginBottom: 6,
-                padding: '8px 10px',
-                background: COLORS.bgCard,
-                borderRadius: 4,
-                borderLeft: `3px solid ${s.color}`,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                  <span style={{ fontSize: '10px' }}>{s.icon}</span>
-                  <span style={{ color: s.color, textTransform: 'uppercase', fontSize: '9px', fontFamily: FONTS.pixel, letterSpacing: 1 }}>{post.type}</span>
-                  <span style={{ color: COLORS.textDim, fontSize: '11px' }}>by {post.authorName}</span>
-                </div>
-                <div style={{ color: COLORS.text, lineHeight: '1.5' }}>{post.content}</div>
-                <div style={{ color: COLORS.textDim, fontSize: '10px', marginTop: 3 }}>Day {post.day}</div>
-              </div>
-            );
-          })}
-        </>
+      {/* Agent SNS */}
+      <div style={sectionLabel}>AGENT SNS</div>
+      <div style={{ display: 'flex', borderBottom: `1px solid ${COLORS.border}`, marginBottom: 8 }}>
+        <button style={tabStyle('all')} onClick={() => setSnsTab('all')}>All Chat ({allChat.length})</button>
+        <button style={tabStyle('trades')} onClick={() => setSnsTab('trades')}>Trades ({trades.length})</button>
+        <button style={tabStyle('groups')} onClick={() => setSnsTab('groups')}>Groups ({groups.length})</button>
+        <button style={tabStyle('news')} onClick={() => setSnsTab('news')}>News ({news.length})</button>
+      </div>
+
+      {tabPosts.length > 0 ? (
+        [...tabPosts].reverse().slice(0, 20).map(renderPost)
+      ) : (
+        <div style={{ textAlign: 'center', color: COLORS.textDim, padding: '12px', fontSize: '11px' }}>
+          No {snsTab === 'all' ? 'posts' : snsTab} yet.
+        </div>
       )}
 
       {/* Elections */}
@@ -173,25 +281,6 @@ export const VillageDashboard: React.FC = () => {
         </>
       )}
 
-      {/* Alliances */}
-      {alliances.length > 0 && (
-        <>
-          <div style={sectionLabel}>ALLIANCES ({alliances.length})</div>
-          {[...alliances].reverse().map(post => (
-            <div key={post.id} style={{
-              padding: '8px 10px',
-              marginBottom: 4,
-              background: COLORS.bgCard,
-              borderRadius: 4,
-              borderLeft: '3px solid #4ade80',
-            }}>
-              <div style={{ color: COLORS.text, lineHeight: '1.5' }}>{post.content}</div>
-              <div style={{ color: COLORS.textDim, fontSize: '10px', marginTop: 3 }}>by {post.authorName} — Day {post.day}</div>
-            </div>
-          ))}
-        </>
-      )}
-
       {/* Institutions */}
       {activeInstitutions.length > 0 && (
         <>
@@ -233,36 +322,6 @@ export const VillageDashboard: React.FC = () => {
             </div>
           ))}
         </>
-      )}
-
-      {/* Announcements */}
-      {announcements.length > 0 && (
-        <>
-          <div style={sectionLabel}>ANNOUNCEMENTS ({announcements.length})</div>
-          {[...announcements].reverse().slice(0, 10).map(post => (
-            <div key={post.id} style={{
-              padding: '8px 10px',
-              marginBottom: 4,
-              background: COLORS.bgCard,
-              borderRadius: 4,
-              borderLeft: '3px solid #60a5fa',
-            }}>
-              <div style={{ color: COLORS.text, lineHeight: '1.5' }}>{post.content}</div>
-              <div style={{ color: COLORS.textDim, fontSize: '10px', marginTop: 3 }}>by {post.authorName} — Day {post.day}</div>
-            </div>
-          ))}
-        </>
-      )}
-
-      {/* Empty state */}
-      {rules.length === 0 && activeElections.length === 0 && pastElections.length === 0 && properties.length === 0 && alliances.length === 0 && activeInstitutions.length === 0 && announcements.length === 0 && (
-        <div style={{ textAlign: 'center', color: COLORS.textDim, padding: '24px 12px' }}>
-          The village has no official records yet.
-          <br />
-          <span style={{ fontSize: '11px', marginTop: 8, display: 'block' }}>
-            Agents will post decrees, call elections, and form alliances here.
-          </span>
-        </div>
       )}
     </div>
   );
