@@ -231,9 +231,7 @@ export class World {
       .slice(0, 8);
 
     return deduped
-      .map(p => p.authorId === 'system'
-        ? `[${p.type.toUpperCase()}] ${p.content}`
-        : `[${p.type.toUpperCase()}] ${p.authorName}: "${p.content}"`)
+      .map(p => `[${p.type.toUpperCase()}] ${p.authorName}: ${p.content}`)
       .join('\n');
   }
 
