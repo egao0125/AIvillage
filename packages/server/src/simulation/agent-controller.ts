@@ -1,4 +1,4 @@
-import type { Agent, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
@@ -953,7 +953,7 @@ export class AgentController {
     this.broadcaster.agentAction(this.agent.id, `died: ${cause}`, '\u{1F480}');
 
     // PUBLIC: news post for death
-    this.world.addBoardPost({
+    const deathPost: BoardPost = {
       id: crypto.randomUUID(),
       authorId: 'system',
       authorName: 'Village News',
@@ -962,7 +962,9 @@ export class AgentController {
       content: `${this.agent.config.name} has died of ${cause}.`,
       timestamp: Date.now(),
       day: this.world.time.day,
-    });
+    };
+    this.world.addBoardPost(deathPost);
+    this.broadcaster.boardPost(deathPost);
 
     // Fix 4: Emit agent_died event for nearby witness perception
     if (this.bus) {
@@ -1856,7 +1858,7 @@ export class AgentController {
       }
       // PUBLIC: trade post if successful
       if (outcome.success) {
-        this.world.addBoardPost({
+        const tradePost: BoardPost = {
           id: crypto.randomUUID(),
           authorId: 'system',
           authorName: 'Village Trades',
@@ -1865,7 +1867,9 @@ export class AgentController {
           content: `${this.agent.config.name} traded ${item.name} with ${target.config.name}. ${outcome.description}`,
           timestamp: Date.now(),
           day: this.world.time.day,
-        });
+        };
+        this.world.addBoardPost(tradePost);
+        this.broadcaster.boardPost(tradePost);
       }
       this.state = 'performing'; this.activityTimer = 5;
       this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
@@ -2093,7 +2097,7 @@ export class AgentController {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
       }
       // PUBLIC: news post + all agents get memory
-      this.world.addBoardPost({
+      const stealPost: BoardPost = {
         id: crypto.randomUUID(),
         authorId: 'system',
         authorName: 'Village News',
@@ -2102,7 +2106,9 @@ export class AgentController {
         content: `${this.agent.config.name} was caught stealing from ${target.config.name}!`,
         timestamp: Date.now(),
         day: this.world.time.day,
-      });
+      };
+      this.world.addBoardPost(stealPost);
+      this.broadcaster.boardPost(stealPost);
       for (const [id] of this.world.agents) {
         if (id === this.agent.id) continue;
         const cog = (this.world as any).cognitions?.get?.(id);
@@ -2224,7 +2230,7 @@ export class AgentController {
       }
 
       // PUBLIC: news post
-      this.world.addBoardPost({
+      const fightPost: BoardPost = {
         id: crypto.randomUUID(),
         authorId: 'system',
         authorName: 'Village News',
@@ -2233,7 +2239,9 @@ export class AgentController {
         content: `${this.agent.config.name} attacked ${target.config.name}! ${outcome.description}`,
         timestamp: Date.now(),
         day: this.world.time.day,
-      });
+      };
+      this.world.addBoardPost(fightPost);
+      this.broadcaster.boardPost(fightPost);
 
       this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '!', '⚔️');
       this.lastOutcome = outcome.description;
@@ -2328,12 +2336,14 @@ export class AgentController {
           `I betrayed my alliance with ${target.config.name}.`, this.cognition.llmProvider);
       }
 
-      this.world.addBoardPost({
+      const betrayPost: BoardPost = {
         id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
-        type: 'news' as any, channel: 'all' as any,
+        type: 'news', channel: 'all',
         content: `${this.agent.config.name} broke their alliance with ${target.config.name}.`,
         timestamp: Date.now(), day: this.world.time.day,
-      });
+      };
+      this.world.addBoardPost(betrayPost);
+      this.broadcaster.boardPost(betrayPost);
 
       this.lastOutcome = `You betrayed your alliance with ${target.config.name}.`;
       this.lastTrigger = this.lastOutcome;
@@ -2667,7 +2677,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
           }
 
           // News post
-          this.world.addBoardPost({
+          const ruleNewsPost: BoardPost = {
             id: crypto.randomUUID(),
             authorId: 'system',
             authorName: 'Village News',
@@ -2676,11 +2686,16 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
             content: `Rule passed: "${rulePost.content}" (${likeCount}-${dislikeCount})`,
             timestamp: Date.now(),
             day: this.world.time.day,
-          });
+          };
+          this.world.addBoardPost(ruleNewsPost);
+          this.broadcaster.boardPost(ruleNewsPost);
         } else {
           rulePost.ruleStatus = 'rejected';
         }
       }
+
+      // Broadcast updated rule post (with new vote / status) to clients
+      this.broadcaster.boardPostUpdate(rulePost);
 
       void this.cognition.addMemory({
         id: crypto.randomUUID(),
@@ -2692,6 +2707,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         relatedAgentIds: [],
       });
 
+      this.broadcaster.agentAction(this.agent.id, `voted ${isLike ? 'for' : 'against'} a rule`);
       this.lastOutcome = `You voted ${isLike ? 'for' : 'against'} the proposed rule.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;

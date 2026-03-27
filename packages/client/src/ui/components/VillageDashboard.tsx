@@ -38,7 +38,7 @@ export const VillageDashboard: React.FC = () => {
 
   // SNS filtering
   const allChat = board.filter(p =>
-    (p.type === 'announcement' || p.type === 'rule' || p.type === 'decree' || p.type === 'rumor')
+    (p.type === 'announcement' || p.type === 'rule' || p.type === 'decree' || p.type === 'rumor' || p.type === 'trade' || p.type === 'news')
     && (p.channel === 'all' || !p.channel) && !p.revoked
   );
   const trades = board.filter(p => p.type === 'trade' && !p.revoked);
