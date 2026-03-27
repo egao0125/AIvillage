@@ -163,6 +163,13 @@ export function useWeeklySummary(): string | null {
   );
 }
 
+export function useSocialViewOpen(): boolean {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().socialViewOpen
+  );
+}
+
 const EMPTY_ACTION_LOG: ActionLogEntry[] = [];
 
 export function useActionLog(agentId: string): ActionLogEntry[] {

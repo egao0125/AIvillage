@@ -1,0 +1,291 @@
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { COLORS, FONTS } from '../styles';
+import { gameStore } from '../../core/GameStore';
+import { useSocialGraph } from './useSocialGraph';
+import { useForceLayout } from './useForceLayout';
+import { useMapLayout } from './useMapLayout';
+import { useSpringPositions } from './useSpring';
+import { SocialCanvas } from './SocialCanvas';
+import { SocialDetailPanel } from './SocialDetailPanel';
+import { SocialControls } from './SocialControls';
+import { SOCIAL_KEYFRAMES } from './socialAnimations';
+import type { LayoutMode, SocialFilter, SocialNode } from './types';
+import { DEFAULT_FILTER } from './types';
+
+class SocialViewErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: COLORS.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+          <div style={{ color: COLORS.warning, fontFamily: FONTS.pixel, fontSize: 12 }}>SOCIAL VIEW ERROR</div>
+          <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 12, maxWidth: 500, textAlign: 'center' }}>{this.state.error.message}</div>
+          <button onClick={() => gameStore.closeSocialView()} style={{ padding: '8px 16px', background: COLORS.bgCard, border: `1px solid ${COLORS.border}`, borderRadius: 4, color: COLORS.text, cursor: 'pointer', fontFamily: FONTS.body }}>Close</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export const SocialView: React.FC = () => (
+  <SocialViewErrorBoundary>
+    <SocialViewInner />
+  </SocialViewErrorBoundary>
+);
+
+const SocialViewInner: React.FC = () => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [layout, setLayout] = useState<LayoutMode>('force');
+  const [filter, setFilter] = useState<SocialFilter>(DEFAULT_FILTER);
+
+  // Selection / hover state
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+
+  // Measure container
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      const { width, height } = entries[0].contentRect;
+      setDimensions({ width, height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Derive graph data
+  const { nodes, edges } = useSocialGraph(filter);
+
+  // Account for detail panel width
+  const hasPanel = selectedNodeId !== null || selectedEdgeId !== null;
+  const svgWidth = hasPanel ? Math.max(0, dimensions.width - 350) : dimensions.width;
+  const svgHeight = Math.max(0, dimensions.height);
+
+  // Force layout
+  const { nodes: forceNodes } = useForceLayout(
+    nodes, edges, svgWidth, svgHeight, layout === 'force',
+  );
+
+  // Map layout
+  const mapNodes = useMapLayout(nodes, svgWidth, svgHeight, layout === 'map');
+
+  // Build spring targets from current layout
+  const rawNodes = layout === 'force' ? forceNodes : mapNodes;
+  const springTargets = useMemo(() => {
+    const m = new Map<string, { x: number; y: number }>();
+    for (const n of rawNodes) {
+      m.set(n.id, { x: n.x, y: n.y });
+    }
+    return m;
+  }, [rawNodes]);
+
+  const springPositions = useSpringPositions(springTargets);
+
+  // Merge spring positions back into nodes, with circle fallback
+  const displayNodes: SocialNode[] = useMemo(() => {
+    return nodes.map((n, i) => {
+      const pos = springPositions.get(n.id);
+      if (pos && (pos.x !== 0 || pos.y !== 0)) {
+        return { ...n, x: pos.x, y: pos.y };
+      }
+      // Fallback: arrange in a circle
+      const cx = svgWidth / 2;
+      const cy = svgHeight / 2;
+      const radius = Math.min(svgWidth, svgHeight) * 0.3;
+      const angle = (2 * Math.PI * i) / Math.max(nodes.length, 1);
+      return { ...n, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
+    });
+  }, [nodes, springPositions, svgWidth, svgHeight]);
+
+  // Close detail panel
+  const closePanel = useCallback(() => {
+    setSelectedNodeId(null);
+    setSelectedEdgeId(null);
+  }, []);
+
+  // Keyboard: Escape closes
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedNodeId || selectedEdgeId) {
+          closePanel();
+        } else {
+          gameStore.closeSocialView();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [selectedNodeId, selectedEdgeId, closePanel]);
+
+  // Build detail panel props
+  const selectedNode = selectedNodeId ? displayNodes.find(n => n.id === selectedNodeId) : null;
+  const selectedEdge = selectedEdgeId ? edges.find(e => e.id === selectedEdgeId) : null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        background: COLORS.bg,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      {/* Inject keyframes */}
+      <style>{SOCIAL_KEYFRAMES}</style>
+
+      {/* Top bar */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 16px',
+          borderBottom: `1px solid ${COLORS.border}`,
+          flexShrink: 0,
+          background: COLORS.bgLight,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h1 style={{
+            fontFamily: FONTS.pixel,
+            fontSize: 12,
+            color: COLORS.textAccent,
+            margin: 0,
+            letterSpacing: 1,
+          }}>
+            SOCIAL DYNAMICS
+          </h1>
+          <span style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 11 }}>
+            {nodes.length} agents · {edges.length} connections
+          </span>
+        </div>
+        <button
+          onClick={() => gameStore.closeSocialView()}
+          style={{
+            background: 'none',
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 4,
+            color: COLORS.textDim,
+            cursor: 'pointer',
+            padding: '4px 12px',
+            fontFamily: FONTS.pixel,
+            fontSize: 8,
+            letterSpacing: 1,
+          }}
+        >
+          CLOSE
+        </button>
+      </div>
+
+      {/* Controls */}
+      <SocialControls
+        layout={layout}
+        onLayoutChange={setLayout}
+        filter={filter}
+        onFilterChange={setFilter}
+      />
+
+      {/* Canvas area */}
+      <div
+        ref={containerRef}
+        style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
+      >
+        {dimensions.width > 0 && (
+          <SocialCanvas
+            nodes={displayNodes}
+            edges={edges}
+            width={svgWidth}
+            height={svgHeight}
+            hoveredNodeId={hoveredNodeId}
+            hoveredEdgeId={hoveredEdgeId}
+            selectedNodeId={selectedNodeId}
+            selectedEdgeId={selectedEdgeId}
+            onNodeHover={setHoveredNodeId}
+            onEdgeHover={setHoveredEdgeId}
+            onNodeClick={(id) => {
+              setSelectedNodeId(id);
+              setSelectedEdgeId(null);
+            }}
+            onEdgeClick={(id) => {
+              setSelectedEdgeId(id);
+              setSelectedNodeId(null);
+            }}
+            onBackgroundClick={closePanel}
+          />
+        )}
+
+        {/* Detail panel */}
+        {selectedNode && (
+          <SocialDetailPanel
+            type="node"
+            props={{
+              node: selectedNode,
+              edges,
+              allNodes: displayNodes,
+              onClose: closePanel,
+            }}
+            onClose={closePanel}
+          />
+        )}
+        {selectedEdge && !selectedNode && (
+          <SocialDetailPanel
+            type="edge"
+            props={{
+              edge: selectedEdge,
+              allNodes: displayNodes,
+              onClose: closePanel,
+            }}
+            onClose={closePanel}
+          />
+        )}
+
+        {/* Empty state */}
+        {nodes.length === 0 && (
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            textAlign: 'center',
+          }}>
+            <div style={{ color: COLORS.textDim, fontFamily: FONTS.pixel, fontSize: 12, letterSpacing: 1 }}>
+              NO AGENTS
+            </div>
+            <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 12, marginTop: 8 }}>
+              Add agents to the village to see social dynamics.
+            </div>
+          </div>
+        )}
+        {nodes.length > 0 && edges.length === 0 && (
+          <div style={{
+            position: 'absolute',
+            bottom: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            textAlign: 'center',
+            padding: '8px 16px',
+            background: COLORS.bgCard,
+            borderRadius: 6,
+            border: `1px solid ${COLORS.border}`,
+          }}>
+            <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 11 }}>
+              No connections yet — agents need to interact before relationships appear.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

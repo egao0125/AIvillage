@@ -33,6 +33,7 @@ export class ConversationManager {
   ) {
     this.actionPipeline = new ActionPipeline(world, broadcaster, bus);
     this.postProcessor = new PostConversationProcessor(world);
+    this.postProcessor.setBroadcaster(broadcaster);
 
     // Wire the conversation lookup callback for social act handling
     this.actionPipeline.getAgentConversation = (agentId: string) => {

@@ -6,6 +6,7 @@ import { AgentProfile } from './AgentProfile';
 import { VillageDashboard } from './VillageDashboard';
 import { ConfessionalPanel } from './ConfessionalPanel';
 import { StorylinePanel } from './StorylinePanel';
+import { gameStore } from '../../core/GameStore';
 import { COLORS, FONTS } from '../styles';
 
 export const SIDEBAR_WIDTH = 500;
@@ -66,9 +67,38 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed }) => {
           color: COLORS.textAccent,
           letterSpacing: 1,
           whiteSpace: 'nowrap',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
         }}
       >
         AI VILLAGE
+        <button
+          onClick={() => gameStore.openSocialView()}
+          title="Social Dynamics"
+          style={{
+            background: 'none',
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 4,
+            cursor: 'pointer',
+            padding: '4px 8px',
+            color: COLORS.textDim,
+            fontFamily: FONTS.body,
+            fontSize: 14,
+            lineHeight: 1,
+            transition: 'color 0.2s, border-color 0.2s',
+          }}
+          onMouseEnter={e => {
+            e.currentTarget.style.color = COLORS.textAccent;
+            e.currentTarget.style.borderColor = COLORS.accent;
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.color = COLORS.textDim;
+            e.currentTarget.style.borderColor = COLORS.border;
+          }}
+        >
+          &#x1F578;
+        </button>
       </div>
 
       {/* Tabs */}
