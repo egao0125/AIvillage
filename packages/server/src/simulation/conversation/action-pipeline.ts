@@ -336,6 +336,12 @@ export class ActionPipeline {
             treasury: 0, rules: data.rules || [], createdAt: Date.now(),
           };
           this.world.addInstitution(inst);
+          // Track on founding agent
+          const founder = this.world.getAgent(actorId);
+          if (founder) {
+            if (!founder.institutionIds) founder.institutionIds = [];
+            founder.institutionIds.push(inst.id);
+          }
           this.broadcaster.institutionUpdate(inst);
           this.broadcaster.agentAction(actorId, `founded ${inst.name}`, '\u{1F3DB}\uFE0F');
         }
