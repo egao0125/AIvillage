@@ -2122,7 +2122,7 @@ export class AgentController {
         id: crypto.randomUUID(), authorId: 'system',
         authorName: 'Village News', type: 'news',
         channel: 'all',
-        content: `${this.agent.config.name} threatened ${target.config.name}.`,
+        content: `${this.agent.config.name} threatened ${target.config.name}: "${threatText.slice(0, 100)}"`,
         timestamp: Date.now(), day: this.world.time.day,
       };
       this.world.addBoardPost(threatPost);
@@ -2256,7 +2256,7 @@ export class AgentController {
         id: crypto.randomUUID(), authorId: 'system',
         authorName: 'Village News', type: 'news',
         channel: 'all',
-        content: `${this.agent.config.name} publicly confronted ${target.config.name}.`,
+        content: `${this.agent.config.name} confronted ${target.config.name}: "${confrontText.slice(0, 100)}"`,
         timestamp: Date.now(), day: this.world.time.day,
       };
       this.world.addBoardPost(confrontPost);
