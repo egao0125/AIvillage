@@ -327,6 +327,7 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
   buildWorkingMemory(
     nearbyAgentIds?: string[],
     agentLocations?: Map<string, string>,
+    reputations?: Map<string, number>,
   ): {
     concerns: string;
     dossiers: string;
@@ -370,6 +371,8 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
     for (const d of allDossiers) {
       const nearby = nearbySet.has(d.targetId);
       const loc = agentLocations?.get(d.targetId);
+      const rep = reputations?.get(d.targetId);
+      const repTag = rep && rep !== 0 ? `, rep: ${rep > 0 ? '+' : ''}${rep}` : '';
 
       // Dead agent check: no location entry = dead
       if (agentLocations && agentLocations.size > 0 && !loc) {
@@ -388,7 +391,7 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
         const commits = d.activeCommitments.length > 0
           ? ` Owe: ${d.activeCommitments.join('; ')}`
           : '';
-        const line = `${d.targetName} (trust: ${d.trust}) [HERE]: ${sum}${commits}`;
+        const line = `${d.targetName} (trust: ${d.trust}${repTag}) [HERE]: ${sum}${commits}`;
         if (dBudget - line.length < 0 && dLines.length >= 2) break;
         dLines.push(line);
         dBudget -= line.length;
@@ -396,7 +399,7 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
         const brief = d.summary.split('. ')[0];
         const short = brief.length > 50 ? brief.slice(0, 47) + '...' : brief;
         const tag = loc === 'sleeping' ? '[sleeping]' : `[at ${loc ?? 'somewhere'}]`;
-        const line = `${d.targetName} (trust: ${d.trust}) ${tag}: ${short}.`;
+        const line = `${d.targetName} (trust: ${d.trust}${repTag}) ${tag}: ${short}.`;
         if (dBudget - line.length < 0 && dLines.length >= 5) break;
         dLines.push(line);
         dBudget -= line.length;

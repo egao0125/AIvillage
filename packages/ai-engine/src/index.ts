@@ -75,6 +75,7 @@ export interface AgentSituation {
   propertyInfo?: string;      // buildings/properties at current location
   villageRules?: string;      // official passed rules
   allAgentLocations?: { id: string; location: string }[];
+  allReputations?: { id: string; score: number }[];
 }
 
 export interface AvailableAction {
@@ -663,9 +664,14 @@ Reply with ONLY valid JSON:
       for (const loc of situation.allAgentLocations ?? []) {
         locationMap.set(loc.id, loc.location);
       }
+      const repMap = new Map<string, number>();
+      for (const r of situation.allReputations ?? []) {
+        repMap.set(r.id, r.score);
+      }
       const wm = this.fourStream.buildWorkingMemory(
         nearbyIds.length > 0 ? nearbyIds : undefined,
         locationMap.size > 0 ? locationMap : undefined,
+        repMap.size > 0 ? repMap : undefined,
       );
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);

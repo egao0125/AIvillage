@@ -1581,6 +1581,10 @@ Answer with ONLY one word: "support" or "oppose".`,
       this.broadcaster.boardPost(newsPost);
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
 
+      // Reputation boost for proposer
+      const proposerCtrlP = this.controllers.get(rulePost.authorId);
+      proposerCtrlP?.adjustReputation(rulePost.authorId, +5, 'Governance');
+
       console.log(`[RuleVote] PASSED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
     } else {
       rulePost.ruleStatus = 'rejected';
@@ -1606,6 +1610,9 @@ Answer with ONLY one word: "support" or "oppose".`,
         `My ${rulePost.claimTarget ? 'claim' : 'rule'} was rejected. Need allies or different approach.`,
         'unresolved', []
       );
+
+      // Reputation hit for failed proposal
+      proposerCtrl?.adjustReputation(rulePost.authorId, -2, 'Failed proposal');
 
       // News post so everyone sees it on the board
       const rejNewsPost: BoardPost = {

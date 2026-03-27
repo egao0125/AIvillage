@@ -135,6 +135,24 @@ export class AgentController {
     });
   }
 
+  /** Adjust public reputation score for an agent */
+  adjustReputation(agentId: string, change: number, reason: string): void {
+    if (!this.world.reputation) this.world.reputation = [];
+    let entry = this.world.reputation.find(
+      r => r.toAgentId === agentId && r.fromAgentId === 'system'
+    );
+    if (!entry) {
+      entry = {
+        fromAgentId: 'system', toAgentId: agentId,
+        score: 0, reason: '', lastUpdated: Date.now(),
+      };
+      this.world.reputation.push(entry);
+    }
+    entry.score += change;
+    entry.reason = reason;
+    entry.lastUpdated = Date.now();
+  }
+
   private handleApiFailure(err: unknown): void {
     this.consecutiveApiFailures++;
 
@@ -1425,6 +1443,30 @@ export class AgentController {
       actions.push({ id: 'propose_rule', label: 'Propose a rule or claim (voted tonight)', category: 'creative' });
     }
 
+    // Group rule — only founders/leaders can set rules directly
+    if (myGroup && !myGroup.dissolved && !hasProposedToday) {
+      const myRole = myGroup.members.find(m => m.agentId === this.agent.id)?.role;
+      if (myRole === 'founder' || myRole === 'leader') {
+        actions.push({ id: 'propose_group_rule', label: `Set a rule for ${myGroup.name}`, category: 'creative' });
+      }
+    }
+
+    // Kick — leaders can kick non-founder members
+    if (myGroup && !myGroup.dissolved) {
+      const myRole = myGroup.members.find(m => m.agentId === this.agent.id)?.role;
+      if (myRole === 'founder' || myRole === 'leader') {
+        for (const member of myGroup.members) {
+          if (member.agentId === this.agent.id) continue;
+          if (member.role === 'founder') continue;
+          const memberAgent = this.world.getAgent(member.agentId);
+          if (memberAgent && memberAgent.alive !== false) {
+            const firstName = memberAgent.config.name.split(' ')[0].toLowerCase();
+            actions.push({ id: `kick_${firstName}`, label: `Kick ${memberAgent.config.name.split(' ')[0]} from ${myGroup.name}`, category: 'social' });
+          }
+        }
+      }
+    }
+
     // Meeting — only with 3+ people nearby, with cooldown
     if (nearby.length >= 2) {
       const recentMeetings = this.cognition.fourStream
@@ -1539,7 +1581,11 @@ export class AgentController {
       const memberNames = grp.members
         .map(m => this.world.getAgent(m.agentId)?.config.name ?? 'Unknown')
         .join(', ');
-      groupInfo = `${grp.name} (${grp.members.length} members: ${memberNames})`;
+      const myRole = grp.members.find(m => m.agentId === this.agent.id)?.role ?? 'member';
+      groupInfo = `${grp.name} — you are the ${myRole.toUpperCase()}. Members: ${memberNames}.`;
+      if (myRole === 'founder' || myRole === 'leader') {
+        groupInfo += '\nAs leader you can: set group rules, kick members, and distribute resources.';
+      }
       if (grp.description) groupInfo += `\nPurpose: ${grp.description}`;
       if (grp.rules.length > 0) groupInfo += `\nRules: ${grp.rules.join('; ')}`;
     }
@@ -1581,6 +1627,9 @@ export class AgentController {
       propertyInfo,
       villageRules,
       allAgentLocations,
+      allReputations: (this.world.reputation ?? [])
+        .filter(r => r.fromAgentId === 'system' && r.score !== 0)
+        .map(r => ({ id: r.toAgentId, score: r.score })),
     };
   }
 
@@ -1727,6 +1776,27 @@ export class AgentController {
       const area = getAreaAt(this.agent.position);
       const areaId = area?.id ?? 'plaza';
 
+      // Check area ownership — trespassing creates consequences but doesn't block
+      if (area) {
+        const areaOwner = this.world.getPropertyOwner(area.id);
+        if (areaOwner && areaOwner !== this.agent.id) {
+          const ownerAgent = this.world.getAgent(areaOwner);
+          const ownerGroupId = ownerAgent?.institutionIds?.[0];
+          const iAmMember = ownerGroupId && this.agent.institutionIds?.includes(ownerGroupId);
+          if (!iAmMember) {
+            this.addConsequence(
+              `I gathered on ${ownerAgent?.config.name ?? 'someone'}'s land without permission. They may confront me.`,
+              'threat', [areaOwner]
+            );
+            this.addConsequenceToAgent(areaOwner,
+              `${this.agent.config.name} gathered on my land without permission. Confront them or set a rule.`,
+              'threat', [this.agent.id]
+            );
+            this.adjustReputation(this.agent.id, -3, 'Trespassing');
+          }
+        }
+      }
+
       // Build AgentState for action-resolver
       const agentState: AgentState = {
         id: this.agent.id,
@@ -1858,6 +1928,7 @@ export class AgentController {
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider);
       }
+      this.adjustReputation(this.agent.id, +3, 'Generosity');
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name} — "${shortReason}"`);
@@ -1941,6 +2012,10 @@ export class AgentController {
         this.world.addBoardPost(tradePost);
         this.broadcaster.boardPost(tradePost);
         if (this.bus) this.bus.emit({ type: 'board_post_created', post: tradePost });
+      }
+      if (outcome.success) {
+        this.adjustReputation(this.agent.id, +2, 'Fair trade');
+        this.adjustReputation(target.id, +2, 'Fair trade');
       }
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
@@ -2234,6 +2309,29 @@ export class AgentController {
         createdAt: this.world.time.totalMinutes,
       });
 
+      this.adjustReputation(this.agent.id, -10, 'Theft');
+
+      // Check village rule violations
+      const stealRulePosts = this.world.getActiveBoard()
+        .filter(p => p.type === 'rule' && p.ruleStatus === 'passed');
+      for (const rp of stealRulePosts) {
+        const rl = rp.content.toLowerCase();
+        if (rl.includes('no steal') || rl.includes('no theft') || rl.includes('stealing')) {
+          const vPost: BoardPost = {
+            id: crypto.randomUUID(), authorId: 'system',
+            authorName: 'Village News', type: 'news',
+            channel: 'all',
+            content: `RULE VIOLATION: ${this.agent.config.name} broke village rule "${rp.content.slice(0, 60)}"!`,
+            timestamp: Date.now(), day: this.world.time.day,
+          };
+          this.world.addBoardPost(vPost);
+          this.broadcaster.boardPost(vPost);
+          if (this.bus) this.bus.emit({ type: 'board_post_created', post: vPost });
+          this.adjustReputation(this.agent.id, -10, 'Broke village rule');
+          break;
+        }
+      }
+
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `stealing`);
       return;
@@ -2317,11 +2415,19 @@ export class AgentController {
       // Trust destruction — fighting destroys trust for everyone who saw
       this.adjustTrust(this.agent, target, -40);
       this.adjustTrust(target, this.agent, -40);
-      // Witnesses lose trust in the attacker
+      // Contextual witness trust — witnesses who already distrusted the target see justice, not violence
       for (const w of witnesses) {
         const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
         if (wCtrl) {
-          wCtrl.adjustTrust(w, this.agent, -20);
+          const wDossier = ((this.world as any).cognitions?.get?.(w.id))
+            ?.fourStream?.getDossier?.(target.id);
+          const wTrustTarget = wDossier?.trust ?? 0;
+          if (wTrustTarget < -20) {
+            // Witness distrusts the target — this fight looks like justice
+            wCtrl.adjustTrust(w, this.agent, +10);
+          } else {
+            wCtrl.adjustTrust(w, this.agent, -20);
+          }
         }
       }
       if (this.cognition.fourStream) {
@@ -2385,6 +2491,29 @@ export class AgentController {
           `${this.agent.config.name} attacked ${target.config.name}. Violence is escalating.`,
           'unresolved', [this.agent.id, target.id]
         );
+      }
+
+      this.adjustReputation(this.agent.id, -8, 'Violence');
+
+      // Check village rule violations
+      const fightRulePosts = this.world.getActiveBoard()
+        .filter(p => p.type === 'rule' && p.ruleStatus === 'passed');
+      for (const rp of fightRulePosts) {
+        const rl = rp.content.toLowerCase();
+        if (rl.includes('no fight') || rl.includes('no violen') || rl.includes('no attack')) {
+          const vPost: BoardPost = {
+            id: crypto.randomUUID(), authorId: 'system',
+            authorName: 'Village News', type: 'news',
+            channel: 'all',
+            content: `RULE VIOLATION: ${this.agent.config.name} broke village rule "${rp.content.slice(0, 60)}"!`,
+            timestamp: Date.now(), day: this.world.time.day,
+          };
+          this.world.addBoardPost(vPost);
+          this.broadcaster.boardPost(vPost);
+          if (this.bus) this.bus.emit({ type: 'board_post_created', post: vPost });
+          this.adjustReputation(this.agent.id, -10, 'Broke village rule');
+          break;
+        }
       }
 
       this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '! — "' + shortReason + '"', '⚔️');
@@ -3032,6 +3161,159 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', 'proposing rule');
       this.broadcaster.agentAction(this.agent.id, `proposed a village rule — "${shortReason}"`);
+      return;
+    }
+
+    // --- Propose Group Rule (leaders set rules directly, no vote) ---
+    if (actionId === 'propose_group_rule') {
+      const groupId = this.agent.institutionIds?.[0];
+      const group = groupId ? this.world.getInstitution(groupId) : undefined;
+      if (!group || group.dissolved) {
+        this.lastTrigger = 'You have no group.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      let ruleContent: string;
+      try {
+        ruleContent = await this.cognition.llmProvider.complete(
+          `Write only the rule. No preamble, no quotes. 1 sentence.`,
+          `${this.cognition.identityBlock}\n\nYou are setting a rule for ${group.name}. Reason: ${decision.reason}\n\nWrite the RULE that members must follow. Keep to 1 sentence.`
+        );
+        ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
+        if (ruleContent.length < 3 || ruleContent.length > 200) {
+          ruleContent = decision.reason.slice(0, 150);
+        }
+      } catch {
+        ruleContent = decision.reason.slice(0, 150);
+      }
+
+      if (!group.rules) group.rules = [];
+      group.rules.push(ruleContent);
+
+      // Notify all members with memory + permanent concern
+      for (const member of group.members) {
+        const cog = (this.world as any).cognitions?.get?.(member.agentId);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(), agentId: member.agentId,
+            type: 'observation',
+            content: `${this.agent.config.name} set a rule for ${group.name}: "${ruleContent}"`,
+            importance: 7, timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          });
+          cog.fourStream?.addConcern({
+            id: crypto.randomUUID(),
+            content: `${group.name} rule: ${ruleContent}`,
+            category: 'rule' as any,
+            relatedAgentIds: group.members.map((m: any) => m.agentId),
+            createdAt: this.world.time.totalMinutes,
+            permanent: true,
+          });
+        }
+      }
+
+      const rulePost: BoardPost = {
+        id: crypto.randomUUID(), authorId: 'system',
+        authorName: 'Village News', type: 'news',
+        channel: 'all',
+        content: `${this.agent.config.name} set a rule for ${group.name}: "${ruleContent}"`,
+        timestamp: Date.now(), day: this.world.time.day,
+      };
+      this.world.addBoardPost(rulePost);
+      this.broadcaster.boardPost(rulePost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: rulePost });
+
+      this.lastOutcome = `You set a rule for ${group.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.broadcaster.agentAction(this.agent.id, `set a ${group.name} rule`);
+      return;
+    }
+
+    // --- Kick member from group ---
+    if (actionId.startsWith('kick_')) {
+      const firstName = actionId.replace('kick_', '');
+      const groupId = this.agent.institutionIds?.[0];
+      const group = groupId ? this.world.getInstitution(groupId) : undefined;
+      if (!group) {
+        this.lastTrigger = 'You have no group.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const myRole = group.members.find(m => m.agentId === this.agent.id)?.role;
+      if (myRole !== 'founder' && myRole !== 'leader') {
+        this.lastTrigger = 'Only leaders can kick members.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const targetMember = group.members.find(m => {
+        const a = this.world.getAgent(m.agentId);
+        return a && a.config.name.split(' ')[0].toLowerCase() === firstName.toLowerCase();
+      });
+      if (!targetMember || targetMember.role === 'founder') {
+        this.lastTrigger = 'Can\'t kick that person.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      const targetAgent = this.world.getAgent(targetMember.agentId);
+      const targetName = targetAgent?.config.name ?? firstName;
+
+      // Remove from group
+      group.members = group.members.filter(m => m.agentId !== targetMember.agentId);
+      if (targetAgent?.institutionIds) {
+        targetAgent.institutionIds = targetAgent.institutionIds.filter(id => id !== group.id);
+      }
+
+      // Memories
+      void this.cognition.addMemory({
+        id: crypto.randomUUID(), agentId: this.agent.id,
+        type: 'action_outcome',
+        content: `I kicked ${targetName} out of ${group.name}.`,
+        importance: 8, timestamp: Date.now(),
+        relatedAgentIds: [targetMember.agentId],
+      });
+      const targetCog = (this.world as any).cognitions?.get?.(targetMember.agentId);
+      if (targetCog) {
+        void targetCog.addMemory({
+          id: crypto.randomUUID(), agentId: targetMember.agentId,
+          type: 'observation',
+          content: `${this.agent.config.name} kicked me out of ${group.name}!`,
+          importance: 9, timestamp: Date.now(),
+          relatedAgentIds: [this.agent.id],
+        });
+        targetCog.fourStream?.addConcern({
+          id: crypto.randomUUID(),
+          content: `I was expelled from ${group.name} by ${this.agent.config.name}. I need a new group or revenge.`,
+          category: 'threat',
+          relatedAgentIds: [this.agent.id],
+          createdAt: this.world.time.totalMinutes,
+        });
+      }
+
+      // Trust impact
+      if (targetAgent) {
+        this.adjustTrust(this.agent, targetAgent, -30);
+        this.adjustTrust(targetAgent, this.agent, -40);
+      }
+
+      const kickPost: BoardPost = {
+        id: crypto.randomUUID(), authorId: 'system',
+        authorName: 'Village News', type: 'news',
+        channel: 'all',
+        content: `${targetName} was expelled from ${group.name} by ${this.agent.config.name}.`,
+        timestamp: Date.now(), day: this.world.time.day,
+      };
+      this.world.addBoardPost(kickPost);
+      this.broadcaster.boardPost(kickPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: kickPost });
+
+      this.adjustReputation(targetMember.agentId, -5, 'Expelled from group');
+      this.broadcaster.institutionUpdate(group);
+
+      this.lastOutcome = `You kicked ${targetName} from ${group.name}.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.broadcaster.agentAction(this.agent.id, `kicked ${targetName} from ${group.name}`);
       return;
     }
 
