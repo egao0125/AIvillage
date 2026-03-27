@@ -1567,6 +1567,33 @@ Answer with ONLY one word: "support" or "oppose".`,
       console.log(`[RuleVote] PASSED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
     } else {
       rulePost.ruleStatus = 'rejected';
+
+      // Notify all agents of the rejection
+      for (const [id, agent] of this.world.agents) {
+        if (agent.alive === false) continue;
+        const cog = this.cognitions.get(id);
+        if (!cog) continue;
+        const isProposer = id === rulePost.authorId;
+        void cog.addMemory({
+          id: crypto.randomUUID(), agentId: id, type: 'observation',
+          content: isProposer
+            ? `My proposal was rejected by the village: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`
+            : `Vote rejected: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`,
+          importance: isProposer ? 8 : 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
+        });
+      }
+
+      // News post so everyone sees it on the board
+      const rejNewsPost: BoardPost = {
+        id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+        type: 'news', channel: 'all',
+        content: `${rulePost.claimTarget ? 'Claim' : 'Rule'} rejected (${likeCount}-${dislikeCount}): "${rulePost.content}"`,
+        timestamp: Date.now(), day: this.world.time.day,
+      };
+      this.world.addBoardPost(rejNewsPost);
+      this.broadcaster.boardPost(rejNewsPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: rejNewsPost });
+
       console.log(`[RuleVote] REJECTED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
     }
 
