@@ -1401,8 +1401,8 @@ export class SimulationEngine {
    * reaction that becomes a comment on the post.
    */
   private async generatePostReactions(post: BoardPost): Promise<void> {
-    // Skip all system posts (news, death notices) — agents don't react to system events
-    if (post.authorId === 'system') return;
+    // Skip system death notices (too many at once)
+    if (post.authorId === 'system' && post.content.includes('has died')) return;
 
     for (const [agentId, agent] of this.world.agents) {
       if (agent.alive === false) continue;
@@ -1423,8 +1423,11 @@ export class SimulationEngine {
       if (controller?.apiExhausted) continue;
 
       try {
+        const attribution = post.authorId === 'system'
+          ? ''
+          : ` — posted by ${post.authorName}`;
         const output = await cognition.think(
-          `A new post appeared on the village board: "${post.content}" — posted by ${post.authorName}`,
+          `A new post appeared on the village board: "${post.content}"${attribution}`,
           `This is a ${post.type}. React honestly in 1 sentence. What do you think about this?`
         );
 
