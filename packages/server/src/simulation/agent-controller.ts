@@ -76,6 +76,8 @@ export class AgentController {
   // Sequential actions: store why agent is moving so arrival trigger includes intent
   private pendingArrivalIntent: string | null = null;
   private lastBeliefTick: number = 0;
+  private postConversationPending: boolean = false;
+  private postConvWaitTimer: number = 0;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -370,6 +372,18 @@ export class AgentController {
       }
 
       case 'idle': {
+        // Don't decide while post-conversation processing is pending
+        if (this.postConversationPending) {
+          this.postConvWaitTimer++;
+          // Safety: if post-processing takes too long (30 ticks), proceed anyway
+          if (this.postConvWaitTimer > 30) {
+            this.postConversationPending = false;
+            this.postConvWaitTimer = 0;
+            this.lastTrigger = 'You just finished a conversation. What now?';
+          } else {
+            break;
+          }
+        }
         this.idleTimer++;
         // Fallback: if nothing triggered a decision for 20 ticks,
         // force one. This is a safety net, not the primary trigger.
@@ -390,7 +404,8 @@ export class AgentController {
     if (this.cognition.fourStream &&
         this.importanceAccum >= 100 &&
         this.world.time.totalMinutes - this.lastBeliefTick > 480 &&
-        this.state === 'idle' && !this.decidingInProgress) {
+        this.state === 'idle' && !this.decidingInProgress &&
+        !this.postConversationPending) {
       this.importanceAccum = 0;
       this.lastBeliefTick = this.world.time.totalMinutes;
       void this.cognition.fourStream.generateBeliefs(this.cognition.llmProvider);
@@ -618,13 +633,21 @@ export class AgentController {
   leaveConversation(): void {
     if (this.state === 'conversing') {
       this.state = 'idle';
-      this.conversationCooldown = 60; // ~5 seconds before this agent can talk again
-      this.lastTrigger = 'You just finished a conversation. What now?';
+      this.conversationCooldown = 60;
+      this.postConversationPending = true;
+      this.postConvWaitTimer = 0;
+      // DON'T call decideAndAct() — wait for post-processing to finish
       this.world.updateAgentState(this.agent.id, 'idle', '');
-      // Conversation ended → decide what to do next
-      if (!this.decidingInProgress && !this.apiExhausted) {
-        void this.decideAndAct();
-      }
+    }
+  }
+
+  /** Called by ConversationManager after post-processing completes */
+  onPostConversationComplete(summary: string): void {
+    this.postConversationPending = false;
+    this.postConvWaitTimer = 0;
+    this.lastTrigger = `You just finished a conversation. ${summary}`;
+    if (!this.decidingInProgress && !this.apiExhausted) {
+      void this.decideAndAct();
     }
   }
 
@@ -3337,6 +3360,10 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
   /** Step 6: The core loop — build situation, ask LLM, execute decision */
   async decideAndAct(): Promise<void> {
     if (this.decidingInProgress || this.apiExhausted) return;
+
+    // Wait for pending dossier updates to finish — stale reads cause disconnected behavior
+    if (this.cognition.fourStream?.hasPendingDossierUpdates?.()) return;
+
     this.decidingInProgress = true;
 
     try {

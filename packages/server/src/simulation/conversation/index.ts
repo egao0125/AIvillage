@@ -444,9 +444,39 @@ export class ConversationManager {
         `[Conversation] Ended after ${active.turnCount} turns`,
       );
 
-      // Store conversation as memory for each participant
+      // Store conversation as memory for each participant, then notify controllers
       if (cognitions && active.conversation.messages.length > 0) {
-        void this.postProcessor.process(active.conversation, cognitions);
+        void this.postProcessor.process(active.conversation, cognitions)
+          .then(() => {
+            for (const participantId of active.conversation.participants) {
+              const ctrl = (this.world as any).controllers?.get?.(participantId);
+              if (ctrl?.onPostConversationComplete) {
+                const otherNames = active.conversation.participants
+                  .filter((id: string) => id !== participantId)
+                  .map((id: string) => this.world.getAgent(id)?.config.name)
+                  .filter(Boolean)
+                  .join(', ');
+                ctrl.onPostConversationComplete(`Talked with ${otherNames}.`);
+              }
+            }
+          })
+          .catch((err: unknown) => {
+            console.error('[PostConversation] Processing failed:', err);
+            for (const participantId of active.conversation.participants) {
+              const ctrl = (this.world as any).controllers?.get?.(participantId);
+              if (ctrl?.onPostConversationComplete) {
+                ctrl.onPostConversationComplete('Conversation ended.');
+              }
+            }
+          });
+      } else {
+        // No messages — notify immediately
+        for (const participantId of (active?.conversation.participants ?? [])) {
+          const ctrl = (this.world as any).controllers?.get?.(participantId);
+          if (ctrl?.onPostConversationComplete) {
+            ctrl.onPostConversationComplete('Brief exchange.');
+          }
+        }
       }
 
       // Notify bystanders that a conversation happened (without revealing content)

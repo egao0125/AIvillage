@@ -113,8 +113,52 @@ export class FourStreamMemory {
       .filter((d): d is RelationshipDossier => d !== undefined);
   }
 
-  /** Update or create a dossier after an interaction. One LLM call. */
+  // Dossier update queue — serializes concurrent updates per target
+  private dossierUpdateQueue: Map<string, {
+    targetName: string;
+    events: string[];
+    processing: boolean;
+  }> = new Map();
+
+  /** Update or create a dossier after an interaction. Serialized per target. */
   async updateDossier(
+    targetId: string,
+    targetName: string,
+    interactionSummary: string,
+    llm: LLMProvider,
+  ): Promise<void> {
+    let entry = this.dossierUpdateQueue.get(targetId);
+    if (!entry) {
+      entry = { targetName, events: [], processing: false };
+      this.dossierUpdateQueue.set(targetId, entry);
+    }
+    entry.events.push(interactionSummary);
+
+    // If already processing for this target, current call will pick up our event
+    if (entry.processing) return;
+
+    entry.processing = true;
+    try {
+      while (entry.events.length > 0) {
+        const combined = entry.events.splice(0).join('. ');
+        console.log(`[Dossier] ${this.agent.config.name} processing queued events for ${targetName}`);
+        await this._doUpdateDossier(targetId, targetName, combined, llm);
+      }
+    } finally {
+      entry.processing = false;
+      this.dossierUpdateQueue.delete(targetId);
+    }
+  }
+
+  /** Check if any dossier updates are still in-flight */
+  hasPendingDossierUpdates(): boolean {
+    for (const entry of this.dossierUpdateQueue.values()) {
+      if (entry.events.length > 0 || entry.processing) return true;
+    }
+    return false;
+  }
+
+  private async _doUpdateDossier(
     targetId: string,
     targetName: string,
     interactionSummary: string,
