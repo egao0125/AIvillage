@@ -733,6 +733,11 @@ export class AgentController {
           }
         }
       }
+
+      // Passive health regen — 2/hour, only when fed and rested
+      if (v.hunger < 70 && v.energy > 20 && v.health < 100) {
+        v.health = Math.min(100, v.health + 2);
+      }
     }
 
     // Energy depletes during activity, restores during sleep/rest
@@ -750,7 +755,7 @@ export class AgentController {
       v.energy = Math.min(100, v.energy + 0.5);
     }
 
-    // Vitals affect health — starvation and exhaustion can kill
+    // Vitals affect health — starvation and exhaustion can kill (per tick)
     if (v.hunger >= 85) {
       v.health = Math.max(0, v.health - 0.05);
     } else if (v.hunger >= 70) {
@@ -758,10 +763,6 @@ export class AgentController {
     }
     if (v.energy <= 5) {
       v.health = Math.max(0, v.health - 0.03);
-    }
-    // Passive health regen when not starving/exhausted
-    if (v.hunger < 70 && v.energy > 20) {
-      v.health = Math.min(100, v.health + 1);
     }
 
     // Death check — health reaching 0 is fatal
