@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
+import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
@@ -230,6 +230,11 @@ export class SimulationEngine {
       }
 
       console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}"`);
+    });
+
+    // Board post reactions — each alive agent generates a 1-2 sentence comment
+    this.bus.on('board_post_created', (e) => {
+      void this.generatePostReactions(e.post);
     });
 
     // Periodic save
@@ -812,7 +817,9 @@ export class SimulationEngine {
         timestamp: Date.now(),
         day: this.world.time.day,
       });
-      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+      const recoveryPost = this.world.board[this.world.board.length - 1];
+      this.broadcaster.boardPost(recoveryPost);
+      this.bus.emit({ type: 'board_post_created', post: recoveryPost });
       console.log(`[Engine] Removed ${deathPostIndices.length} death notice(s) for ${agentName}`);
     }
 
@@ -1198,7 +1205,9 @@ export class SimulationEngine {
         timestamp: Date.now(),
         day: this.world.time.day,
       });
-      this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+      const seasonPost = this.world.board[this.world.board.length - 1];
+      this.broadcaster.boardPost(seasonPost);
+      this.bus.emit({ type: 'board_post_created', post: seasonPost });
 
       // Inject memory into all living agents
       for (const [id, cognition] of this.cognitions) {
@@ -1301,7 +1310,9 @@ export class SimulationEngine {
       timestamp: Date.now(),
       day: this.world.time.day,
     });
-    this.broadcaster.boardPost(this.world.board[this.world.board.length - 1]);
+    const deathPost = this.world.board[this.world.board.length - 1];
+    this.broadcaster.boardPost(deathPost);
+    this.bus.emit({ type: 'board_post_created', post: deathPost });
 
     // Create a memory for every living agent so they know about the death
     for (const [id, cognition] of this.cognitions) {
@@ -1375,6 +1386,56 @@ export class SimulationEngine {
       return output.thought || null;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * When a board post appears, each alive agent generates a 1-2 sentence
+   * reaction that becomes a comment on the post.
+   */
+  private async generatePostReactions(post: BoardPost): Promise<void> {
+    // Skip system death notices (too many at once) and system-only posts
+    if (post.authorId === 'system' && post.content.includes('has died')) return;
+
+    for (const [agentId, agent] of this.world.agents) {
+      if (agent.alive === false) continue;
+      if (agentId === post.authorId) continue;
+
+      // Skip group posts for non-members
+      if (post.channel === 'group' && post.groupId) {
+        const isMember = agent.socialLedger?.some((e: any) =>
+          e.id === post.groupId && e.type === 'alliance' && e.status === 'accepted'
+        );
+        if (!isMember) continue;
+      }
+
+      const cognition = this.cognitions.get(agentId);
+      if (!cognition) continue;
+
+      const controller = this.controllers.get(agentId);
+      if (controller?.apiExhausted) continue;
+
+      try {
+        const output = await cognition.think(
+          `A new post appeared on the village board: "${post.content}" — posted by ${post.authorName}`,
+          `This is a ${post.type}. React honestly in 1 sentence. What do you think about this?`
+        );
+
+        // Add as comment on the post
+        if (!post.comments) post.comments = [];
+        post.comments.push({
+          agentId,
+          agentName: agent.config.name,
+          content: output.thought,
+          timestamp: Date.now(),
+        });
+
+        // Broadcast updated post so UI refreshes
+        this.broadcaster.boardPostUpdate(post);
+
+      } catch (err) {
+        console.error(`[PostReaction] ${agent.config.name} failed to react:`, err);
+      }
     }
   }
 

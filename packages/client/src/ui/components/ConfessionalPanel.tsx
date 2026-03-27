@@ -1,41 +1,32 @@
-import React, { useState, useEffect } from 'react';
-import { useThoughts, useAgents } from '../../core/hooks';
-import { watchThoughts, unwatchThoughts } from '../../network/socket';
-import { gameStore } from '../../core/GameStore';
+import React, { useState, useMemo } from 'react';
+import { useBoard, useAgents } from '../../core/hooks';
 import { nameToColor, hexToString } from '../../utils/color';
 import { COLORS, FONTS } from '../styles';
 
 export const ConfessionalPanel: React.FC = () => {
-  const thoughts = useThoughts();
+  const board = useBoard();
   const agents = useAgents();
   const [filterAgentId, setFilterAgentId] = useState<string | null>(null);
 
-  const filteredThoughts = filterAgentId
-    ? thoughts.filter(t => t.agentId === filterAgentId)
-    : thoughts;
-
-  // On-demand thought generation: watch when a specific agent is selected
-  useEffect(() => {
-    if (filterAgentId) {
-      gameStore.clearThoughts();
-      watchThoughts(filterAgentId);
-      return () => {
-        unwatchThoughts();
-        gameStore.clearThoughts();
-      };
-    } else {
-      unwatchThoughts();
-      gameStore.clearThoughts();
+  // Collect all comments from all board posts, optionally filtered by agent
+  const reactions = useMemo(() => {
+    const all: { agentId: string; agentName: string; content: string; timestamp: number; postContent: string; postAuthor: string }[] = [];
+    for (const post of board) {
+      if (!post.comments) continue;
+      for (const c of post.comments) {
+        if (filterAgentId && c.agentId !== filterAgentId) continue;
+        all.push({
+          ...c,
+          postContent: post.content.length > 80 ? post.content.slice(0, 77) + '...' : post.content,
+          postAuthor: post.authorName,
+        });
+      }
     }
-  }, [filterAgentId]);
+    // Sort newest first
+    return all.sort((a, b) => b.timestamp - a.timestamp);
+  }, [board, filterAgentId]);
 
-  // Safety net: unwatch + clear on unmount (e.g. switching sidebar tabs)
-  useEffect(() => () => {
-    unwatchThoughts();
-    gameStore.clearThoughts();
-  }, []);
-
-  const currentThought = filteredThoughts[filteredThoughts.length - 1];
+  const currentReaction = reactions[0];
 
   return (
     <div
@@ -56,7 +47,7 @@ export const ConfessionalPanel: React.FC = () => {
           gap: 10,
         }}
       >
-        <span style={{ fontSize: '18px' }}>&#127909;</span>
+        <span style={{ fontSize: '18px' }}>&#128172;</span>
         <span
           style={{
             fontFamily: FONTS.pixel,
@@ -65,7 +56,7 @@ export const ConfessionalPanel: React.FC = () => {
             letterSpacing: 2,
           }}
         >
-          CONFESSIONAL
+          REACTIONS
         </span>
       </div>
 
@@ -92,8 +83,8 @@ export const ConfessionalPanel: React.FC = () => {
         </select>
       </div>
 
-      {/* Spotlight thought display */}
-      {currentThought ? (
+      {/* Spotlight reaction */}
+      {currentReaction ? (
         <div
           style={{
             flex: 1,
@@ -111,7 +102,7 @@ export const ConfessionalPanel: React.FC = () => {
               width: 56,
               height: 56,
               borderRadius: '50%',
-              background: hexToString(nameToColor(currentThought.agentName)),
+              background: hexToString(nameToColor(currentReaction.agentName)),
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -119,10 +110,10 @@ export const ConfessionalPanel: React.FC = () => {
               fontWeight: 'bold',
               color: '#fff',
               marginBottom: 12,
-              boxShadow: `0 0 20px ${hexToString(nameToColor(currentThought.agentName))}40`,
+              boxShadow: `0 0 20px ${hexToString(nameToColor(currentReaction.agentName))}40`,
             }}
           >
-            {currentThought.agentName[0]}
+            {currentReaction.agentName[0]}
           </div>
 
           {/* Agent name */}
@@ -130,14 +121,27 @@ export const ConfessionalPanel: React.FC = () => {
             style={{
               fontFamily: FONTS.pixel,
               fontSize: '11px',
-              color: hexToString(nameToColor(currentThought.agentName)),
-              marginBottom: 16,
+              color: hexToString(nameToColor(currentReaction.agentName)),
+              marginBottom: 8,
             }}
           >
-            {currentThought.agentName}
+            {currentReaction.agentName}
           </div>
 
-          {/* Thought text */}
+          {/* What they reacted to */}
+          <div
+            style={{
+              fontFamily: FONTS.body,
+              fontSize: '11px',
+              color: COLORS.textDim,
+              marginBottom: 12,
+              maxWidth: 340,
+            }}
+          >
+            re: {currentReaction.postAuthor} &mdash; &ldquo;{currentReaction.postContent}&rdquo;
+          </div>
+
+          {/* Reaction text */}
           <div
             style={{
               fontFamily: FONTS.body,
@@ -148,7 +152,7 @@ export const ConfessionalPanel: React.FC = () => {
               maxWidth: 340,
             }}
           >
-            &ldquo;{currentThought.thought}&rdquo;
+            &ldquo;{currentReaction.content}&rdquo;
           </div>
 
           {/* Timestamp */}
@@ -160,7 +164,7 @@ export const ConfessionalPanel: React.FC = () => {
               marginTop: 16,
             }}
           >
-            {new Date(currentThought.timestamp).toLocaleTimeString()}
+            {new Date(currentReaction.timestamp).toLocaleTimeString()}
           </div>
         </div>
       ) : (
@@ -176,11 +180,11 @@ export const ConfessionalPanel: React.FC = () => {
             fontStyle: 'italic',
           }}
         >
-          Waiting for confessionals...
+          Waiting for reactions...
         </div>
       )}
 
-      {/* Thought timeline */}
+      {/* Reaction timeline */}
       <div
         style={{
           maxHeight: 200,
@@ -188,13 +192,13 @@ export const ConfessionalPanel: React.FC = () => {
           borderTop: `1px solid ${COLORS.border}`,
         }}
       >
-        {filteredThoughts.slice(-20).reverse().map((t, i) => (
+        {reactions.slice(0, 20).map((r, i) => (
           <div
-            key={t.id}
+            key={`${r.agentId}-${r.timestamp}-${i}`}
             style={{
               padding: '10px 18px',
               borderBottom: `1px solid rgba(255,255,255,0.03)`,
-              background: currentThought?.id === t.id ? 'rgba(168, 85, 247, 0.1)' : 'transparent',
+              background: i === 0 ? 'rgba(168, 85, 247, 0.1)' : 'transparent',
             }}
           >
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -202,12 +206,12 @@ export const ConfessionalPanel: React.FC = () => {
                 style={{
                   fontFamily: FONTS.pixel,
                   fontSize: '8px',
-                  color: hexToString(nameToColor(t.agentName)),
+                  color: hexToString(nameToColor(r.agentName)),
                   flexShrink: 0,
                   paddingTop: 2,
                 }}
               >
-                {t.agentName}
+                {r.agentName}
               </span>
               <span
                 style={{
@@ -218,7 +222,7 @@ export const ConfessionalPanel: React.FC = () => {
                   lineHeight: 1.4,
                 }}
               >
-                {t.thought.length > 100 ? t.thought.substring(0, 97) + '...' : t.thought}
+                {r.content.length > 100 ? r.content.substring(0, 97) + '...' : r.content}
               </span>
             </div>
           </div>

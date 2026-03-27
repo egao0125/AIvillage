@@ -368,29 +368,6 @@ export class AgentController {
     this.sleepTriggered = false; // reset for next night
     console.log(`[Agent] ${this.agent.config.name} wakes up`);
 
-    // Think on waking — include pre-sleep context for narrative continuity
-    if (!this.apiExhausted) {
-      try {
-        const area = getAreaAt(this.agent.position);
-        const v = this.agent.vitals;
-        const vitalsNote = v ? `Health: ${Math.round(v.health)}, Hunger: ${Math.round(v.hunger)}, Energy: ${Math.round(v.energy)}.` : '';
-        const preSleepNote = this.preSleepArea
-          ? ` Last night you were ${this.preSleepActivity ?? 'busy'} at ${this.preSleepArea} before heading to bed.`
-          : '';
-        const output = await this.cognition.think(
-          `You just woke up at the ${area?.name ?? 'village'}. It's morning on day ${this.world.time.day}.${preSleepNote}`,
-          `Location: ${area?.name ?? 'unknown'}. ${vitalsNote}`
-        );
-        this.handleApiSuccess();
-        if (output.mood) {
-          this.agent.mood = output.mood;
-          this.broadcaster.agentMood(this.agent.id, output.mood);
-        }
-        this.broadcaster.agentThought(this.agent.id, output.thought);
-      } catch (err) {
-        this.handleApiFailure(err);
-      }
-    }
     // Clear pre-sleep context after use
     this.preSleepArea = null;
     this.preSleepActivity = null;
@@ -616,29 +593,7 @@ export class AgentController {
    * Event-driven think — immediate, bypasses the 60-minute cooldown.
    * Used for: witnessing events, vital threshold crossings, conversation endings.
    */
-  async thinkOnEvent(trigger: string, context: string, causedByMemoryId?: string): Promise<void> {
-    if (this.apiExhausted || this.state === 'sleeping' || this.state === 'conversing') return;
-
-    try {
-      const output = await this.cognition.think(trigger, context);
-      this.handleApiSuccess();
-
-      // Guard: agent may have entered a conversation while we were awaiting the LLM
-      if ((this.state as ControllerState) === 'conversing') return;
-
-      if (output.mood) {
-        this.agent.mood = output.mood;
-        this.broadcaster.agentMood(this.agent.id, output.mood);
-      }
-      this.broadcaster.agentThought(this.agent.id, output.thought);
-
-      // If the thought suggests urgency, trigger decideAndAct quickly
-      this.lastTrigger = trigger;
-      this.idleTimer = 6;
-    } catch (err) {
-      this.handleApiFailure(err);
-    }
-  }
+  // thinkOnEvent removed — think() now fires only as board post reactions
 
   // (replanAfterConversation removed in refactor v2)
 
@@ -829,11 +784,6 @@ export class AgentController {
         importance: hungerBand === 2 ? 7 : 5,
         timestamp: Date.now(), relatedAgentIds: [],
       });
-      void this.thinkOnEvent(
-        `You're getting ${hungerBand === 2 ? 'very hungry — your health is starting to drop' : 'hungry'}.`,
-        `Hunger: ${Math.round(v.hunger)}/100. Food in inventory: ${foodCount} items.`,
-        vitalsMemId,
-      );
     }
     if (energyBand > this.lastEnergyBand) {
       const vitalsMemId = crypto.randomUUID();
@@ -843,11 +793,6 @@ export class AgentController {
         importance: energyBand === 2 ? 7 : 5,
         timestamp: Date.now(), relatedAgentIds: [],
       });
-      void this.thinkOnEvent(
-        `You're ${energyBand === 2 ? 'completely exhausted' : 'getting tired'}.`,
-        `Energy: ${Math.round(v.energy)}/100.`,
-        vitalsMemId,
-      );
     }
     if (healthBand > this.lastHealthBand) {
       const vitalsMemId = crypto.randomUUID();
@@ -857,11 +802,6 @@ export class AgentController {
         importance: healthBand === 2 ? 8 : 6,
         timestamp: Date.now(), relatedAgentIds: [],
       });
-      void this.thinkOnEvent(
-        `You're ${healthBand === 2 ? 'critically injured' : 'hurt and need care'}.`,
-        `Health: ${Math.round(v.health)}/100.`,
-        vitalsMemId,
-      );
     }
 
     // Four Stream: add vitals as concerns at threshold crossings
@@ -983,6 +923,7 @@ export class AgentController {
     };
     this.world.addBoardPost(deathPost);
     this.broadcaster.boardPost(deathPost);
+    if (this.bus) this.bus.emit({ type: 'board_post_created', post: deathPost });
 
     // Fix 4: Emit agent_died event for nearby witness perception
     if (this.bus) {
@@ -1895,6 +1836,7 @@ export class AgentController {
         };
         this.world.addBoardPost(tradePost);
         this.broadcaster.boardPost(tradePost);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post: tradePost });
       }
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);
@@ -2134,6 +2076,7 @@ export class AgentController {
       };
       this.world.addBoardPost(stealPost);
       this.broadcaster.boardPost(stealPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: stealPost });
       for (const [id] of this.world.agents) {
         if (id === this.agent.id) continue;
         const cog = (this.world as any).cognitions?.get?.(id);
@@ -2267,6 +2210,7 @@ export class AgentController {
       };
       this.world.addBoardPost(fightPost);
       this.broadcaster.boardPost(fightPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: fightPost });
 
       this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '! — "' + shortReason + '"', '⚔️');
       this.lastOutcome = outcome.description;
@@ -2369,6 +2313,7 @@ export class AgentController {
       };
       this.world.addBoardPost(betrayPost);
       this.broadcaster.boardPost(betrayPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: betrayPost });
 
       this.lastOutcome = `You betrayed your alliance with ${target.config.name}.`;
       this.lastTrigger = this.lastOutcome;
@@ -2404,6 +2349,7 @@ export class AgentController {
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
       if (accused) {
         this.adjustTrust(this.agent, accused, -15);
         this.adjustTrust(accused, this.agent, -15);
@@ -2457,6 +2403,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I posted on the village board: "${content.slice(0, 80)}"`, importance: 4, timestamp: Date.now(), relatedAgentIds: [] });
       this.lastOutcome = `You posted on the village board.`;
       this.lastTrigger = this.lastOutcome;
@@ -2507,6 +2454,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
 
       for (const targetId of group.targetIds) {
         const cog = (this.world as any).cognitions?.get?.(targetId);
@@ -2620,6 +2568,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
 
       // All agents get a memory about the proposed rule
       for (const [id, agent] of this.world.agents) {
@@ -2714,6 +2663,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
           };
           this.world.addBoardPost(ruleNewsPost);
           this.broadcaster.boardPost(ruleNewsPost);
+          if (this.bus) this.bus.emit({ type: 'board_post_created', post: ruleNewsPost });
         } else {
           rulePost.ruleStatus = 'rejected';
         }

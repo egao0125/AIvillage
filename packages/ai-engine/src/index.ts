@@ -729,16 +729,9 @@ ${this.buildIdentityBlock()}
 
 It is day ${this.currentTime.day}, ${this.currentTime.hour}:00.
 
-You are alone with your thoughts.
+React honestly. Say what you actually think — not what's polite or safe. Be brief: 1-2 sentences maximum. First person.
 
-What's bothering you right now? What do you want? What are you afraid might happen? Be honest — nobody can hear this.
-
-Think about what you should DO about it. Not what's ideal — what YOU would actually do, given who you are. Sometimes that means being selfish. Sometimes it means being brave. Sometimes it means doing nothing and stewing.
-
-IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events. If you're alone, you're alone.
-There are no NPCs, shopkeepers, or background characters. Every person in this village is named in your context. Locations may be empty.
-
-1-3 sentences. First person. Private.
+IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events.
 
 If your feelings shifted: MOOD: how you feel now`;
 
