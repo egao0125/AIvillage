@@ -51,6 +51,7 @@ export type SimEvent =
 
   // Board
   | { type: 'board_post_created'; post: import('./index.js').BoardPost }
+  | { type: 'rule_proposed'; post: import('./index.js').BoardPost }
 
   // Persistence
   | { type: 'save_requested' };

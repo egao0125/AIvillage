@@ -185,6 +185,37 @@ export const VillageDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Village Rules */}
+      {(() => {
+        const passedRules = board.filter(p => p.type === 'rule' && p.ruleStatus === 'passed' && !p.revoked);
+        if (passedRules.length === 0) return null;
+        return (
+          <>
+            <div style={sectionLabel}>VILLAGE RULES ({passedRules.length})</div>
+            {passedRules.map(rule => {
+              const likeCount = rule.votes?.filter(v => v.vote === 'like').length ?? 0;
+              const dislikeCount = rule.votes?.filter(v => v.vote === 'dislike').length ?? 0;
+              return (
+                <div key={rule.id} style={{
+                  padding: '6px 10px',
+                  marginBottom: 3,
+                  background: COLORS.bgCard,
+                  borderRadius: 4,
+                  borderLeft: '3px solid #4ade80',
+                }}>
+                  <div style={{ color: COLORS.text, fontSize: '12px', lineHeight: '1.4' }}>{rule.content}</div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 3 }}>
+                    <span style={{ color: COLORS.textDim, fontSize: '10px' }}>by {rule.authorName}</span>
+                    <span style={{ color: COLORS.textDim, fontSize: '10px' }}>Day {rule.day}</span>
+                    <span style={{ color: '#4ade80', fontSize: '10px' }}>{likeCount}-{dislikeCount}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        );
+      })()}
+
       {/* Agent SNS */}
       <div style={sectionLabel}>AGENT SNS</div>
       <div style={{ display: 'flex', borderBottom: `1px solid ${COLORS.border}`, marginBottom: 8 }}>

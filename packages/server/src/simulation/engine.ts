@@ -237,6 +237,11 @@ export class SimulationEngine {
       void this.generatePostReactions(e.post);
     });
 
+    // Rule voting — when a rule is proposed, all agents vote
+    this.bus.on('rule_proposed', (e) => {
+      void this.conductRuleVote(e.post);
+    });
+
     // Periodic save
     this.bus.on('save_requested', () => {
       if (this.persistence) {
@@ -1437,6 +1442,108 @@ export class SimulationEngine {
         console.error(`[PostReaction] ${agent.config.name} failed to react:`, err);
       }
     }
+  }
+
+  /**
+   * When a rule is proposed, every alive agent votes via a single LLM call.
+   * Majority decides: passed or rejected. Results broadcast to all.
+   */
+  private async conductRuleVote(rulePost: BoardPost): Promise<void> {
+    if (!rulePost.votes) rulePost.votes = [];
+    const proposerName = rulePost.authorName;
+
+    for (const [agentId, agent] of this.world.agents) {
+      if (agent.alive === false) continue;
+      if (agentId === rulePost.authorId) {
+        // Proposer auto-votes for their own rule
+        rulePost.votes.push({ agentId, vote: 'like' });
+        continue;
+      }
+
+      const cognition = this.cognitions.get(agentId);
+      if (!cognition) continue;
+
+      const controller = this.controllers.get(agentId);
+      if (controller?.apiExhausted) continue;
+
+      try {
+        const result = await cognition.llmProvider.complete(
+          `You are ${agent.config.name}. Answer with ONLY "support" or "oppose". Nothing else.`,
+          `${cognition.identityBlock}
+
+${proposerName} proposed a new village rule:
+"${rulePost.content}"
+
+Based on your personality, values, and interests — do you support or oppose this rule?
+Answer with ONLY one word: "support" or "oppose".`,
+        );
+
+        const vote = result.trim().toLowerCase().includes('support') ? 'like' as const : 'dislike' as const;
+        rulePost.votes.push({ agentId, vote });
+
+        void cognition.addMemory({
+          id: crypto.randomUUID(), agentId, type: 'action_outcome',
+          content: `I voted ${vote === 'like' ? 'for' : 'against'} the proposed rule: "${rulePost.content.slice(0, 60)}"`,
+          importance: 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
+        });
+
+        this.broadcaster.agentAction(agentId, `voted ${vote === 'like' ? 'for' : 'against'} ${proposerName}'s rule`);
+      } catch (err) {
+        console.error(`[RuleVote] ${agent.config.name} failed to vote:`, err);
+      }
+
+      // Broadcast incremental vote updates to clients
+      this.broadcaster.boardPostUpdate(rulePost);
+    }
+
+    // Tally and resolve
+    const likeCount = rulePost.votes.filter(v => v.vote === 'like').length;
+    const dislikeCount = rulePost.votes.filter(v => v.vote === 'dislike').length;
+
+    if (likeCount > dislikeCount) {
+      rulePost.ruleStatus = 'passed';
+
+      // Add permanent rule concern to ALL agents
+      for (const [id, agent] of this.world.agents) {
+        if (agent.alive === false) continue;
+        const cog = this.cognitions.get(id);
+        if (cog?.fourStream) {
+          cog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `Village rule: ${rulePost.content}`,
+            category: 'rule',
+            relatedAgentIds: [],
+            createdAt: this.world.time.totalMinutes,
+            permanent: true,
+          });
+        }
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(), agentId: id, type: 'observation',
+            content: `Village rule passed: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`,
+            importance: 8, timestamp: Date.now(), relatedAgentIds: [],
+          });
+        }
+      }
+
+      // News post
+      const newsPost: BoardPost = {
+        id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+        type: 'news', channel: 'all',
+        content: `Rule passed (${likeCount}-${dislikeCount}): "${rulePost.content}"`,
+        timestamp: Date.now(), day: this.world.time.day,
+      };
+      this.world.addBoardPost(newsPost);
+      this.broadcaster.boardPost(newsPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
+
+      console.log(`[RuleVote] PASSED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
+    } else {
+      rulePost.ruleStatus = 'rejected';
+      console.log(`[RuleVote] REJECTED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
+    }
+
+    this.broadcaster.boardPostUpdate(rulePost);
   }
 
   async generateWeeklySummary(): Promise<string | null> {
