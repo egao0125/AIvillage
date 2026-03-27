@@ -66,6 +66,7 @@ export interface AgentSituation {
   todaySummary?: string;      // what the agent has done today
   boardPosts?: string;        // recent village board posts
   groupInfo?: string;         // agent's group/institution membership
+  propertyInfo?: string;      // buildings/properties at current location
 }
 
 export interface AvailableAction {
@@ -624,6 +625,7 @@ Season: ${situation.season}.
 
 ${vitalsSection}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
+${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
