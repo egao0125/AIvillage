@@ -1452,10 +1452,8 @@ export class SimulationEngine {
       if (!agent || !cognition) continue;
 
       try {
-        const attribution = post.authorId === 'system'
-          ? '' : ` — posted by ${post.authorName}`;
         const output = await cognition.think(
-          `New on the village board: "${post.content}"${attribution}`,
+          `New on the village board — ${post.authorName}: "${post.content}"`,
           `React in 1 sentence. What do you think?`
         );
 
