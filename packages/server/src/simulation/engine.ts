@@ -1453,12 +1453,16 @@ export class SimulationEngine {
   private async conductRuleVote(rulePost: BoardPost): Promise<void> {
     if (!rulePost.votes) rulePost.votes = [];
     const proposerName = rulePost.authorName;
+    // Track who already voted to prevent duplicates
+    const alreadyVoted = new Set(rulePost.votes.map(v => v.agentId));
 
     for (const [agentId, agent] of this.world.agents) {
       if (agent.alive === false) continue;
+      if (alreadyVoted.has(agentId)) continue;
       if (agentId === rulePost.authorId) {
         // Proposer auto-votes for their own rule
         rulePost.votes.push({ agentId, vote: 'like' });
+        alreadyVoted.add(agentId);
         continue;
       }
 
@@ -1566,18 +1570,27 @@ Answer with ONLY one word: "support" or "oppose".`,
     this.broadcaster.boardPostUpdate(rulePost);
   }
 
+  private nightlyVoteInProgress = false;
+
   /**
    * At hour 21 each night, find all pending proposals and vote on each.
    */
   private async resolveNightlyVotes(): Promise<void> {
+    if (this.nightlyVoteInProgress) return;
+    this.nightlyVoteInProgress = true;
+
+    try {
     const pending = this.world.getActiveBoard()
       .filter(p => p.type === 'rule' && p.ruleStatus === 'proposed');
 
-    if (pending.length === 0) return;
+    if (pending.length === 0) { this.nightlyVoteInProgress = false; return; }
 
     console.log(`[NightlyVote] Resolving ${pending.length} pending proposal(s)...`);
     for (const post of pending) {
       await this.conductRuleVote(post);
+    }
+    } finally {
+      this.nightlyVoteInProgress = false;
     }
   }
 
