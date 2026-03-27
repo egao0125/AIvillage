@@ -65,6 +65,7 @@ export interface AgentSituation {
   trigger: string;
   todaySummary?: string;      // what the agent has done today
   boardPosts?: string;        // recent village board posts
+  groupInfo?: string;         // agent's group/institution membership
 }
 
 export interface AvailableAction {
@@ -622,6 +623,7 @@ Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDar
 Season: ${situation.season}.
 
 ${vitalsSection}
+${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}

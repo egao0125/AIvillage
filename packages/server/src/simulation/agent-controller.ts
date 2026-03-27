@@ -1,4 +1,4 @@
-import type { Agent, BoardPost, DriveState, GameTime, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Institution, Mood, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
@@ -1374,12 +1374,11 @@ export class AgentController {
       actions.push({ id: 'post_board', label: 'Write on all-agent chat', category: 'creative' });
     }
 
-    // Group post — only if agent has groups
-    const myGroups = this.agent.socialLedger?.filter(e =>
-      e.type === 'alliance' && e.status === 'accepted'
-    ) ?? [];
-    if (myGroups.length > 0) {
-      actions.push({ id: 'post_group', label: 'Write in group chat', category: 'creative' });
+    // Group post — only if agent is in an active institution/group
+    const myGroupId = this.agent.institutionIds?.[0];
+    const myGroup = myGroupId ? this.world.getInstitution(myGroupId) : undefined;
+    if (myGroup && !myGroup.dissolved) {
+      actions.push({ id: 'post_group', label: `Write in ${myGroup.name} chat`, category: 'creative' });
     }
 
     // Propose rule — with cooldown
@@ -1476,6 +1475,19 @@ export class AgentController {
       }
     }
 
+    // Build group info from Institution membership
+    let groupInfo: string | undefined;
+    const gId = this.agent.institutionIds?.[0];
+    const grp = gId ? this.world.getInstitution(gId) : undefined;
+    if (grp && !grp.dissolved) {
+      const memberNames = grp.members
+        .map(m => this.world.getAgent(m.agentId)?.config.name ?? 'Unknown')
+        .join(', ');
+      groupInfo = `${grp.name} (${grp.members.length} members: ${memberNames})`;
+      if (grp.description) groupInfo += `\nPurpose: ${grp.description}`;
+      if (grp.rules.length > 0) groupInfo += `\nRules: ${grp.rules.join('; ')}`;
+    }
+
     return {
       location: area?.name ?? 'Unknown',
       areaId,
@@ -1495,6 +1507,7 @@ export class AgentController {
       trigger,  // No enrichedTrigger — just the raw trigger
       todaySummary,
       boardPosts,
+      groupInfo,
     };
   }
 
@@ -2237,28 +2250,162 @@ export class AgentController {
       const firstName = actionId.replace('ally_', '');
       const target = this.findNearbyByFirstName(firstName);
       if (!target) {
-        this.lastTrigger = 'You wanted to form an alliance but they weren\'t here.';
+        this.lastTrigger = 'You wanted to form a group but they weren\'t here.';
         this.state = 'idle'; this.idleTimer = 0; return;
       }
-      // Create ledger entries for both
-      const entry = { id: crypto.randomUUID(), type: 'alliance' as const, description: `Alliance between ${this.agent.config.name} and ${target.config.name}`, withAgentId: target.id, status: 'active' as const, createdDay: this.world.time.day };
-      if (!this.agent.socialLedger) this.agent.socialLedger = [];
-      this.agent.socialLedger.push(entry as any);
-      if (!target.socialLedger) target.socialLedger = [];
-      target.socialLedger.push({ ...entry, withAgentId: this.agent.id } as any);
-      // Memories + trust
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I formed an alliance with ${target.config.name}.`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
-      this.adjustTrust(this.agent, target, 20);
-      this.adjustTrust(target, this.agent, 20);
-      if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I formed an alliance with ${target.config.name}.`, this.cognition.llmProvider);
+
+      // Check if I'm already in a group
+      const myGroupId = this.agent.institutionIds?.[0];
+      const myGroup = myGroupId ? this.world.getInstitution(myGroupId) : undefined;
+
+      // Check if target is already in MY group
+      if (myGroup && myGroup.members.some(m => m.agentId === target.id)) {
+        this.lastTrigger = `${target.config.name} is already in your group.`;
+        this.state = 'idle'; this.idleTimer = 0; return;
       }
-      this.lastOutcome = `You formed an alliance with ${target.config.name}.`;
-      this.lastTrigger = this.lastOutcome;
-      this.state = 'performing'; this.activityTimer = 3;
-      this.world.updateAgentState(this.agent.id, 'active', `forming alliance with ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `formed alliance with ${target.config.name} — "${shortReason}"`);
-      return;
+
+      if (myGroup && !myGroup.dissolved) {
+        // I'm in a group → INVITE target to join
+        this.world.addInstitutionMember(myGroup.id, {
+          agentId: target.id, role: 'member', joinedAt: Date.now(),
+        });
+
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+          content: `I invited ${target.config.name} to join ${myGroup.name}. They're now a member.`,
+          importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id],
+        });
+        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        if (targetCog) {
+          void targetCog.addMemory({
+            id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+            content: `${this.agent.config.name} invited me to join ${myGroup.name}. I'm now a member.`,
+            importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+          });
+          if (targetCog.fourStream) {
+            targetCog.fourStream.addConcern({
+              id: crypto.randomUUID(),
+              content: `I joined ${myGroup.name}. I should participate and follow the group's purpose.`,
+              category: 'commitment',
+              relatedAgentIds: myGroup.members.map((m: any) => m.agentId),
+              createdAt: this.world.time.totalMinutes,
+              permanent: true,
+            });
+          }
+        }
+        this.adjustTrust(this.agent, target, 15);
+        this.adjustTrust(target, this.agent, 15);
+        if (this.cognition.fourStream) {
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `${target.config.name} joined ${myGroup.name}.`, this.cognition.llmProvider);
+        }
+
+        const newsPost: BoardPost = {
+          id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+          type: 'news', channel: 'all',
+          content: `${target.config.name} joined ${myGroup.name} (now ${myGroup.members.length} members).`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(newsPost);
+        this.broadcaster.boardPost(newsPost);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
+
+        this.broadcaster.institutionUpdate(myGroup);
+        this.lastOutcome = `${target.config.name} joined ${myGroup.name}.`;
+        this.lastTrigger = this.lastOutcome;
+        this.state = 'performing'; this.activityTimer = 3;
+        this.world.updateAgentState(this.agent.id, 'active', `inviting ${target.config.name} to ${myGroup.name}`);
+        this.broadcaster.agentAction(this.agent.id, `invited ${target.config.name} to join ${myGroup.name}`);
+        return;
+
+      } else {
+        // Neither of us has a group → CREATE new group
+        let groupName: string;
+        try {
+          groupName = await this.cognition.llmProvider.complete(
+            'Generate a short group/community name (2-4 words). No quotes, no preamble.',
+            `${this.agent.config.name} and ${target.config.name} are forming a group. Reason: ${decision.reason}\n\nWhat would they name it? Examples: "The Farm Collective", "Lakeside Pact", "Builders Guild", "The Survivors". Write ONLY the name.`
+          );
+          groupName = groupName.replace(/^["']|["']$/g, '').trim();
+          if (groupName.length < 3 || groupName.length > 40) {
+            groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
+          }
+        } catch {
+          groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
+        }
+
+        const group: Institution = {
+          id: crypto.randomUUID(),
+          name: groupName,
+          type: 'community',
+          description: decision.reason || 'A group formed for mutual benefit.',
+          founderId: this.agent.id,
+          members: [
+            { agentId: this.agent.id, role: 'founder', joinedAt: Date.now() },
+            { agentId: target.id, role: 'member', joinedAt: Date.now() },
+          ],
+          treasury: 0,
+          rules: [],
+          createdAt: Date.now(),
+        };
+        this.world.addInstitution(group);
+        if (!this.agent.institutionIds) this.agent.institutionIds = [];
+        this.agent.institutionIds.push(group.id);
+        if (!target.institutionIds) target.institutionIds = [];
+        target.institutionIds.push(group.id);
+
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
+          content: `I founded ${groupName} with ${target.config.name}. ${decision.reason}`,
+          importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
+        });
+        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        if (targetCog) {
+          void targetCog.addMemory({
+            id: crypto.randomUUID(), agentId: target.id, type: 'observation',
+            content: `${this.agent.config.name} and I founded ${groupName}. ${decision.reason}`,
+            importance: 8, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+          });
+        }
+        if (this.cognition.fourStream) {
+          this.cognition.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `I founded ${groupName} with ${target.config.name}. I should build this community.`,
+            category: 'commitment', relatedAgentIds: [target.id],
+            createdAt: this.world.time.totalMinutes, permanent: true,
+          });
+        }
+        if (targetCog?.fourStream) {
+          targetCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `I'm part of ${groupName} with ${this.agent.config.name}. I should contribute.`,
+            category: 'commitment', relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes, permanent: true,
+          });
+        }
+        this.adjustTrust(this.agent, target, 20);
+        this.adjustTrust(target, this.agent, 20);
+        if (this.cognition.fourStream) {
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `We founded ${groupName} together.`, this.cognition.llmProvider);
+        }
+
+        const newsPost: BoardPost = {
+          id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+          type: 'news', channel: 'all',
+          content: `${this.agent.config.name} and ${target.config.name} founded "${groupName}".`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(newsPost);
+        this.broadcaster.boardPost(newsPost);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
+
+        this.broadcaster.institutionUpdate(group);
+        this.lastOutcome = `You founded ${groupName} with ${target.config.name}.`;
+        this.lastTrigger = this.lastOutcome;
+        this.state = 'performing'; this.activityTimer = 3;
+        this.world.updateAgentState(this.agent.id, 'active', `founding ${groupName}`);
+        this.broadcaster.agentAction(this.agent.id, `founded "${groupName}" with ${target.config.name}`);
+        return;
+      }
     }
 
     // --- Betray ---
@@ -2266,70 +2413,86 @@ export class AgentController {
       const firstName = actionId.replace('betray_', '');
       const target = this.findNearbyByFirstName(firstName);
       if (!target) {
-        this.lastTrigger = 'You wanted to betray someone but they weren\'t here.';
+        this.lastTrigger = 'You wanted to leave but they weren\'t here.';
         this.state = 'idle'; this.idleTimer = 0; return;
       }
 
-      const allianceIdx = this.agent.socialLedger?.findIndex(e =>
-        e.type === 'alliance' && e.targetIds?.includes(target.id) && e.status === 'accepted'
-      ) ?? -1;
-      if (allianceIdx === -1) {
-        this.lastTrigger = `You have no alliance with ${target.config.name} to betray.`;
+      // Find a shared group
+      const sharedGroupId = this.agent.institutionIds?.find(id => {
+        const inst = this.world.getInstitution(id);
+        return inst && !inst.dissolved && inst.members.some(m => m.agentId === target.id);
+      });
+      if (!sharedGroupId) {
+        this.lastTrigger = `You share no group with ${target.config.name}.`;
         this.state = 'idle'; this.idleTimer = 0; return;
       }
 
-      if (this.agent.socialLedger) this.agent.socialLedger[allianceIdx].status = 'rejected' as any;
-      if (target.socialLedger) {
-        const tIdx = target.socialLedger.findIndex(e => e.type === 'alliance' && e.targetIds?.includes(this.agent.id));
-        if (tIdx >= 0) target.socialLedger[tIdx].status = 'rejected' as any;
+      const group = this.world.getInstitution(sharedGroupId)!;
+      this.world.removeInstitutionMember(sharedGroupId, this.agent.id);
+
+      // If only 1 member left, dissolve
+      if (group.members.length <= 1) {
+        this.world.dissolveInstitution(sharedGroupId);
       }
 
-      this.adjustTrust(this.agent, target, -50);
-      this.adjustTrust(target, this.agent, -50);
+      // Trust destruction with all remaining members
+      for (const member of group.members) {
+        if (member.agentId === this.agent.id) continue;
+        const memberAgent = this.world.getAgent(member.agentId);
+        if (memberAgent) {
+          this.adjustTrust(this.agent, memberAgent, -30);
+          this.adjustTrust(memberAgent, this.agent, -30);
+        }
+      }
 
       void this.cognition.addMemory({
         id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
-        content: `I betrayed my alliance with ${target.config.name}.`,
-        importance: 9, timestamp: Date.now(), relatedAgentIds: [target.id],
+        content: `I left ${group.name}.`,
+        importance: 8, timestamp: Date.now(),
+        relatedAgentIds: group.members.map(m => m.agentId),
       });
 
-      const targetCog = (this.world as any).cognitions?.get?.(target.id);
-      if (targetCog) {
-        void targetCog.addMemory({
-          id: crypto.randomUUID(), agentId: target.id, type: 'observation',
-          content: `${this.agent.config.name} betrayed our alliance.`,
-          importance: 9, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
-        });
-        if (targetCog.fourStream) {
-          targetCog.fourStream.addConcern({
-            id: crypto.randomUUID(),
-            content: `${this.agent.config.name} broke our alliance. I can't trust them.`,
-            category: 'threat', relatedAgentIds: [this.agent.id],
-            createdAt: this.world.time.totalMinutes,
+      for (const member of group.members) {
+        if (member.agentId === this.agent.id) continue;
+        const memberCog = (this.world as any).cognitions?.get?.(member.agentId);
+        if (memberCog) {
+          void memberCog.addMemory({
+            id: crypto.randomUUID(), agentId: member.agentId, type: 'observation',
+            content: `${this.agent.config.name} left ${group.name}.${group.dissolved ? ' The group has dissolved.' : ''}`,
+            importance: 8, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
           });
+          if (memberCog.fourStream) {
+            memberCog.fourStream.addConcern({
+              id: crypto.randomUUID(),
+              content: `${this.agent.config.name} left ${group.name}. ${group.dissolved ? 'The group is gone.' : 'We need to decide what to do.'}`,
+              category: 'threat', relatedAgentIds: [this.agent.id],
+              createdAt: this.world.time.totalMinutes,
+            });
+          }
         }
       }
 
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name,
-          `I betrayed my alliance with ${target.config.name}.`, this.cognition.llmProvider);
+          `I left ${group.name}.`, this.cognition.llmProvider);
       }
 
       const betrayPost: BoardPost = {
         id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
         type: 'news', channel: 'all',
-        content: `${this.agent.config.name} broke their alliance with ${target.config.name}.`,
+        content: `${this.agent.config.name} left ${group.name}.${group.dissolved ? ' The group has dissolved.' : ''}`,
         timestamp: Date.now(), day: this.world.time.day,
       };
       this.world.addBoardPost(betrayPost);
       this.broadcaster.boardPost(betrayPost);
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: betrayPost });
 
-      this.lastOutcome = `You betrayed your alliance with ${target.config.name}.`;
+      this.broadcaster.institutionUpdate(group);
+      this.lastOutcome = `You left ${group.name}.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
-      this.world.updateAgentState(this.agent.id, 'active', `betraying ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `broke alliance with ${target.config.name} — "${shortReason}"`);
+      this.world.updateAgentState(this.agent.id, 'active', `leaving ${group.name}`);
+      this.broadcaster.agentAction(this.agent.id, `left ${group.name} — "${shortReason}"`);
       return;
     }
 
@@ -2425,10 +2588,9 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
 
     // --- Post Group Chat ---
     if (actionId === 'post_group') {
-      const group = this.agent.socialLedger?.find(e =>
-        e.type === 'alliance' && e.status === 'accepted'
-      );
-      if (!group) {
+      const groupId = this.agent.institutionIds?.[0];
+      const group = groupId ? this.world.getInstitution(groupId) : undefined;
+      if (!group || group.dissolved) {
         this.lastTrigger = 'You have no group to post in.';
         this.state = 'idle'; this.idleTimer = 0; return;
       }
@@ -2438,7 +2600,7 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
         const identity = this.cognition.identityBlock;
         content = await this.cognition.llmProvider.complete(
           `You are ${this.agent.config.name}. Write only the group message. No preamble, no quotes.`,
-          `${identity}\n\nWrite a private message for your alliance group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences. Write ONLY the message text.`
+          `${identity}\n\nWrite a private message for your ${group.name} group chat.\nYour reason: ${decision.reason}\nKeep it to 1-2 sentences. Write ONLY the message text.`
         );
         content = content.replace(/^["']|["']$/g, '').trim();
         if (content.length < 3 || content.length > 300) {
@@ -2450,14 +2612,13 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
         content = decision.reason.slice(0, 200);
       }
 
-      const groupId = group.id;
       const post = {
         id: crypto.randomUUID(),
         authorId: this.agent.id,
         authorName: this.agent.config.name,
         type: 'announcement' as const,
         channel: 'group' as const,
-        groupId,
+        groupId: group.id,
         content,
         timestamp: Date.now(),
         day: this.world.time.day,
@@ -2466,14 +2627,15 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
       this.broadcaster.boardPost(post);
       if (this.bus) this.bus.emit({ type: 'board_post_created', post });
 
-      for (const targetId of group.targetIds) {
-        const cog = (this.world as any).cognitions?.get?.(targetId);
+      for (const member of group.members) {
+        if (member.agentId === this.agent.id) continue;
+        const cog = (this.world as any).cognitions?.get?.(member.agentId);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(),
-            agentId: targetId,
+            agentId: member.agentId,
             type: 'observation',
-            content: `${this.agent.config.name} posted in our group: "${content.slice(0, 60)}"`,
+            content: `${this.agent.config.name} posted in ${group.name}: "${content.slice(0, 60)}"`,
             importance: 5,
             timestamp: Date.now(),
             relatedAgentIds: [this.agent.id],
@@ -2485,15 +2647,17 @@ Keep it to 1-2 sentences. Write ONLY the message text, nothing else.`;
         id: crypto.randomUUID(),
         agentId: this.agent.id,
         type: 'action_outcome',
-        content: `I posted in my group chat: "${content.slice(0, 60)}"`,
+        content: `I posted in ${group.name}: "${content.slice(0, 60)}"`,
         importance: 4,
         timestamp: Date.now(),
-        relatedAgentIds: group.targetIds,
+        relatedAgentIds: group.members.map(m => m.agentId).filter(id => id !== this.agent.id),
       });
 
-      this.lastOutcome = 'You posted in your group chat.';
+      this.lastOutcome = `You posted in ${group.name}.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
+      this.world.updateAgentState(this.agent.id, 'active', `posting in ${group.name}`);
+      this.broadcaster.agentAction(this.agent.id, `posted in ${group.name} — "${shortReason}"`);
       return;
     }
 
