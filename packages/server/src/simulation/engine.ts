@@ -1503,14 +1503,32 @@ Answer with ONLY one word: "support" or "oppose".`,
     if (likeCount > dislikeCount) {
       rulePost.ruleStatus = 'passed';
 
-      // Add permanent rule concern to ALL agents
+      // Handle property claim if this is a claim vote
+      if (rulePost.claimTarget) {
+        const ct = rulePost.claimTarget;
+        if (ct.type === 'area') {
+          const prop = this.world.claimProperty(ct.id, rulePost.authorId, this.world.time.day);
+          if (prop) this.broadcaster.propertyChange(prop);
+        } else if (ct.type === 'building') {
+          const building = this.world.getBuilding(ct.id);
+          if (building) {
+            building.ownerId = rulePost.authorId;
+            this.broadcaster.buildingUpdate(building);
+          }
+        }
+      }
+
+      // Add permanent concern to ALL agents (rule or claim)
+      const concernContent = rulePost.claimTarget
+        ? `Property: ${rulePost.content}`
+        : `Village rule: ${rulePost.content}`;
       for (const [id, agent] of this.world.agents) {
         if (agent.alive === false) continue;
         const cog = this.cognitions.get(id);
         if (cog?.fourStream) {
           cog.fourStream.addConcern({
             id: crypto.randomUUID(),
-            content: `Village rule: ${rulePost.content}`,
+            content: concernContent,
             category: 'rule',
             relatedAgentIds: [],
             createdAt: this.world.time.totalMinutes,
@@ -1520,7 +1538,7 @@ Answer with ONLY one word: "support" or "oppose".`,
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(), agentId: id, type: 'observation',
-            content: `Village rule passed: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`,
+            content: `Vote passed: "${rulePost.content}" (${likeCount} for, ${dislikeCount} against)`,
             importance: 8, timestamp: Date.now(), relatedAgentIds: [],
           });
         }
@@ -1530,7 +1548,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       const newsPost: BoardPost = {
         id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
         type: 'news', channel: 'all',
-        content: `Rule passed (${likeCount}-${dislikeCount}): "${rulePost.content}"`,
+        content: `${rulePost.claimTarget ? 'Claim' : 'Rule'} passed (${likeCount}-${dislikeCount}): "${rulePost.content}"`,
         timestamp: Date.now(), day: this.world.time.day,
       };
       this.world.addBoardPost(newsPost);
