@@ -38,7 +38,7 @@ export interface LLMProvider {
 const FROZEN_REALITY = `REALITY:
 You are alive. That is not guaranteed to last.
 
-You have a body — it hungers, tires, weakens, and dies. If you don't eat, your body eats itself.
+You have a body — it hungers, tires, weakens, and dies. If you don't eat, your body eats itself. Death is permanent. When you die, your relationships, promises, and plans end forever. The dead here are GONE.
 
 Nobody is coming to save you. There are only the people here — a few of you, in a village, with whatever the land provides.
 
@@ -74,6 +74,7 @@ export interface AgentSituation {
   groupInfo?: string;         // agent's group/institution membership
   propertyInfo?: string;      // buildings/properties at current location
   villageRules?: string;      // official passed rules
+  allAgentLocations?: { id: string; location: string }[];
 }
 
 export interface AvailableAction {
@@ -194,7 +195,7 @@ ${transcript}
 Summarize in JSON:
 {
   "summary": "2-3 sentences from YOUR perspective. What mattered? How did you feel? What changed?",
-  "agreements": ["things you both agreed to DO (max 2, skip trivial ones like 'see you later')"],
+  "agreements": ["SPECIFIC commitments only — not 'agreed to cooperate' but 'will bring wheat to tavern tomorrow' or 'will vote yes on farm rule'. If no specific agreement was made, return empty array."],
   "learned": ["new facts you learned — about people, places, or resources (max 2, short)"],
   "tension": "any unresolved conflict, distrust, or worry (or null if none)"
 }
@@ -512,7 +513,6 @@ If nothing notable was exchanged, return []`;
     const parts: string[] = [];
 
     parts.push('YOUR STATE:');
-    parts.push(`- Mood: ${this.agent.mood ?? 'neutral'}`);
     if (this.agent.inventory?.length) {
       parts.push(`- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}`);
     }
@@ -606,7 +606,11 @@ Energy: ${energy}/100
 Inventory: ${invStr}`;
 
     if (hunger >= 70 && !hasFood) {
-      vitalsSection += '\n\n⚠ YOU ARE DYING. You have NO food. Go gather wheat at the farm, or take food from someone nearby. Every turn you spend NOT getting food brings you closer to death.';
+      const nearbyNames = (situation.nearbyAgents ?? []).map(a => a.name).slice(0, 3);
+      const foodInfo = nearbyNames.length > 0
+        ? ` ${nearbyNames.join(', ')} ${nearbyNames.length > 1 ? 'are' : 'is'} nearby. You can ask, trade, beg, or take food from them.`
+        : ' Nobody is nearby. The farm or river might have food.';
+      vitalsSection += `\n\n⚠ YOUR BODY IS FAILING. You are starving to death. If you die, everything you built dies with you — alliances, plans, reputation. Gone. Permanently.${foodInfo} What would you actually do if you were about to die?`;
     } else if (hunger >= 70 && hasFood) {
       const foodToEat = situation.inventory.find(i => i.type === 'food');
       const eatId = foodToEat ? 'eat_' + foodToEat.name.toLowerCase().replace(/\s+/g, '_') : '';
@@ -650,19 +654,27 @@ Consider: what you need right now, who's nearby and what they have, what you've 
 Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
 
 Reply with ONLY valid JSON:
-{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel"}`;
+{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?"}`;
 
     let memoryText: string;
     if (this.fourStream) {
       const nearbyIds = situation.nearbyAgents.map(a => a.id);
-      const wm = this.fourStream.buildWorkingMemory(nearbyIds.length > 0 ? nearbyIds : undefined);
+      const locationMap = new Map<string, string>();
+      for (const loc of situation.allAgentLocations ?? []) {
+        locationMap.set(loc.id, loc.location);
+      }
+      const wm = this.fourStream.buildWorkingMemory(
+        nearbyIds.length > 0 ? nearbyIds : undefined,
+        locationMap.size > 0 ? locationMap : undefined,
+      );
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
-      if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+      if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
-      if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+      if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
+      if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryText = sections.join('\n\n');
-      console.log(`[FourStream] ${this.agent.config.name} decide() working memory (${memoryText.length} chars):\n${memoryText.slice(0, 600)}`);
+      console.log(`[Memory] ${this.agent.config.name} working memory: ${memoryText.length} chars`);
     } else {
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
@@ -743,18 +755,17 @@ It is day ${this.currentTime.day}, ${this.currentTime.hour}:00.
 
 React honestly. Say what you actually think — not what's polite or safe. Be brief: 1-2 sentences maximum. First person.
 
-IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events.
-
-If your feelings shifted: MOOD: how you feel now`;
+IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events.`;
 
     let memoryContext: string;
     if (this.fourStream) {
       const wm = this.fourStream.buildWorkingMemory(nearbyAgentIds);
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
-      if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+      if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
-      if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+      if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
+      if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryContext = sections.length > 0 ? '\n' + sections.join('\n\n') : '';
     } else {
       const memories = this.tieredMemory
@@ -791,22 +802,18 @@ Context: ${context}`;
       };
     }
 
-    const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
-    const mood: Mood | undefined = moodMatch ? moodMatch[1].trim() : undefined;
-
-    // Clean thought text: strip mood lines and any stray action tags
+    // Clean thought text: strip any stray action tags
     const thought = response
       .replace(/\s*\[ACTION:\s*.+?\]/gi, '')
       .replace(/^\s*MOOD:\s*.+$/mi, '')
       .trim();
 
-    const importance = mood ? 5 : 3;
     await this.addMemory({
       id: crypto.randomUUID(),
       agentId: this.agent.id,
       type: 'thought',
       content: thought,
-      importance,
+      importance: 4,
       timestamp: Date.now(),
       relatedAgentIds: [],
       visibility: 'private',
@@ -814,7 +821,7 @@ Context: ${context}`;
 
     return {
       thought,
-      mood,
+      mood: undefined,
     };
   }
 
@@ -928,6 +935,7 @@ Action: "${rawAction}"`;
       if (wm.timeline) sections.push(wm.timeline);
       if (wm.concerns) sections.push('On your mind:\n' + wm.concerns);
       if (wm.beliefs) sections.push('Your beliefs:\n' + wm.beliefs);
+      if (wm.identityAnchor) sections.push(wm.identityAnchor);
       memoryContext = sections.join('\n\n');
     } else {
       const recentMemories = await this.memory.getRecent(this.agent.id, 15);
@@ -1038,6 +1046,8 @@ You can act during conversation:
   [ACTION: eat ITEM]
 Use your actual inventory items and the real person's name. Actions happen instantly — items leave your inventory, trades are binding, fights hurt both of you.
 
+Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm tomorrow" or "If you steal again, I'll rally others against you." Bad dialogue is vague: "We should work together."
+
 Output ONLY spoken words in quotation marks. 1-3 sentences.
 
 Example: "You got any wheat? I need to eat."
@@ -1052,9 +1062,10 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
       const wm = this.fourStream.buildWorkingMemory(otherIds);
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
-      if (wm.dossiers) sections.push('WHAT YOU KNOW ABOUT THEM:\n' + wm.dossiers);
+      if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
+      if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryBlock = sections.join('\n\n');
     } else {
       const memoryQuery = otherAgents.map(a => a.config.name).join(' ');

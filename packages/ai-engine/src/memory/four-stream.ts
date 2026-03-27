@@ -73,11 +73,22 @@ export class FourStreamMemory {
     // Store in backing store for persistence
     await this.backingStore.add(memory);
 
-    // Add to timeline ring buffer — only HIGH-SIGNAL events
-    if (memory.type === 'action_outcome' ||
-        memory.type === 'conversation' ||
-        memory.type === 'thought' ||
-        (memory.type === 'observation' && memory.importance >= 6)) {
+    // FILTER (AgeMem): selective storage prevents memory bloat
+    // Block duplicate low-importance outcomes ("Gathered wheat" won't appear 5x in a row)
+    const isDuplicate = memory.type === 'action_outcome' &&
+      memory.importance <= 4 &&
+      this.timeline.slice(-3).some(m =>
+        m.type === 'action_outcome' &&
+        m.content.split(' ').slice(0, 3).join(' ') ===
+        memory.content.split(' ').slice(0, 3).join(' ')
+      );
+
+    if (!isDuplicate && (
+      memory.type === 'action_outcome' ||
+      memory.type === 'conversation' ||
+      memory.type === 'thought' ||
+      (memory.type === 'observation' && memory.importance >= 7)
+    )) {
       this.timeline.push(memory);
       if (this.timeline.length > FourStreamMemory.TIMELINE_MAX) {
         this.timeline.shift();
@@ -208,7 +219,7 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
     model.lastUpdated = Date.now();
   }
 
-  private syncDossiersToAgent(): void {
+  syncDossiersToAgent(): void {
     this.agent.dossiers = Array.from(this.dossiers.values());
   }
 
@@ -277,55 +288,172 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
       .slice(0, n);
   }
 
+  // --- RETRIEVAL SCORING (Memoria's recency-aware weighting) ---
+
+  /**
+   * Score memory for retrieval priority.
+   * Based on Memoria (2025): recency-aware weighting with exponential decay.
+   * Decay rate 0.99/hour: 12h=0.886, 48h=0.617, 72h=0.484
+   */
+  private scoreMemory(m: Memory, now: number): number {
+    const hoursOld = Math.max(0, (now - m.timestamp) / 3_600_000);
+    const decay = Math.pow(0.99, hoursOld);
+    return (m.importance / 10) * decay;
+  }
+
+  /**
+   * Score concern for retrieval priority.
+   * Category determines base weight. Permanent concerns (rules) don't decay.
+   */
+  private scoreConcern(c: ActiveConcern, now: number): number {
+    const WEIGHT: Record<string, number> = {
+      rule: 1.0, threat: 0.9, commitment: 0.7,
+      need: 0.6, goal: 0.4, unresolved: 0.2,
+    };
+    const base = WEIGHT[c.category] ?? 0.3;
+    if (c.permanent) return base;
+    const hoursOld = Math.max(0, (now - c.createdAt) / 3_600_000);
+    return base * Math.pow(0.995, hoursOld);
+  }
+
   // --- WORKING MEMORY ASSEMBLY ---
 
-  buildWorkingMemory(nearbyAgentIds?: string[]): {
-    identity: string;
+  /**
+   * Assemble working memory for the LLM prompt.
+   * Based on Memoria (2025): budget-gated retrieval with recency-aware scoring (~500 tokens).
+   * Based on A-MEM (2025): all relationships shown, sorted by |trust|.
+   * Based on AgeMem (2026): identity anchor at end for maximum recency attention weight.
+   */
+  buildWorkingMemory(
+    nearbyAgentIds?: string[],
+    agentLocations?: Map<string, string>,
+  ): {
     concerns: string;
     dossiers: string;
     beliefs: string;
     timeline: string;
+    identityAnchor: string;
   } {
-    const identity = this.identity.map(m => m.content).join('\n');
+    const now = Date.now();
+    const nearbySet = new Set(nearbyAgentIds ?? []);
 
-    const activeConcerns = this.getAllConcerns();
-    const concerns = activeConcerns.length > 0
-      ? activeConcerns.map(c => `- ${c.content}`).join('\n')
-      : '';
+    // --- CONCERNS (250 chars) ---
+    // Sorted by category weight × decay
+    const PREFIX: Record<string, string> = {
+      rule: '⚠ RULE: ', threat: '⚠ ',
+      commitment: '', need: '', goal: '', unresolved: '',
+    };
+    const scoredConcerns = this.getAllConcerns()
+      .map(c => ({ c, s: this.scoreConcern(c, now) }))
+      .sort((a, b) => b.s - a.s);
 
-    let dossiers = '';
-    if (nearbyAgentIds && nearbyAgentIds.length > 0) {
-      const nearbyDossiers = this.getDossiers(nearbyAgentIds);
-      if (nearbyDossiers.length > 0) {
-        dossiers = nearbyDossiers.map(d => {
-          const commitStr = d.activeCommitments.length > 0
-            ? `\n  Commitments: ${d.activeCommitments.join('; ')}`
-            : '';
-          return `${d.targetName} (trust: ${d.trust}): ${d.summary}${commitStr}`;
-        }).join('\n\n');
+    let cBudget = 250;
+    const cLines: string[] = [];
+    for (const { c } of scoredConcerns) {
+      const p = PREFIX[c.category] ?? '';
+      const t = c.content.length > 60 ? c.content.slice(0, 57) + '...' : c.content;
+      const line = `- ${p}${t}`;
+      if (cBudget - line.length < 0 && cLines.length >= 3) break;
+      cLines.push(line);
+      cBudget -= line.length;
+    }
+    const concerns = cLines.join('\n');
+
+    // --- DOSSIERS (350 chars) ---
+    // ALL relationships by |trust|, dead agents collapsed or skipped
+    const allDossiers = Array.from(this.dossiers.values())
+      .filter(d => d.summary?.length > 0)
+      .sort((a, b) => Math.abs(b.trust) - Math.abs(a.trust));
+
+    let dBudget = 350;
+    const dLines: string[] = [];
+    for (const d of allDossiers) {
+      const nearby = nearbySet.has(d.targetId);
+      const loc = agentLocations?.get(d.targetId);
+
+      // Dead agent check: no location entry = dead
+      if (agentLocations && agentLocations.size > 0 && !loc) {
+        if (Math.abs(d.trust) < 50) continue; // skip low-trust dead
+        const line = `${d.targetName} [DEAD]: ${d.summary.split('.')[0]}.`;
+        if (dBudget - line.length < 0) continue;
+        dLines.push(line);
+        dBudget -= line.length;
+        continue;
+      }
+
+      if (nearby) {
+        const sum = d.summary.length > 80
+          ? d.summary.split('. ').slice(0, 2).join('. ') + '.'
+          : d.summary;
+        const commits = d.activeCommitments.length > 0
+          ? ` Owe: ${d.activeCommitments.join('; ')}`
+          : '';
+        const line = `${d.targetName} (trust: ${d.trust}) [HERE]: ${sum}${commits}`;
+        if (dBudget - line.length < 0 && dLines.length >= 2) break;
+        dLines.push(line);
+        dBudget -= line.length;
+      } else {
+        const brief = d.summary.split('. ')[0];
+        const short = brief.length > 50 ? brief.slice(0, 47) + '...' : brief;
+        const tag = loc === 'sleeping' ? '[sleeping]' : `[at ${loc ?? 'somewhere'}]`;
+        const line = `${d.targetName} (trust: ${d.trust}) ${tag}: ${short}.`;
+        if (dBudget - line.length < 0 && dLines.length >= 5) break;
+        dLines.push(line);
+        dBudget -= line.length;
       }
     }
+    const dossiers = dLines.join('\n');
 
-    const personBeliefs = nearbyAgentIds
-      ? this.getBeliefsAbout(nearbyAgentIds)
-      : [];
-    const topBeliefs = this.getTopBeliefs(3);
-    const allBeliefs = [...personBeliefs];
-    for (const b of topBeliefs) {
-      if (!allBeliefs.some(pb => pb.id === b.id)) {
-        allBeliefs.push(b);
-      }
+    // --- BELIEFS (200 chars, max 5) ---
+    const pBeliefs = nearbyAgentIds ? this.getBeliefsAbout(nearbyAgentIds) : [];
+    const topB = this.getTopBeliefs(3);
+    const allB = [...pBeliefs];
+    for (const b of topB) {
+      if (!allB.some(x => x.id === b.id)) allB.push(b);
     }
-    const beliefs = allBeliefs.length > 0
-      ? allBeliefs.slice(0, 5).map(b => `- ${b.content}`).join('\n')
-      : '';
+    let bBudget = 200;
+    const bLines: string[] = [];
+    for (const b of allB.slice(0, 5)) {
+      const t = b.content.length > 50 ? b.content.slice(0, 47) + '...' : b.content;
+      const line = `- ${t}`;
+      if (bBudget - line.length < 0 && bLines.length >= 3) break;
+      bLines.push(line);
+      bBudget -= line.length;
+    }
+    const beliefs = bLines.join('\n');
 
-    const recentEvents = this.getRecentTimeline(5);
-    const timeline = recentEvents.length > 0
-      ? recentEvents.map(m => `- ${m.content}`).join('\n')
-      : 'Nothing notable has happened yet.';
+    // --- TIMELINE (250 chars, max 5) ---
+    // Sorted by importance × decay, not chronology
+    const pool = this.getRecentTimeline(20);
+    const scoredT = pool
+      .map(m => ({ m, s: this.scoreMemory(m, now) }))
+      .sort((a, b) => b.s - a.s);
 
-    return { identity, concerns, dossiers, beliefs, timeline };
+    let tBudget = 250;
+    const tLines: string[] = [];
+    for (const { m } of scoredT) {
+      const t = m.content.length > 55 ? m.content.slice(0, 52) + '...' : m.content;
+      const line = `- ${t}`;
+      if (tBudget - line.length < 0 && tLines.length >= 4) break;
+      tLines.push(line);
+      tBudget -= line.length;
+    }
+    const timeline = tLines.length > 0
+      ? tLines.join('\n')
+      : 'Nothing notable yet.';
+
+    // --- IDENTITY ANCHOR (~40 tokens) ---
+    const cfg = this.agent.config;
+    const parts: string[] = [`You are ${cfg.name}.`];
+    const soul = cfg.soul || cfg.backstory || '';
+    const first = soul.split('. ')[0];
+    if (first?.length > 5) parts.push(first + '.');
+    if (cfg.fears?.length) parts.push(`You fear: ${cfg.fears[0]}.`);
+    if (cfg.desires?.length) parts.push(`You want: ${cfg.desires[0]}.`);
+    if (cfg.contradictions) parts.push(cfg.contradictions);
+    const identityAnchor = parts.join(' ');
+
+    return { concerns, dossiers, beliefs, timeline, identityAnchor };
   }
 
   // --- REFLECTION (belief generation) ---
@@ -390,11 +518,60 @@ Example: ["Egao only helps when it benefits him", "I should go to the farm earli
   // --- COMPRESSION (nightly) ---
 
   async nightlyCompression(llm: LLMProvider): Promise<void> {
+    // 1. Generate beliefs (reflective synthesis)
     await this.generateBeliefs(llm);
-    if (this.timeline.length > 20) {
-      this.timeline = this.timeline.slice(-20);
+
+    // 2. A-MEM EVOLUTION: compress duplicate timeline events
+    // "Gathered wheat" x5 → "Gathered wheat (5x today)"
+    const groups = new Map<string, { count: number; latest: Memory }>();
+    for (const m of this.timeline) {
+      const key = m.content.split('.')[0].toLowerCase().trim();
+      const g = groups.get(key);
+      if (g) { g.count++; if (m.timestamp > g.latest.timestamp) g.latest = m; }
+      else groups.set(key, { count: 1, latest: m });
     }
-    this.pruneExpired(Date.now());
+    const compressed: Memory[] = [];
+    for (const [, { count, latest }] of groups) {
+      if (count > 2) {
+        compressed.push({
+          ...latest,
+          content: `${latest.content} (${count}x today)`,
+          importance: Math.min(10, latest.importance + 1),
+        });
+      } else {
+        compressed.push(latest);
+      }
+    }
+    this.timeline = compressed
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-20);
+
+    // 3. Memoria DECAY: old low-importance beliefs removed
+    const now = Date.now();
+    this.beliefs = this.beliefs.filter(b => {
+      const h = (now - b.timestamp) / 3_600_000;
+      return !(h > 72 && b.importance < 8);
+    });
+
+    // 4. AgeMem DELETE: mark stale commitments as failed
+    for (const c of this.concerns) {
+      if (c.category === 'commitment' && !c.permanent && !c.resolved) {
+        const h = (now - c.createdAt) / 3_600_000;
+        if (h > 48) {
+          c.resolved = true;
+          this.addConcern({
+            id: crypto.randomUUID(),
+            content: `Failed: ${c.content.slice(0, 50)}`,
+            category: 'unresolved',
+            relatedAgentIds: c.relatedAgentIds,
+            createdAt: now,
+          });
+        }
+      }
+    }
+
+    // 5. Standard pruning
+    this.pruneExpired(now);
   }
 
   // --- BACKWARD COMPATIBILITY ---
