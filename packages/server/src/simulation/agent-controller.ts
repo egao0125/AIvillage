@@ -1475,6 +1475,33 @@ export class AgentController {
       }
     }
 
+    // Build property/building info for current location
+    let propertyInfo: string | undefined;
+    const buildingsHere = this.world.getBuildingsAt(areaId);
+    if (buildingsHere.length > 0) {
+      const lines: string[] = [];
+      for (const b of buildingsHere) {
+        const owner = b.ownerId ? this.world.getAgent(b.ownerId) : undefined;
+        const ownerName = owner ? owner.config.name : 'unclaimed';
+        const effects = b.effects.length > 0 ? ` (${b.effects.join(', ')})` : '';
+        lines.push(`- ${b.name} [${b.type}]${effects} — ${ownerName === 'unclaimed' ? 'UNCLAIMED' : `owned by ${ownerName}`}`);
+
+        // Add claim action for unclaimed buildings
+        if (!b.ownerId || b.ownerId === '') {
+          actions.push({ id: `claim_${b.id}`, label: `Claim ${b.name}`, category: 'creative' });
+        }
+      }
+      propertyInfo = lines.join('\n');
+    }
+    // Also check if the area itself is unclaimed
+    const areaOwner = this.world.getPropertyOwner(areaId);
+    if (!areaOwner && areaId) {
+      // Only add area claim if there are buildings here or it's a notable area
+      if (buildingsHere.length > 0) {
+        actions.push({ id: `claim_area_${areaId}`, label: `Claim this area (${area?.name ?? areaId})`, category: 'creative' });
+      }
+    }
+
     // Build group info from Institution membership
     let groupInfo: string | undefined;
     const gId = this.agent.institutionIds?.[0];
@@ -1508,6 +1535,7 @@ export class AgentController {
       todaySummary,
       boardPosts,
       groupInfo,
+      propertyInfo,
     };
   }
 
@@ -2493,6 +2521,63 @@ export class AgentController {
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `leaving ${group.name}`);
       this.broadcaster.agentAction(this.agent.id, `left ${group.name} — "${shortReason}"`);
+      return;
+    }
+
+    // --- Claim Building / Area ---
+    if (actionId.startsWith('claim_area_')) {
+      const claimAreaId = actionId.replace('claim_area_', '');
+      const prop = this.world.claimProperty(claimAreaId, this.agent.id, this.world.time.day);
+      if (prop) {
+        this.broadcaster.propertyChange(prop);
+        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I claimed ownership of ${claimAreaId}.`, importance: 7, timestamp: Date.now(), relatedAgentIds: [] });
+        const post: BoardPost = {
+          id: crypto.randomUUID(), authorId: this.agent.id, authorName: this.agent.config.name,
+          type: 'announcement' as const, channel: 'all' as const,
+          content: `${this.agent.config.name} has claimed ${claimAreaId} as their property.`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(post);
+        this.broadcaster.boardPost(post);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+        this.lastOutcome = `You claimed ${claimAreaId} as your property.`;
+      } else {
+        this.lastOutcome = `${claimAreaId} is already owned by someone else.`;
+      }
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 2;
+      this.world.updateAgentState(this.agent.id, 'active', 'claiming property');
+      this.broadcaster.agentAction(this.agent.id, `claimed ${claimAreaId}`);
+      return;
+    }
+
+    if (actionId.startsWith('claim_') && !actionId.startsWith('claim_area_')) {
+      const buildingId = actionId.replace('claim_', '');
+      const building = this.world.getBuilding(buildingId);
+      if (building && (!building.ownerId || building.ownerId === '')) {
+        building.ownerId = this.agent.id;
+        this.broadcaster.buildingUpdate(building);
+        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I claimed ${building.name} (${building.type}) as mine.`, importance: 7, timestamp: Date.now(), relatedAgentIds: [] });
+        const post: BoardPost = {
+          id: crypto.randomUUID(), authorId: this.agent.id, authorName: this.agent.config.name,
+          type: 'announcement' as const, channel: 'all' as const,
+          content: `${this.agent.config.name} has claimed ${building.name}.`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(post);
+        this.broadcaster.boardPost(post);
+        if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+        this.lastOutcome = `You claimed ${building.name} as yours.`;
+      } else if (building) {
+        const owner = this.world.getAgent(building.ownerId);
+        this.lastOutcome = `${building.name} is already owned by ${owner?.config.name ?? 'someone'}.`;
+      } else {
+        this.lastOutcome = `That building doesn't exist anymore.`;
+      }
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 2;
+      this.world.updateAgentState(this.agent.id, 'active', 'claiming building');
+      this.broadcaster.agentAction(this.agent.id, `claimed a building — "${shortReason}"`);
       return;
     }
 
