@@ -641,6 +641,7 @@ export class AgentController {
           if (entry && (update.status === 'fulfilled' || update.status === 'broken')) {
             entry.status = update.status;
             entry.resolvedAt = this.world.time.totalMinutes;
+            this.broadcaster.ledgerUpdate(this.agent.id, entry);
           }
         }
       }

@@ -2,6 +2,7 @@ import type { Conversation, Memory, SocialLedgerEntry } from '@ai-village/shared
 import { AgentCognition } from '@ai-village/ai-engine';
 import { AREA_DESCRIPTIONS } from '../../map/starting-knowledge.js';
 import type { World } from '../world.js';
+import type { EventBroadcaster } from '../events.js';
 import { findAgentByName, classifyAgreementType } from './helpers.js';
 
 /**
@@ -11,7 +12,13 @@ import { findAgentByName, classifyAgreementType } from './helpers.js';
  * Extracted from the old ConversationManager monolith — logic is identical.
  */
 export class PostConversationProcessor {
+  private broadcaster?: EventBroadcaster;
+
   constructor(private world: World) {}
+
+  setBroadcaster(broadcaster: EventBroadcaster): void {
+    this.broadcaster = broadcaster;
+  }
 
   /**
    * After a conversation ends, store what was said as memories for each participant.
@@ -373,6 +380,7 @@ export class PostConversationProcessor {
             };
             if (!participant.socialLedger) participant.socialLedger = [];
             participant.socialLedger.push(thisEntry);
+            this.broadcaster?.ledgerUpdate(participantId, thisEntry);
 
             // Entry for each other participant (their own perspective)
             for (const otherId of otherIds) {
@@ -395,6 +403,7 @@ export class PostConversationProcessor {
               };
               if (!otherAgent.socialLedger) otherAgent.socialLedger = [];
               otherAgent.socialLedger.push(otherEntry);
+              this.broadcaster?.ledgerUpdate(otherId, otherEntry);
             }
 
             // Secondhand gossip: if fact.about names someone NOT in the conversation,
@@ -423,6 +432,7 @@ export class PostConversationProcessor {
                   };
                   if (!listener.socialLedger) listener.socialLedger = [];
                   listener.socialLedger.push(secondhandEntry);
+                  this.broadcaster?.ledgerUpdate(listenerId, secondhandEntry);
                 }
               }
             }

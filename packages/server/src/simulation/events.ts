@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, Artifact, BoardPost, Building, DriveState, Election, GameTime, Institution, Item, Mood, NarrativeEntry, Position, Property, Skill, Technology, VitalState, Weather, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, Artifact, BoardPost, Building, DriveState, Election, GameTime, Institution, Item, Mood, NarrativeEntry, Position, Property, Skill, SocialLedgerEntry, Technology, VitalState, Weather, WorldSnapshot } from '@ai-village/shared';
 import type { VillageNarrator } from './narrator.js';
 import type { CharacterTimeline } from './character-timeline.js';
 import type { ViewportManager } from './viewport-manager.js';
@@ -218,5 +218,9 @@ export class EventBroadcaster {
   technologyDiscovered(technology: Technology): void {
     this.io.emit('technology:discovered', technology);
     this.narrator?.logEvent(`${technology.inventorName} discovered a new technology: "${technology.name}" — ${technology.description}`);
+  }
+
+  ledgerUpdate(agentId: string, entry: SocialLedgerEntry): void {
+    this.io.emit('ledger:update', { agentId, entry });
   }
 }

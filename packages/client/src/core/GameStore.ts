@@ -17,6 +17,7 @@ import type {
   NarrativeEntry,
   Storyline,
   Recap,
+  SocialLedgerEntry,
 } from '@ai-village/shared';
 
 export interface ActionLogEntry {
@@ -48,6 +49,7 @@ interface GameState {
   activeRecap: Recap | null;
   weeklySummary: string | null;
   actionLog: Map<string, ActionLogEntry[]>;
+  socialViewOpen: boolean;
 }
 
 export interface ChatEntry {
@@ -91,6 +93,7 @@ class GameStore {
     activeRecap: null,
     weeklySummary: null,
     actionLog: new Map(),
+    socialViewOpen: false,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -528,6 +531,37 @@ class GameStore {
 
   setWeeklySummary(summary: string | null): void {
     this.state = { ...this.state, weeklySummary: summary };
+    this.notify();
+  }
+
+  // --- Ledger ---
+
+  updateAgentLedger(agentId: string, entry: SocialLedgerEntry): void {
+    const agent = this.state.agents.get(agentId);
+    if (!agent) return;
+    const ledger = agent.socialLedger ? [...agent.socialLedger] : [];
+    // Update existing entry or append
+    const existingIdx = ledger.findIndex(e => e.id === entry.id);
+    if (existingIdx >= 0) {
+      ledger[existingIdx] = entry;
+    } else {
+      ledger.push(entry);
+    }
+    const newAgents = new Map(this.state.agents);
+    newAgents.set(agentId, { ...agent, socialLedger: ledger });
+    this.state = { ...this.state, agents: newAgents };
+    this.notify();
+  }
+
+  // --- Social View ---
+
+  openSocialView(): void {
+    this.state = { ...this.state, socialViewOpen: true };
+    this.notify();
+  }
+
+  closeSocialView(): void {
+    this.state = { ...this.state, socialViewOpen: false };
     this.notify();
   }
 }

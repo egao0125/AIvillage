@@ -11,8 +11,9 @@ import { NarrativeBar } from './components/NarrativeBar';
 import { CharacterPage } from './components/CharacterPage';
 import { RecapOverlay } from './components/RecapOverlay';
 import { DevPanel } from './components/DevPanel';
+import { SocialView } from './social/SocialView';
 import { connectSocket } from '../network/socket';
-import { useCharacterPageAgentId, useActiveRecap } from '../core/hooks';
+import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../core/hooks';
 
 // Toggle dev tools — set to false to remove entirely
 const DEV_TOOLS_ENABLED = true;
@@ -44,6 +45,7 @@ export const App: React.FC = () => {
 
   const characterPageAgentId = useCharacterPageAgentId();
   const activeRecap = useActiveRecap();
+  const socialViewOpen = useSocialViewOpen();
 
   if (!entered) {
     return <SetupPage onEnter={handleEnter} />;
@@ -106,6 +108,8 @@ export const App: React.FC = () => {
       {characterPageAgentId && <CharacterPage />}
       {/* Recap overlay — full screen cinematic */}
       {activeRecap && <RecapOverlay />}
+      {/* Social dynamics graph */}
+      {socialViewOpen && <SocialView />}
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat onOpenChange={setSpectatorChatOpen} />
       {/* Feed — floating button next to chat */}

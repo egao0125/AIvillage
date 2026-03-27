@@ -20,6 +20,7 @@ import type {
   NarrativeEntry,
   Storyline,
   Recap,
+  SocialLedgerEntry,
 } from '@ai-village/shared';
 
 let socket: Socket | null = null;
@@ -281,6 +282,11 @@ export function connectSocket(): Socket {
 
   socket.on('weekly-summary:ready', (data: { summary: string | null }) => {
     if (data.summary) gameStore.setWeeklySummary(data.summary);
+  });
+
+  // --- Ledger real-time updates ---
+  socket.on('ledger:update', (data: { agentId: string; entry: SocialLedgerEntry }) => {
+    gameStore.updateAgentLedger(data.agentId, data.entry);
   });
 
   // --- Infra 6: Viewport catch-up ---
