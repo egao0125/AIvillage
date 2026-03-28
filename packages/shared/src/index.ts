@@ -86,6 +86,7 @@ export interface Agent {
   // --- Four Stream Memory ---
   dossiers?: RelationshipDossier[];
   activeConcerns?: ActiveConcern[];
+  beliefs?: { content: string; timestamp: number }[];
 }
 
 export type AgentState =

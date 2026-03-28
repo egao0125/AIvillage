@@ -276,12 +276,23 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
     );
     if (existing) return;
 
-    this.concerns.push(concern);
-    if (this.concerns.length > 10) {
-      const removable = this.concerns.findIndex(c => c.resolved);
-      if (removable >= 0) this.concerns.splice(removable, 1);
-      else this.concerns.shift();
+    const MAX = 10;
+    if (this.concerns.length >= MAX && !concern.permanent) {
+      // Weighted eviction: drop the least valuable non-permanent concern
+      const W: Record<string, number> = { rule: 1, threat: .9, commitment: .7, need: .6, goal: .4, unresolved: .2 };
+      const now = Date.now();
+      const removable = this.concerns
+        .filter(c => !c.permanent)
+        .map(c => ({
+          c,
+          score: (W[c.category] ?? .3) * Math.pow(.995, (now - (c.createdAt || now)) / 3600000),
+        }))
+        .sort((a, b) => a.score - b.score);
+      if (removable.length > 0) {
+        this.concerns = this.concerns.filter(c => c.id !== removable[0].c.id);
+      }
     }
+    this.concerns.push(concern);
     this.syncConcernsToAgent();
   }
 
@@ -330,6 +341,17 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
     return [...this.beliefs]
       .sort((a, b) => b.importance - a.importance)
       .slice(0, n);
+  }
+
+  getBeliefs(): Memory[] {
+    return [...this.beliefs];
+  }
+
+  syncBeliefsToAgent(): void {
+    this.agent.beliefs = this.beliefs.map(b => ({
+      content: b.content,
+      timestamp: b.timestamp,
+    }));
   }
 
   // --- RETRIEVAL SCORING (Memoria's recency-aware weighting) ---
@@ -381,6 +403,15 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
   } {
     const now = Date.now();
     const nearbySet = new Set(nearbyAgentIds ?? []);
+
+    // Prune stale concerns before building memory
+    this.concerns = this.concerns.filter(c => {
+      if (c.permanent) return true;
+      if (c.expiresAt && now > c.expiresAt) return false;
+      if (c.category === 'unresolved' && (now - (c.createdAt || now)) > 48 * 3600000) return false;
+      return true;
+    });
+    this.syncConcernsToAgent();
 
     // --- CONCERNS (250 chars) ---
     // Sorted by category weight × decay
@@ -567,6 +598,7 @@ Example: ["Egao only helps when it benefits him", "I should go to the farm earli
   async nightlyCompression(llm: LLMProvider): Promise<void> {
     // 1. Generate beliefs (reflective synthesis)
     await this.generateBeliefs(llm);
+    this.syncBeliefsToAgent();
 
     // 2. A-MEM EVOLUTION: compress duplicate timeline events
     // "Gathered wheat" x5 → "Gathered wheat (5x today)"
