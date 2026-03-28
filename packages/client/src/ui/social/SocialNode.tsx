@@ -29,7 +29,7 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
   return (
     <g
       transform={`translate(${x}, ${y}) scale(${scale})`}
-      style={{ cursor: 'pointer', opacity }}
+      style={{ cursor: 'pointer', opacity, transition: 'transform 500ms ease-out, opacity 300ms ease' }}
       onMouseEnter={() => onMouseEnter(id)}
       onMouseLeave={onMouseLeave}
       onClick={() => onClick(id)}
