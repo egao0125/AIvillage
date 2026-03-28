@@ -2,6 +2,7 @@ import React from 'react';
 import type { Agent } from '@ai-village/shared';
 import { nameToColor, hexToString } from '../../utils/color';
 import { gameStore } from '../../core/GameStore';
+import { useReputation } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 
 interface AgentCardProps {
@@ -16,6 +17,9 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   onClick,
 }) => {
   const color = hexToString(nameToColor(agent.config.name));
+  const reputation = useReputation();
+  const systemRep = reputation.find(r => r.toAgentId === agent.id && r.fromAgentId === 'system');
+  const repScore = systemRep?.score ?? 0;
 
   const stateColors: Record<string, string> = {
     active: COLORS.active,
@@ -88,6 +92,16 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           }}
         >
           {isDead ? '\u{1F480} ' : isAway ? '\u{1F4A4} ' : ''}{agent.config.name}
+          {repScore !== 0 && (
+            <span style={{
+              marginLeft: 6,
+              fontSize: '9px',
+              fontFamily: FONTS.pixel,
+              color: repScore > 0 ? COLORS.active : COLORS.warning,
+            }}>
+              {repScore > 0 ? '+' : ''}{repScore}
+            </span>
+          )}
         </div>
         <div
           style={{

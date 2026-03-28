@@ -15,6 +15,7 @@ import type {
   NarrativeEntry,
   Storyline,
   Recap,
+  VillageMemoryEntry,
 } from '@ai-village/shared';
 
 export function useAgents(): Agent[] {
@@ -160,6 +161,13 @@ export function useWeeklySummary(): string | null {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().weeklySummary
+  );
+}
+
+export function useVillageMemory(): VillageMemoryEntry[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().villageMemory
   );
 }
 

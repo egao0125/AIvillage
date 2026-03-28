@@ -304,6 +304,11 @@ export class SimulationEngine {
           }
         }
 
+        // Restore village collective memory
+        if (worldData.villageMemory && Array.isArray(worldData.villageMemory)) {
+          this.world.villageMemory = worldData.villageMemory as typeof this.world.villageMemory;
+        }
+
         console.log(`[Engine] World state restored (day ${this.world.time.day}, hour ${this.world.time.hour})`);
       }
 
@@ -1657,6 +1662,14 @@ Answer with ONLY one word: "support" or "oppose".`,
     if (likeCount > dislikeCount) {
       rulePost.ruleStatus = 'passed';
 
+      // Village collective memory — rule passed
+      this.world.addVillageMemory({
+        content: `"${rulePost.content.slice(0, 60)}" rule passed ${likeCount}-${dislikeCount}. Proposed by ${rulePost.authorName}.`,
+        type: 'rule',
+        day: this.world.time.day,
+        significance: 7,
+      });
+
       // Handle property claim if this is a claim vote
       if (rulePost.claimTarget) {
         const ct = rulePost.claimTarget;
@@ -1755,6 +1768,14 @@ Answer with ONLY one word: "support" or "oppose".`,
       console.log(`[RuleVote] PASSED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
     } else {
       rulePost.ruleStatus = 'rejected';
+
+      // Village collective memory — rule rejected
+      this.world.addVillageMemory({
+        content: `"${rulePost.content.slice(0, 60)}" rule rejected ${likeCount}-${dislikeCount}. Proposed by ${rulePost.authorName}.`,
+        type: 'rule',
+        day: this.world.time.day,
+        significance: 5,
+      });
 
       // Notify all agents of the rejection with vote breakdown
       for (const [id, agent] of this.world.agents) {
@@ -2099,6 +2120,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     this.world.dailyGatherCounts.clear();
     this.world.activeBuildProjects.clear();
     this.world.pendingTrades.clear();
+    this.world.villageMemory = [];
     for (const spawn of this.world.materialSpawns) {
       spawn.lastGathered = undefined;
     }

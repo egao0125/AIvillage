@@ -707,6 +707,32 @@ export class AgentController {
 
       // Four Stream: nightly compression — beliefs + prune timeline + prune concerns
       if (this.cognition.fourStream) {
+        // Expire old commitments — broken promise = rep -5
+        const now = Date.now();
+        for (const c of this.cognition.fourStream.getAllConcerns()) {
+          if (c.category === 'commitment' && !c.resolved) {
+            const ageHours = (now - (c.createdAt || now)) / 3_600_000;
+            if (ageHours > 24) {
+              this.cognition.fourStream.resolveConcern(c.id);
+              this.adjustReputation(this.agent.id, -5, 'Broken promise');
+              console.log(`[Commitment] ${this.agent.config.name} broke promise: ${c.content.slice(0, 50)}`);
+            }
+          }
+        }
+
+        // Clean up commitments involving dead agents
+        for (const c of this.cognition.fourStream.getAllConcerns()) {
+          if (c.relatedAgentIds?.length) {
+            const allDead = c.relatedAgentIds.every(id => {
+              const a = this.world.getAgent(id);
+              return a && a.alive === false;
+            });
+            if (allDead) {
+              this.cognition.fourStream.resolveConcern(c.id);
+            }
+          }
+        }
+
         await this.cognition.fourStream.nightlyCompression(this.cognition.llmProvider);
       }
     } catch (err) {
@@ -986,6 +1012,14 @@ export class AgentController {
     this.world.addBoardPost(deathPost);
     this.broadcaster.boardPost(deathPost);
     if (this.bus) this.bus.emit({ type: 'board_post_created', post: deathPost });
+
+    // Village collective memory — death is always significant
+    this.world.addVillageMemory({
+      content: `${this.agent.config.name} died of ${cause}.`,
+      type: 'death',
+      day: this.world.time.day,
+      significance: 9,
+    });
 
     // Fix 4: Emit agent_died event for nearby witness perception
     if (this.bus) {
@@ -1373,9 +1407,22 @@ export class AgentController {
       const otherInvStr = Object.entries(otherInv).length > 0
         ? ' [carrying: ' + Object.entries(otherInv).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') + ']'
         : ' [carrying nothing]';
+
+      // Spatial context: distance and direction
+      const dx = a.position.x - this.agent.position.x;
+      const dy = a.position.y - this.agent.position.y;
+      const dist = Math.round(Math.sqrt(dx * dx + dy * dy));
+      const dir = dist < 2 ? 'right here' : (
+        (Math.abs(dy) > Math.abs(dx)
+          ? (dy < 0 ? 'north' : 'south')
+          : (dx < 0 ? 'west' : 'east'))
+      );
+      const otherArea = getAreaAt(a.position);
+      const spatialStr = dist < 2 ? '' : `, ${dist} tiles ${dir}${otherArea ? ' at ' + otherArea.name : ''}`;
+
       nearbyForSituation.push({
         name: a.config.name,
-        activity: (a.currentAction || 'idle') + otherInvStr,
+        activity: (a.currentAction || 'idle') + otherInvStr + spatialStr,
         id: a.id,
         vitals: a.vitals,
       });
@@ -1402,14 +1449,10 @@ export class AgentController {
     // 3. COMMUNITY ACTIONS (with cooldowns)
     // ========================================
 
-    // Board post — with cooldown
-    let showBoardPost = true;
-    if (this.cognition.fourStream) {
-      const recentPosts = this.cognition.fourStream.getRecentTimeline(10)
-        .filter(m => m.content.includes('posted on the village board'));
-      if (recentPosts.length >= 2) showBoardPost = false;
-    }
-    if (showBoardPost) {
+    // Board post — max 2 per agent per day
+    const todayBoardPosts = this.world.getActiveBoard()
+      .filter(p => p.authorId === this.agent.id && p.day === this.world.time.day && p.type !== 'rule');
+    if (todayBoardPosts.length < 2) {
       actions.push({ id: 'post_board', label: 'Write on all-agent chat', category: 'creative' });
     }
 
@@ -1614,6 +1657,7 @@ export class AgentController {
       allReputations: (this.world.reputation ?? [])
         .filter(r => r.fromAgentId === 'system' && r.score !== 0)
         .map(r => ({ id: r.toAgentId, score: r.score })),
+      villageHistory: this.world.getTopVillageMemory(5) || undefined,
     };
   }
 
@@ -1836,6 +1880,29 @@ export class AgentController {
     });
     // Four Stream: accumulate importance for belief generation
     this.importanceAccum += outcomeImportance;
+
+    // Strategy snapshot tracking — record state after every action
+    if (!actor.strategyHistory) actor.strategyHistory = [];
+    const dossiers = this.cognition.fourStream?.getAllDossiers?.() ?? [];
+    const avgTrust = dossiers.length > 0
+      ? Math.round(dossiers.reduce((s, d) => s + (d.trust ?? 0), 0) / dossiers.length)
+      : 0;
+    const repEntry = (this.world.reputation ?? []).find(
+      r => r.toAgentId === actor.id && r.fromAgentId === 'system'
+    );
+    actor.strategyHistory.push({
+      actionType: outcome.type || 'unknown',
+      day: this.world.time.day,
+      hungerAt: actor.vitals?.hunger ?? 0,
+      healthAt: actor.vitals?.health ?? 100,
+      inventoryCount: actor.inventory.length,
+      avgTrust,
+      reputation: repEntry?.score ?? 0,
+    });
+    // Cap at 100 entries
+    if (actor.strategyHistory.length > 100) {
+      actor.strategyHistory = actor.strategyHistory.slice(-100);
+    }
 
     // Consequence concern on failure
     if (!outcome.success) {
@@ -2700,6 +2767,15 @@ export class AgentController {
         if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
 
         this.broadcaster.institutionUpdate(group);
+
+        // Village collective memory — alliance formed
+        this.world.addVillageMemory({
+          content: `${this.agent.config.name} and ${target.config.name} founded "${groupName}".`,
+          type: 'alliance',
+          day: this.world.time.day,
+          significance: 6,
+        });
+
         this.lastOutcome = `You founded ${groupName} with ${target.config.name}.`;
         this.lastTrigger = this.lastOutcome;
         this.state = 'performing'; this.activityTimer = 3;
@@ -2789,6 +2865,15 @@ export class AgentController {
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: betrayPost });
 
       this.broadcaster.institutionUpdate(group);
+
+      // Village collective memory — betrayal
+      this.world.addVillageMemory({
+        content: `${this.agent.config.name} left ${group.name}.${group.dissolved ? ' The group dissolved.' : ''}`,
+        type: 'betrayal',
+        day: this.world.time.day,
+        significance: 7,
+      });
+
       this.lastOutcome = `You left ${group.name}.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
@@ -2940,7 +3025,13 @@ export class AgentController {
       let content: string;
       try {
         const identity = this.cognition.identityBlock;
+        const inv = this.agent.inventory;
+        const invStr = inv.length ? inv.map(i => i.name).join(', ') : 'EMPTY';
+        const foodCount = inv.filter(i => i.type === 'food').length;
+        const realityBlock = `REALITY (verified by game engine):\nYour inventory: ${invStr}\nTotal food you have: ${foodCount}\nDo not claim to have items not listed here.`;
         const postPrompt = `${identity}
+
+${realityBlock}
 
 You are writing a PUBLIC message on the village board for everyone to read.
 

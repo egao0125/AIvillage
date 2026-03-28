@@ -36,6 +36,7 @@ export interface WorldStateData {
   worldObjects?: unknown[];
   culturalNames?: Record<string, unknown>;
   resourcePools?: Record<string, number>;
+  villageMemory?: unknown[];
 }
 
 export class SupabasePersistence {

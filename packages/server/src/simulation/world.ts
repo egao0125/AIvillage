@@ -1,4 +1,4 @@
-import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, Weather, WorldObject, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, VillageMemoryEntry, Weather, WorldObject, WorldSnapshot } from '@ai-village/shared';
 import type { TradeProposal } from '@ai-village/ai-engine';
 import { RESOURCES, SKILLS, BUILDINGS } from '@ai-village/ai-engine';
 import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
@@ -31,6 +31,9 @@ export class World {
   culturalNames: Map<string, { name: string; mentionCount: number; lastMentionedDay: number }> = new Map();
   activeBuildProjects: Map<string, { buildingDefId: string; sessionsComplete: number; ownerId: string; location: string }> = new Map();
   pendingTrades: Map<string, TradeProposal> = new Map();
+
+  // --- Village collective memory ---
+  villageMemory: VillageMemoryEntry[] = [];
 
   constructor() {
     this.time = {
@@ -201,6 +204,25 @@ export class World {
     console.log(`[Board] ${post.authorName} posted [${post.type}]: ${post.content}`);
   }
 
+  addVillageMemory(entry: VillageMemoryEntry): void {
+    this.villageMemory.push(entry);
+    // Cap at 20 entries — remove lowest significance when full
+    if (this.villageMemory.length > 20) {
+      this.villageMemory.sort((a, b) => b.significance - a.significance);
+      this.villageMemory = this.villageMemory.slice(0, 20);
+    }
+    console.log(`[VillageMemory] Day ${entry.day}: ${entry.content.slice(0, 60)}`);
+  }
+
+  getTopVillageMemory(count: number = 5): string {
+    if (this.villageMemory.length === 0) return '';
+    return this.villageMemory
+      .sort((a, b) => b.significance - a.significance)
+      .slice(0, count)
+      .map(m => `- Day ${m.day}: ${m.content}`)
+      .join('\n');
+  }
+
   getActiveBoard(): BoardPost[] {
     return this.board.filter(p => !p.revoked);
   }
@@ -256,6 +278,7 @@ export class World {
       buildings: Array.from(this.buildings.values()),
       technologies: this.technologies,
       worldObjects: Array.from(this.worldObjects.values()),
+      villageMemory: this.villageMemory,
     };
   }
 

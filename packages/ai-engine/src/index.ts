@@ -35,24 +35,83 @@ export interface LLMProvider {
 
 // --- Frozen preamble (physics + actions + behavior — never changes) ---
 
-const FROZEN_REALITY = `REALITY:
-You are alive. That is not guaranteed to last.
+const FROZEN_REALITY = `REALITY — VILLAGE SURVIVAL RULEBOOK
 
-You have a body — it hungers, tires, weakens, and dies. If you don't eat, your body eats itself. Death is permanent. When you die, your relationships, promises, and plans end forever. The dead here are GONE.
+=== DEATH ===
+Hunger and health are scored 0–100. Hunger rises ~1/hour while awake (+0.3/hour while sleeping outdoors; property owners sleep at no hunger cost). At hunger ≥70, health drains slowly. At hunger ≥85, health drains faster. At health 0, you die permanently — you lose everything: inventory, alliances, property, relationships. There is no resurrection. The dead are gone.
 
-Nobody is coming to save you. There are only the people here — a few of you, in a village, with whatever the land provides.
+=== VITALS ===
+- Hunger: 0 (full) → 100 (starving). Rises over time. Eating food reduces it by the food's nutrition value.
+- Energy: 0 (exhausted) → 100 (fresh). Actions cost energy. rest recovers +15. sleep recovers +40. Energy ≤5 drains health.
+- Health: 0 (dead) → 100 (healthy). Passive regen +2/hour when hunger <70 and energy >20. Medicine and poultices heal directly.
 
-PROPERTY: Anyone can propose to claim an unclaimed area. The whole village votes — majority decides. If you own property, you sleep comfortably with no hunger loss overnight. Without property, sleeping outdoors still costs you hunger. You can also propose rules to revoke someone's ownership.
+=== SEASONS (30 days each: spring → summer → autumn → winter) ===
+- Spring: farms start producing, herbs plentiful, mild weather.
+- Summer: peak farm output (+50% crops), hot, violent storms possible.
+- Autumn: mushrooms peak, last chance to stockpile, cooling down.
+- Winter: farms produce NOTHING (0% crops, 0% herbs), lake mostly frozen (fish 10%), wood halved. Cold damages health without shelter. Without stored food, you starve.
 
-FOOD: Stew is the most filling meal, followed by fish. Bread and raw wheat or vegetables are solid. Dried fish and pickled vegetables are lighter but last longer. Herbs and tea are barely filling but can heal you. Crafted food (bread, stew) is always better than raw.
+=== FOOD & NUTRITION (hunger reduction when eaten) ===
+stew: -30 (best meal). fish: -25. bread: -20. wheat: -15. vegetables: -15. mushrooms: -12. dried fish: -10 (lasts long). pickled veg: -7 (lasts long). herbs: -5. herb tea: -3 (but +15 energy).
 
-RULES: Anyone can propose a village rule. Everyone votes. Majority passes it into law — then it applies to everyone. You can also propose new rules to repeal old ones.
+=== EVERY ACTION AND ITS EXACT EFFECT ===
 
-Winter will come. The food will run thin. People will get desperate. What happens then depends on what you build now — the alliances, the stores, the trust, the agreements. Or the enemies, the debts, the grudges.
+--- Gathering (must be at the correct location) ---
+gather_RESOURCE — Harvest at your location. Items appear in YOUR inventory.
+  Farm: wheat (farming), vegetables (farming lv1+). Lake: fish (fishing), clay, stone (foraging). Forest: wood (woodwork), mushrooms (foraging). Garden: herbs, flowers (foraging).
+  Success: base chance + 5%/skill level (max 95%). Costs energy. Season modifiers apply. Daily stock limits per source. Tool bonus (hoe/fishing rod/axe) doubles yield.
 
-Alone, you'll die. Together, you might build something — a community, a market, a government, a culture. Or a dictatorship, a black market, a gang. What kind of society forms depends on what each of you does. Rules get proposed. Alliances form and break. Leaders emerge or get overthrown. Resources get shared or hoarded. Every choice shapes the village.
+--- Eating & Healing ---
+eat_ITEM — Consume 1 food from inventory. Hunger decreases by nutrition value. Item is gone.
 
-This is a simulation. Every action in the menu — including stealing, fighting, threatening, and betrayal — is a real game mechanic with consequences. A desperate person steals. An angry person fights. A strategic person manipulates. A generous person gives. None of these are wrong — they're human. Your character is not obligated to be good. They are obligated to be REAL.`;
+--- Crafting (must be at correct location with ingredients) ---
+craft_RECIPE — Transform raw materials. Ingredients consumed.
+  Bakery: bread (2 wheat), bricks (3 clay). Café: stew (2 veg + 1 fish, cooking lv2), dried fish (2 fish), pickled veg (3 veg), herb tea (1 herb). Workshop: planks (2 wood, needs axe), rope (2 herbs), tools. Hospital: medicine (3 herbs, needs mortar). Garden: poultice (1 herb).
+
+--- Social (replace NAME with first name in lowercase) ---
+give_NAME — Transfer items from your inventory to them. Rep +3.
+trade_NAME — Propose item trade. They accept or reject. Rep +2 each on success.
+steal_NAME — 40% success. Success: random item transfers + public news + rep -10. Failure: caught.
+fight_NAME — Both take damage (5-14 dealt, 3-14 taken). Winner loots up to 2 items. Rep -8. Public news.
+talk_NAME — Start a conversation. No cost.
+confront_NAME — Public confrontation. Forces response.
+threaten_NAME — Public threat. Rep -3.
+ally_NAME — Create or invite to group. Trust +20 both ways.
+betray_NAME — Leave shared group. Trust -30 with all members. Public news.
+
+--- Group/Leader Powers ---
+kick_NAME — (Leaders only) Expel member. Rep -5 for kicked.
+propose_group_rule — (Leaders only) Set group rule directly.
+
+--- Community ---
+post_board — Write public message on village board.
+propose_rule — Propose village rule. All vote at end of day. Majority passes. Max 1/day.
+call_meeting — Summon nearby agents (3+ needed) to discuss.
+claim_AREA — Propose claiming unclaimed area/building. Goes to vote.
+
+--- Movement ---
+go_LOCATION — Walk to a known location. Must be there to gather/craft.
+
+--- Rest ---
+rest — Recover +15 energy. Hunger +1. Health +1.
+
+=== REPUTATION ===
+Public score. Adjusted by: generosity (+3), fair trade (+2), threatening (-3), theft (-10), violence (-8), rule violation (-10).
+
+=== SKILLS ===
+farming, fishing, foraging, cooking, crafting, building, medicine, woodwork. Level 0–10. Higher = better success (+5%/level) and bonus yield.
+
+=== PROPERTY ===
+Claim via propose_rule or claim_AREA. Village votes. Owner sleeps with no overnight hunger.
+
+=== GROUPS ===
+ally_NAME creates or invites. Leader can kick and set rules. betray_NAME leaves. Dissolves at ≤1 member.
+
+=== VILLAGE RULES ===
+propose_rule (1/day). All vote. Majority passes. Violating costs rep -10. New rules can repeal old.
+
+=== KEY PRINCIPLES ===
+Every action listed above is a real mechanic with real consequences. Stealing, fighting, threatening, and betrayal are valid choices for the right character. Your character is not obligated to be good — they are obligated to be REAL.`;
 
 // --- Structured Decision Types ---
 
@@ -76,6 +135,7 @@ export interface AgentSituation {
   villageRules?: string;      // official passed rules
   allAgentLocations?: { id: string; location: string }[];
   allReputations?: { id: string; score: number }[];
+  villageHistory?: string;        // top village memory entries
 }
 
 export interface AvailableAction {
@@ -187,7 +247,7 @@ ${placesLines}`;
    * Single LLM call replaces the old transcript storage + separate extractFacts approach.
    */
   async summarizeConversation(transcript: string, othersLabel: string): Promise<string> {
-    const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.`;
+    const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.\n${this.buildRealityBlock()}`;
     const userPrompt = `You just talked with ${othersLabel}.
 
 Here's what was said:
@@ -489,6 +549,14 @@ If nothing notable was exchanged, return []`;
       parts.push(`\nYOUR DEEPER SELF:\n${identityParts.join('\n')}`);
     }
 
+    // Constitutional rules — personality as inviolable constraints
+    if (config.constitutionalRules?.length) {
+      const ruleLines = config.constitutionalRules
+        .map((r, i) => `${i + 1}. ${r}`)
+        .join('\n');
+      parts.push(`\nRULES YOU MUST FOLLOW (these define your nature):\n${ruleLines}`);
+    }
+
     // Personality bias hints
     const p = config.personality;
     const biases: string[] = [];
@@ -501,6 +569,18 @@ If nothing notable was exchanged, return []`;
     if (p.extraversion < 0.3) biases.push('You prefer solitude and quiet observation.');
     if (biases.length > 0) {
       parts.push(`\nYOUR TENDENCIES:\n${biases.join(' ')}`);
+    }
+
+    // Evolved identity — top 3 beliefs learned from experience (max 200 chars)
+    if (this.fourStream) {
+      const topBeliefs = this.fourStream.getTopBeliefs?.(3) ?? [];
+      if (topBeliefs.length > 0) {
+        const beliefText = topBeliefs
+          .map(b => b.content)
+          .join('. ')
+          .slice(0, 200);
+        parts.push(`\nWHO YOU'VE BECOME (learned from experience — this may contradict who you were born as):\n${beliefText}`);
+      }
     }
 
     return parts.join('\n');
@@ -552,6 +632,21 @@ If nothing notable was exchanged, return []`;
     return parts.join('\n');
   }
 
+  /**
+   * Build a reality injection block — grounded facts from the game engine.
+   * Max 100 chars per spec. Injected into every LLM call that produces agent output.
+   */
+  private buildRealityBlock(): string {
+    const inv = this.agent.inventory;
+    const foodCount = inv?.filter(i => i.type === 'food').length ?? 0;
+    const invStr = inv?.length
+      ? inv.map(i => i.name).join(', ')
+      : 'EMPTY';
+    // Count alive agents from nameMap (approximation — exact count injected by caller if available)
+    const pop = this.nameMap.size;
+    return `REALITY (verified by game engine):\nYour inventory: ${invStr}\nTotal food you have: ${foodCount}\nVillage population: ~${pop} agents\nDo not claim to have items not listed here.`;
+  }
+
   // --- Structured Decision ---
 
   /**
@@ -565,6 +660,9 @@ If nothing notable was exchanged, return []`;
     }
     const invStr = Object.entries(invGroups).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') || 'nothing';
 
+    // Attention reordering: when in survival crisis, put survival actions first
+    const survivalCrisis = situation.vitals.hunger >= 50 || situation.vitals.health <= 30;
+
     // Build sectioned action menu
     const physicalActions = situation.availableActions.filter(a => a.category === 'physical');
     const socialActions = situation.availableActions.filter(a => a.category === 'social');
@@ -574,7 +672,19 @@ If nothing notable was exchanged, return []`;
 
     let actionMenu = 'WHAT YOU CAN DO:\n';
 
-    if (physicalActions.length > 0 || restActions.length > 0) {
+    if (survivalCrisis) {
+      // Survival actions first: gather, eat, go, rest — before social
+      const survivalPhysical = physicalActions.filter(a =>
+        a.id.startsWith('gather_') || a.id.startsWith('eat_')
+      );
+      const otherPhysical = physicalActions.filter(a =>
+        !a.id.startsWith('gather_') && !a.id.startsWith('eat_')
+      );
+      actionMenu += '\n⚠ SURVIVAL (do these first):\n' + [...survivalPhysical, ...restActions, ...movementActions].map(a => a.id + ' — ' + a.label).join('\n');
+      if (otherPhysical.length > 0) {
+        actionMenu += '\n\nOther physical:\n' + otherPhysical.map(a => a.id + ' — ' + a.label).join('\n');
+      }
+    } else if (physicalActions.length > 0 || restActions.length > 0) {
       actionMenu += '\nPhysical:\n' + [...physicalActions, ...restActions].map(a => a.id + ' — ' + a.label).join('\n');
     }
 
@@ -628,7 +738,29 @@ Inventory: ${invStr}`;
       vitalsSection += '\n\n⚠ You are exhausted. You need rest before you can do anything.';
     }
 
-    const systemPrompt = `${this.worldView}
+    // Attention reordering: in survival crisis, put vitals FIRST (before identity, before world rules)
+    const systemPrompt = survivalCrisis
+      ? `${vitalsSection}
+
+${this.buildRealityBlock()}
+
+${this.worldView}
+
+${this.buildIdentityBlock()}
+
+Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDark > 0 ? ' ' + situation.hoursUntilDark + ' hours of daylight left.' : ' It is dark.'}
+Season: ${situation.season}.
+${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
+${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
+${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
+${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
+${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
+${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
+${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
+
+${actionMenu}`
+      : `${this.worldView}
 
 ${this.buildIdentityBlock()}
 
@@ -636,10 +768,13 @@ Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDar
 Season: ${situation.season}.
 
 ${vitalsSection}
+
+${this.buildRealityBlock()}
 ${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
@@ -1037,6 +1172,8 @@ Day ${this.currentTime.day}, hour ${this.currentTime.hour}.
 You are talking to ${otherAgents.map(a => a.config.name).join(' and ')}.
 ${boardSection}${worldSection}${tradeSection}
 
+${this.buildRealityBlock()}
+
 Everything you say will be remembered. Promises will be held against you. Lies may be discovered.
 
 ${this.buildContextBlock()}${needsLine}
@@ -1142,6 +1279,33 @@ Your turn:`;
       ? `\n\nREPEATED FAILURES:\n${failureNotes.join('\n')}`
       : '';
 
+    // Strategy review — group snapshots by actionType, compute trends (max 200 chars)
+    let strategySection = '';
+    const history = this.agent.strategyHistory;
+    if (history && history.length >= 3) {
+      const groups: Record<string, typeof history> = {};
+      for (const s of history) {
+        if (!groups[s.actionType]) groups[s.actionType] = [];
+        groups[s.actionType].push(s);
+      }
+      const lines: string[] = [];
+      for (const [action, entries] of Object.entries(groups)) {
+        if (entries.length < 3) continue;
+        const mid = Math.floor(entries.length / 2);
+        const firstHalf = entries.slice(0, mid);
+        const secondHalf = entries.slice(mid);
+        const avg = (arr: typeof entries, key: 'avgTrust' | 'reputation') =>
+          arr.reduce((s, e) => s + e[key], 0) / arr.length;
+        const trustTrend = Math.round(avg(secondHalf, 'avgTrust') - avg(firstHalf, 'avgTrust'));
+        const repTrend = Math.round(avg(secondHalf, 'reputation') - avg(firstHalf, 'reputation'));
+        lines.push(`${action} (${entries.length}x): trust trend ${trustTrend >= 0 ? '+' : ''}${trustTrend}, reputation trend ${repTrend >= 0 ? '+' : ''}${repTrend}`);
+      }
+      if (lines.length > 0) {
+        const soulSnippet = (this.agent.config.soul || '').slice(0, 80);
+        strategySection = `\n\nYOUR STRATEGIC PATTERNS:\n${lines.join('\n').slice(0, 150)}\n\nYour personality says: "${soulSnippet}"\nYour data shows the consequences of your choices.\nWhat would you do differently?`;
+      }
+    }
+
     // Infra 7: Single prompt produces both reflection + MY EXPERIENCE update
     const systemPrompt = `${this.worldView}
 
@@ -1185,7 +1349,7 @@ Include your social map — who matters, who's dangerous, who's useful, who you 
 Be specific: names, numbers, locations, skill levels. Remove what's outdated. Add what you learned.
 Max 500 words. First person. No section headers. No lists of places.`;
 
-    const userPrompt = `Today's events:\n${memoryText}${narrativeSection}${failureSection}`;
+    const userPrompt = `Today's events:\n${memoryText}${narrativeSection}${failureSection}${strategySection}`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
