@@ -39,17 +39,12 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
   const cy = my + (dx / len) * offset;
   const pathD = `M ${x1} ${y1} Q ${cx} ${cy} ${x2} ${y2}`;
 
-  // Determine animation
-  let animationStyle: React.CSSProperties = {};
+  // Static edge styling (no continuous animations — they cause jank during pan/zoom)
+  let edgeStyle: React.CSSProperties = {};
   if (edge.hasDisagreement) {
-    animationStyle = { animation: 'socialFlicker 3s ease-in-out infinite' };
-  } else if (edge.sharedEntries.some(e => e.sourceEntry.status === 'proposed' || e.sourceEntry.status === 'accepted')) {
-    animationStyle = { animation: 'socialPulse 2s ease-in-out infinite' };
-  } else {
-    animationStyle = {
-      strokeDasharray: '8 4',
-      animation: 'socialBreathing 4s ease-in-out infinite',
-    };
+    edgeStyle = { strokeDasharray: '6 3' };
+  } else if (!edge.sharedEntries.some(e => e.sourceEntry.status === 'proposed' || e.sourceEntry.status === 'accepted')) {
+    edgeStyle = { strokeDasharray: '8 4' };
   }
 
   const tooltip = `${sourceName} \u2194 ${targetName}: ${edge.interactionCount} interaction${edge.interactionCount !== 1 ? 's' : ''}, ${sentimentLabel(edge.avgReputation)}${edge.hasDisagreement ? ' \u26a0 disagreement' : ''}`;
@@ -74,7 +69,7 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
         stroke={edge.color}
         strokeWidth={edge.thickness}
         strokeLinecap="round"
-        style={{ ...animationStyle, pointerEvents: 'none' }}
+        style={{ ...edgeStyle, pointerEvents: 'none' }}
       />
       {/* Disagreement marker */}
       {edge.hasDisagreement && (
@@ -83,7 +78,7 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
           cy={cy}
           r={4}
           fill="#ff6b6b"
-          style={{ animation: 'socialFlicker 3s ease-in-out infinite' }}
+          opacity={0.9}
         />
       )}
     </g>

@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, memo } from 'react';
 import type { SocialNode, SocialEdge } from './types';
 import { SocialNodeComponent } from './SocialNode';
 import { SocialStringComponent } from './SocialString';
@@ -28,27 +28,18 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
   onNodeHover, onEdgeHover, onNodeClick, onEdgeClick, onBackgroundClick,
   onZoomChange, zoomPanRef,
 }) => {
-  const { transform, isDefault, onWheel, onPointerDown, onPointerMove, onPointerUp, wasClick, reset } = useZoomPan();
+  const { gRef, onWheel, onPointerDown, onPointerMove, onPointerUp, wasClick, reset, onDefaultChange } = useZoomPan();
 
   // Expose reset to parent
   if (zoomPanRef) zoomPanRef.current = { reset };
 
-  // Notify parent when zoom state changes
-  React.useEffect(() => {
-    onZoomChange?.(isDefault);
-  }, [isDefault, onZoomChange]);
+  // Notify parent when zoom state changes (for showing reset button)
+  onDefaultChange.current = onZoomChange ?? null;
 
   // Node lookup for names
   const nodeMap = useMemo(() => {
     const m = new Map<string, SocialNode>();
     for (const n of nodes) m.set(n.id, n);
-    return m;
-  }, [nodes]);
-
-  // Node position lookup
-  const posMap = useMemo(() => {
-    const m = new Map<string, { x: number; y: number }>();
-    for (const n of nodes) m.set(n.id, { x: n.x, y: n.y });
     return m;
   }, [nodes]);
 
@@ -80,33 +71,30 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
       }}
       style={{ display: 'block', cursor: 'grab' }}
     >
-      <g transform={transform}>
+      <g ref={gRef}>
         {/* Edges layer */}
         <g>
           {edges.map(edge => {
-            const s = posMap.get(edge.source);
-            const t = posMap.get(edge.target);
-            if (!s || !t) return null;
+            const sNode = nodeMap.get(edge.source);
+            const tNode = nodeMap.get(edge.target);
+            if (!sNode || !tNode) return null;
 
             const dimmed = connectedToHovered
               ? !connectedToHovered.edgeIds.has(edge.id)
               : false;
 
-            const sourceName = nodeMap.get(edge.source)?.name ?? '?';
-            const targetName = nodeMap.get(edge.target)?.name ?? '?';
-
             return (
               <SocialStringComponent
                 key={edge.id}
                 edge={edge}
-                x1={s.x}
-                y1={s.y}
-                x2={t.x}
-                y2={t.y}
+                x1={sNode.x}
+                y1={sNode.y}
+                x2={tNode.x}
+                y2={tNode.y}
                 dimmed={dimmed}
                 hovered={hoveredEdgeId === edge.id}
-                sourceName={sourceName}
-                targetName={targetName}
+                sourceName={sNode.name}
+                targetName={tNode.name}
                 onClick={onEdgeClick}
                 onMouseEnter={(id) => onEdgeHover(id)}
                 onMouseLeave={() => onEdgeHover(null)}
@@ -115,7 +103,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
           })}
         </g>
 
-        {/* Nodes layer (rendered on top) */}
+        {/* Nodes layer */}
         <g>
           {nodes.map(node => {
             const dimmed = connectedToHovered
