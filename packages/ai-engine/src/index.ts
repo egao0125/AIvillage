@@ -256,7 +256,7 @@ ${transcript}
 Summarize in JSON:
 {
   "summary": "2-3 sentences from YOUR perspective. What mattered? How did you feel? What changed?",
-  "agreements": ["SPECIFIC commitments only — not 'agreed to cooperate' but 'will bring wheat to tavern tomorrow' or 'will vote yes on farm rule'. If no specific agreement was made, return empty array."],
+  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific ('will bring wheat tomorrow'). OATH = sworn/public ('I swear I will'). Only real commitments, not pleasantries. Example: '[PROMISE] Will bring 3 wheat to mill at dawn'"],
   "learned": ["new facts you learned — about people, places, or resources (max 2, short)"],
   "tension": "any unresolved conflict, distrust, or worry (or null if none)"
 }
@@ -642,9 +642,47 @@ If nothing notable was exchanged, return []`;
     const invStr = inv?.length
       ? inv.map(i => i.name).join(', ')
       : 'EMPTY';
-    // Count alive agents from nameMap (approximation — exact count injected by caller if available)
     const pop = this.nameMap.size;
-    return `REALITY (verified by game engine):\nYour inventory: ${invStr}\nTotal food you have: ${foodCount}\nVillage population: ~${pop} agents\nDo not claim to have items not listed here.`;
+    let base = `REALITY (verified by game engine):\nYour inventory: ${invStr}\nTotal food you have: ${foodCount}\nVillage population: ~${pop} agents\nDo not claim to have items not listed here.`;
+
+    // Promised items accounting (max 50 chars appended)
+    const activeCommitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    const promisedItems = activeCommitments.flatMap(c => c.itemsPromised ?? []);
+    if (promisedItems.length > 0) {
+      const counts = new Map<string, number>();
+      for (const item of promisedItems) counts.set(item, (counts.get(item) ?? 0) + 1);
+      const promisedStr = [...counts.entries()].map(([item, qty]) => `${qty} ${item}`).join(', ');
+      base += `\nAlready promised away: ${promisedStr}`.slice(0, base.length + 50);
+    }
+    return base;
+  }
+
+  /** Build a promise ledger showing current commitments (max 200 chars) */
+  private buildPromiseLedger(): string {
+    const commitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    if (commitments.length === 0) return '';
+    const totalWeight = commitments.reduce((s, c) => s + c.weight, 0);
+    const MAX = 15;
+    const lines: string[] = [];
+    let budget = 150;
+    for (const c of commitments) {
+      const tag = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'promise' : 'casual';
+      const line = `- ${c.targetName}: ${c.content.slice(0, 30)} (${tag}, exp d${c.expiresDay})`;
+      if (budget - line.length < 0) break;
+      lines.push(line);
+      budget -= line.length;
+    }
+    return `\nPROMISES (${totalWeight}/${MAX} weight, ${MAX - totalWeight} free):\n${lines.join('\n')}`;
+  }
+
+  /** Commitment context for talk() — max 100 chars */
+  private buildCommitmentContext(): string {
+    const active = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    if (active.length === 0) return '';
+    const totalWeight = active.reduce((s, c) => s + c.weight, 0);
+    const spoken = active.flatMap(c => c.itemsPromised ?? []);
+    const spokenStr = spoken.length > 0 ? ` Items spoken for: ${spoken.slice(0, 3).join(',')}.` : '';
+    return `\n- Weight: ${totalWeight}/15.${spokenStr} Don't over-promise.`.slice(0, 100);
   }
 
   // --- Structured Decision ---
@@ -747,7 +785,7 @@ Reply with ONLY valid JSON:
     const systemPrompt = survivalCrisis
       ? `${vitalsSection}
 
-${this.buildRealityBlock()}
+${this.buildRealityBlock()}${this.buildPromiseLedger()}
 
 ${this.worldView}
 
@@ -778,7 +816,7 @@ Season: ${situation.season}.
 
 ${vitalsSection}
 
-${this.buildRealityBlock()}
+${this.buildRealityBlock()}${this.buildPromiseLedger()}
 ${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
@@ -1182,7 +1220,7 @@ ${this.buildRealityBlock()}
 
 Everything you say will be remembered. Promises will be held against you. Lies may be discovered.
 
-${this.buildContextBlock()}${needsLine}
+${this.buildContextBlock()}${needsLine}${this.buildCommitmentContext()}
 
 You can act during conversation:
   [ACTION: give ITEM to PERSON]

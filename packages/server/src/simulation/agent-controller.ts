@@ -272,6 +272,7 @@ export class AgentController {
     if (this.world.time.minute === 0) {
       this.recalculateDrives();
       this.checkLedgerExpiry();
+      this.processCommitmentExpiry();
     }
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
@@ -707,20 +708,7 @@ export class AgentController {
 
       // Four Stream: nightly compression — beliefs + prune timeline + prune concerns
       if (this.cognition.fourStream) {
-        // Expire old commitments — broken promise = rep -5
-        const now = Date.now();
-        for (const c of this.cognition.fourStream.getAllConcerns()) {
-          if (c.category === 'commitment' && !c.resolved) {
-            const ageHours = (now - (c.createdAt || now)) / 3_600_000;
-            if (ageHours > 24) {
-              this.cognition.fourStream.resolveConcern(c.id);
-              this.adjustReputation(this.agent.id, -5, 'Broken promise');
-              console.log(`[Commitment] ${this.agent.config.name} broke promise: ${c.content.slice(0, 50)}`);
-            }
-          }
-        }
-
-        // Clean up commitments involving dead agents
+        // Clean up concerns involving dead agents
         for (const c of this.cognition.fourStream.getAllConcerns()) {
           if (c.relatedAgentIds?.length) {
             const allDead = c.relatedAgentIds.every(id => {
@@ -1140,14 +1128,29 @@ export class AgentController {
 
   /** Build context string of active commitments for think() and plan() */
   private buildLedgerContext(): string {
+    const lines: string[] = [];
+
+    // Weighted commitments (primary source of truth)
+    const commitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    for (const c of commitments) {
+      const weightLabel = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'PROMISE' : 'casual';
+      const daysLeft = c.expiresDay - this.world.time.day;
+      const urgency = daysLeft <= 0 ? ' OVERDUE' : daysLeft === 0 ? ' due today' : '';
+      lines.push(`- [${weightLabel}${urgency}] ${c.content} (to ${c.targetName})`);
+    }
+
+    // Non-promise social ledger entries (trades, meetings, alliances, rules)
     const ledger = this.agent.socialLedger ?? [];
-    const active = ledger.filter(e => e.status === 'proposed' || e.status === 'accepted');
-    if (active.length === 0) return '';
-    const lines = active.map(e => {
-      const others = (e.targetIds ?? []).map(id => this.world.getAgent(id)?.config.name ?? 'someone').join(', ');
+    const active = ledger.filter(e =>
+      (e.status === 'proposed' || e.status === 'accepted') &&
+      e.type !== 'promise' && e.type !== 'task'
+    );
+    for (const e of active) {
       const tag = e.source === 'secondhand' ? ' (secondhand)' : '';
-      return `- [${e.status}] ${e.description}${tag}`;
-    });
+      lines.push(`- [${e.status}] ${e.description}${tag}`);
+    }
+
+    if (lines.length === 0) return '';
     return `\nMY COMMITMENTS:\n${lines.join('\n')}`;
   }
 
@@ -1174,6 +1177,44 @@ export class AgentController {
         entry.resolvedAt = now;
       }
     }
+  }
+
+  /** Process weighted commitment expiry — scaled penalties by weight */
+  private processCommitmentExpiry(): void {
+    const commitments = this.agent.commitments;
+    if (!commitments || commitments.length === 0) return;
+    const day = this.world.time.day;
+
+    for (const c of commitments) {
+      if (c.fulfilled || c.broken) continue;
+      if (day <= c.expiresDay) continue;
+
+      c.broken = true;
+      const repPenalty = c.weight === 1 ? -1 : c.weight === 3 ? -3 : -8;
+      this.adjustReputation(this.agent.id, repPenalty, `Broke ${c.weight === 5 ? 'oath' : 'promise'} to ${c.targetName}`);
+      console.log(`[Commitment] ${this.agent.config.name} broke ${c.weight === 5 ? 'OATH' : 'promise'} to ${c.targetName}: ${c.content.slice(0, 50)} (rep ${repPenalty})`);
+
+      // Oaths become village memory
+      if (c.weight >= 5) {
+        this.world.addVillageMemory({
+          content: `${this.agent.config.name} broke oath to ${c.targetName}: "${c.content.slice(0, 60)}"`,
+          type: 'broken_oath',
+          day,
+          significance: 8,
+        });
+      }
+
+      // Archive broken commitment
+      if (!this.agent.archivedCommitments) this.agent.archivedCommitments = [];
+      c.archivedAt = this.world.time.totalMinutes;
+      this.agent.archivedCommitments.push(c);
+      if (this.agent.archivedCommitments.length > 20) {
+        this.agent.archivedCommitments = this.agent.archivedCommitments.slice(-20);
+      }
+    }
+
+    // Remove fulfilled/broken from active
+    this.agent.commitments = commitments.filter(c => !c.fulfilled && !c.broken);
   }
 
   /**
@@ -1667,69 +1708,62 @@ export class AgentController {
 
     const nearbyIds = new Set(situation.nearbyAgents.map(a => a.id));
 
-    // 1. Check commitment concerns — promises made in conversations
-    const commitments = this.cognition.fourStream?.getAllConcerns()
-      .filter(c => c.category === 'commitment') ?? [];
+    // 1. Check weighted commitments — promises/oaths from conversations
+    const activeCommitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
 
-    for (const c of commitments) {
+    for (const c of activeCommitments) {
+      // Is the commitment target nearby?
+      if (!nearbyIds.has(c.targetId)) continue;
+
+      const targetAgent = this.world.getAgent(c.targetId);
+      if (!targetAgent || targetAgent.alive === false) continue;
+      const firstName = targetAgent.config.name.split(' ')[0];
+
       const text = c.content.toLowerCase();
+      const weightLabel = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'PROMISE' : 'casual promise';
+      const daysLeft = c.expiresDay - this.world.time.day;
+      const urgency = daysLeft <= 0 ? ' OVERDUE!' : daysLeft === 0 ? ' Due TODAY!' : '';
 
-      // Does this commitment mention a nearby person?
-      const mentionedPerson = c.relatedAgentIds?.find(id => nearbyIds.has(id));
-      if (!mentionedPerson) continue;
+      // Check if promised items are involved
+      if (c.itemsPromised && c.itemsPromised.length > 0) {
+        const itemCounts = new Map<string, number>();
+        for (const item of c.itemsPromised) itemCounts.set(item, (itemCounts.get(item) ?? 0) + 1);
 
-      const personAgent = this.world.getAgent(mentionedPerson);
-      if (!personAgent || personAgent.alive === false) continue;
-      const firstName = personAgent.config.name.split(' ')[0];
-
-      // "Give" type commitments — do I have the item?
-      const giveMatch = text.match(/give|bring|deliver|share|provide|wheat|bread|fish|food/);
-      const itemMatch = text.match(/wheat|bread|fish|stew|food|herb|mushroom|wood|stone/);
-
-      if (giveMatch && itemMatch) {
-        const item = itemMatch[0];
-        const hasItem = this.agent.inventory.some(
-          i => i.name.toLowerCase().includes(item)
-        );
-        if (hasItem) {
-          return `YOU PROMISED: ${c.content}. ${firstName} is RIGHT HERE and you have ${item}. Honor your promise: give_${firstName.toLowerCase()}. Or break it — but your reputation will suffer.`;
+        // Check which promised items we have
+        const canFulfill: string[] = [];
+        const missing: string[] = [];
+        for (const [item, needed] of itemCounts) {
+          const have = this.agent.inventory.filter(i => i.name.toLowerCase().includes(item)).length;
+          if (have >= needed) canFulfill.push(`${needed} ${item}`);
+          else missing.push(`${item} (have ${have}/${needed})`);
         }
-      }
 
-      // "Meet/talk" type commitments
-      const talkMatch = text.match(/meet|talk|discuss|tell|warn|confess|report|present/);
-      if (talkMatch) {
-        return `YOU PROMISED: ${c.content}. ${firstName} is RIGHT HERE. Follow through: talk_${firstName.toLowerCase()}.`;
-      }
-
-      // Generic: person is nearby and commitment mentions them
-      return `Reminder: you committed to something involving ${firstName}: ${c.content}. They're right here.`;
-    }
-
-    // 2. Check dossier active commitments — "Owe" items
-    if (this.cognition.fourStream) {
-      for (const nearby of situation.nearbyAgents) {
-        const dossier = this.cognition.fourStream.getDossier?.(nearby.id);
-        if (!dossier?.activeCommitments?.length) continue;
-
-        for (const commit of dossier.activeCommitments) {
-          const text = commit.toLowerCase();
-          const firstName = nearby.name.split(' ')[0];
-
-          const itemMatch = text.match(/wheat|bread|fish|stew|food|herb|mushroom|wood|stone/);
-          if (itemMatch) {
-            const hasItem = this.agent.inventory.some(
-              i => i.name.toLowerCase().includes(itemMatch[0])
-            );
-            if (hasItem) {
-              return `YOU OWE ${firstName.toUpperCase()}: ${commit}. They're here. You have ${itemMatch[0]}. Do it: give_${firstName.toLowerCase()}.`;
-            }
+        if (canFulfill.length > 0 && missing.length === 0) {
+          // Have everything — fulfill
+          return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is RIGHT HERE and you have everything. Honor it: give_${firstName.toLowerCase()}.`;
+        } else if (canFulfill.length > 0) {
+          // Have some — offer partial or renegotiate
+          return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is here. You have ${canFulfill.join(', ')} but missing ${missing.join(', ')}. Options: give what you have (give_${firstName.toLowerCase()}), talk to renegotiate (talk_${firstName.toLowerCase()}), or break it (rep ${c.weight === 5 ? '-8' : c.weight === 3 ? '-3' : '-1'}).`;
+        } else {
+          // Have nothing — renegotiate or work toward it
+          if (daysLeft <= 0) {
+            return `YOUR ${weightLabel} to ${firstName} is OVERDUE: "${c.content}". You lack ${missing.join(', ')}. ${firstName} is here — renegotiate now (talk_${firstName.toLowerCase()}) or it breaks automatically (rep ${c.weight === 5 ? '-8' : c.weight === 3 ? '-3' : '-1'}).`;
           }
+          continue; // Still time — don't interrupt, let them gather
         }
       }
+
+      // Non-item commitments (meet, talk, teach, etc.)
+      const talkMatch = text.match(/meet|talk|discuss|tell|warn|teach|show|confess|report|present/);
+      if (talkMatch) {
+        return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is RIGHT HERE. Follow through: talk_${firstName.toLowerCase()}.`;
+      }
+
+      // Generic: target is nearby
+      return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is right here. Act on it or renegotiate.`;
     }
 
-    // 3. Ally in crisis — trusted person nearby dying
+    // 2. Ally in crisis — trusted person nearby dying
     for (const nearby of situation.nearbyAgents) {
       const dossier = this.cognition.fourStream?.getDossier?.(nearby.id);
       const trust = dossier?.trust ?? 0;
@@ -1746,7 +1780,7 @@ export class AgentController {
       }
     }
 
-    // 4. Recent threat — person who wronged you is nearby
+    // 3. Recent threat — person who wronged you is nearby
     const threats = this.cognition.fourStream?.getAllConcerns()
       .filter(c => c.category === 'threat') ?? [];
     for (const t of threats) {
