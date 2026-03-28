@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useBoard, useElections, useProperties, useInstitutions, useAgents, useWeather, useWorldTime } from '../../core/hooks';
+import { useBoard, useElections, useProperties, useInstitutions, useAgents, useWeather, useWorldTime, useBuildings, useVillageMemory } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 import { nameToColor, hexToString } from '../../utils/color';
 
@@ -33,9 +33,11 @@ export const VillageDashboard: React.FC = () => {
   const properties = useProperties();
   const institutions = useInstitutions();
   const agents = useAgents();
+  const buildings = useBuildings();
   const weather = useWeather();
   const time = useWorldTime();
 
+  const villageMemory = useVillageMemory();
   const aliveAgents = agents.filter(a => a.alive !== false);
 
   // SNS filtering
@@ -74,7 +76,9 @@ export const VillageDashboard: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
           <span style={{ fontSize: '10px' }}>{s.icon}</span>
           <span style={{ color: s.color, textTransform: 'uppercase', fontSize: '9px', fontFamily: FONTS.pixel, letterSpacing: 1 }}>{post.type}</span>
-          <span style={{ color: COLORS.textDim, fontSize: '11px' }}>by {post.authorName}</span>
+          <span style={{ color: COLORS.textDim, fontSize: '11px' }}>
+            {post.authorId === 'system' ? 'Village News' : `by ${post.authorName}`}
+          </span>
           {commentCount > 0 && !isExpanded && (
             <span style={{ color: COLORS.textDim, fontSize: '9px', marginLeft: 'auto', fontFamily: FONTS.pixel }}>
               {commentCount} reaction{commentCount !== 1 ? 's' : ''}
@@ -185,6 +189,117 @@ export const VillageDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Village Timeline */}
+      {villageMemory.length > 0 && (
+        <>
+          <div style={sectionLabel}>VILLAGE HISTORY</div>
+          {[...villageMemory]
+            .sort((a, b) => b.significance - a.significance)
+            .slice(0, 10)
+            .map((entry, i) => {
+              const typeIcon: Record<string, { icon: string; color: string }> = {
+                death: { icon: '\u{1F480}', color: '#ef4444' },
+                rule: { icon: '\u{2696}', color: '#fbbf24' },
+                betrayal: { icon: '\u{1F5E1}', color: '#f97316' },
+                alliance: { icon: '\u{1F91D}', color: '#4ade80' },
+                crisis: { icon: '\u{26A0}', color: '#f59e0b' },
+              };
+              const s = typeIcon[entry.type] || typeIcon.crisis;
+              return (
+                <div key={i} style={{
+                  padding: '6px 10px',
+                  marginBottom: 3,
+                  background: COLORS.bgCard,
+                  borderRadius: 4,
+                  borderLeft: `3px solid ${s.color}`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '10px' }}>{s.icon}</span>
+                    <span style={{ color: COLORS.text, fontSize: '11px', lineHeight: '1.4', flex: 1 }}>{entry.content}</span>
+                  </div>
+                  <div style={{ color: COLORS.textDim, fontSize: '9px', marginTop: 2 }}>Day {entry.day}</div>
+                </div>
+              );
+            })}
+        </>
+      )}
+
+      {/* Rules & Property */}
+      {(() => {
+        const passedRules = board.filter(p => p.type === 'rule' && p.ruleStatus === 'passed' && !p.revoked);
+        const ownedBuildings = buildings.filter(b => b.ownerId);
+        const hasContent = passedRules.length > 0 || properties.length > 0 || ownedBuildings.length > 0;
+        if (!hasContent) return null;
+        return (
+          <>
+            <div style={sectionLabel}>RULES & PROPERTY</div>
+            {passedRules.length > 0 && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ color: COLORS.textDim, fontSize: '9px', fontFamily: FONTS.pixel, marginBottom: 4, letterSpacing: 0.5 }}>OFFICIAL RULES</div>
+                {passedRules.map(rule => {
+                  const likeCount = rule.votes?.filter(v => v.vote === 'like').length ?? 0;
+                  const dislikeCount = rule.votes?.filter(v => v.vote === 'dislike').length ?? 0;
+                  return (
+                    <div key={rule.id} style={{
+                      padding: '5px 10px',
+                      marginBottom: 2,
+                      background: COLORS.bgCard,
+                      borderRadius: 4,
+                      borderLeft: '3px solid #4ade80',
+                    }}>
+                      <div style={{ color: COLORS.text, fontSize: '11px', lineHeight: '1.4' }}>{rule.content}</div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+                        <span style={{ color: COLORS.textDim, fontSize: '9px' }}>by {rule.authorName}</span>
+                        <span style={{ color: '#4ade80', fontSize: '9px' }}>{likeCount}-{dislikeCount}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {(properties.length > 0 || ownedBuildings.length > 0) && (
+              <div>
+                <div style={{ color: COLORS.textDim, fontSize: '9px', fontFamily: FONTS.pixel, marginBottom: 4, letterSpacing: 0.5 }}>OWNERSHIP</div>
+                {properties.map(p => {
+                  const owner = agents.find(a => a.id === p.ownerId);
+                  return (
+                    <div key={p.areaId} style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      padding: '4px 10px',
+                      marginBottom: 2,
+                      background: COLORS.bgCard,
+                      borderRadius: 4,
+                      borderLeft: '3px solid #a78bfa',
+                    }}>
+                      <span style={{ color: COLORS.text, fontSize: '11px' }}>{p.areaId}</span>
+                      <span style={{ color: '#a78bfa', fontSize: '11px' }}>{owner?.config.name ?? p.ownerId.slice(0, 8)}</span>
+                    </div>
+                  );
+                })}
+                {ownedBuildings.map(b => {
+                  const owner = agents.find(a => a.id === b.ownerId);
+                  return (
+                    <div key={b.id} style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      padding: '4px 10px',
+                      marginBottom: 2,
+                      background: COLORS.bgCard,
+                      borderRadius: 4,
+                      borderLeft: '3px solid #fbbf24',
+                    }}>
+                      <span style={{ color: COLORS.text, fontSize: '11px' }}>{b.name} <span style={{ color: COLORS.textDim, fontSize: '9px' }}>({b.type})</span></span>
+                      <span style={{ color: '#fbbf24', fontSize: '11px' }}>{owner?.config.name ?? 'unknown'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        );
+      })()}
+
       {/* Agent SNS */}
       <div style={sectionLabel}>AGENT SNS</div>
       <div style={{ display: 'flex', borderBottom: `1px solid ${COLORS.border}`, marginBottom: 8 }}>
@@ -251,30 +366,6 @@ export const VillageDashboard: React.FC = () => {
               }}>
                 <span style={{ color: COLORS.textDim, fontSize: '11px' }}>{e.position}: </span>
                 <span style={{ color: COLORS.active, fontSize: '11px' }}>{winner?.config.name ?? 'unknown'} won</span>
-              </div>
-            );
-          })}
-        </>
-      )}
-
-      {/* Properties */}
-      {properties.length > 0 && (
-        <>
-          <div style={sectionLabel}>PROPERTIES ({properties.length})</div>
-          {properties.map(p => {
-            const owner = agents.find(a => a.id === p.ownerId);
-            return (
-              <div key={p.areaId} style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                padding: '6px 10px',
-                marginBottom: 3,
-                background: COLORS.bgCard,
-                borderRadius: 4,
-                border: `1px solid ${COLORS.border}`,
-              }}>
-                <span style={{ color: COLORS.text, fontSize: '12px' }}>{p.areaId}</span>
-                <span style={{ color: COLORS.textDim, fontSize: '12px' }}>{owner?.config.name ?? p.ownerId.slice(0, 8)}</span>
               </div>
             );
           })}

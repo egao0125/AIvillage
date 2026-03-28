@@ -1,9 +1,11 @@
-import type { Conversation, Memory, SocialLedgerEntry } from '@ai-village/shared';
+import type { Conversation, Memory, SocialLedgerEntry, Commitment } from '@ai-village/shared';
 import { AgentCognition } from '@ai-village/ai-engine';
 import { AREA_DESCRIPTIONS } from '../../map/starting-knowledge.js';
 import type { World } from '../world.js';
 import type { EventBroadcaster } from '../events.js';
-import { findAgentByName, classifyAgreementType } from './helpers.js';
+import { findAgentByName, classifyAgreementType, classifyCommitmentWeight, extractItemsPromised } from './helpers.js';
+
+const MAX_COMMITMENT_WEIGHT = 15;
 
 /**
  * Handles all post-conversation processing: summary generation, commitment extraction,
@@ -132,41 +134,63 @@ export class PostConversationProcessor {
           } catch {}
         }
 
-        // Social ledger entries
+        // Classify and create commitment or social ledger entry
         const entryType = classifyAgreementType(agreement);
         const now = this.world.time.totalMinutes;
         const day = this.world.time.day;
-        const expiresAt = entryType === 'meeting' ? now + 480 : now + 1440;
 
-        const thisEntry: SocialLedgerEntry = {
-          id: crypto.randomUUID(),
-          type: entryType,
-          status: 'accepted',
-          proposerId: participantId,
-          targetIds: otherIds,
-          description: `Agreement with ${othersLabel}: ${agreement}`,
-          agreedBy: conversation.participants,
-          rejectedBy: [],
-          createdAt: now,
-          expiresAt,
-          day,
-          sourceConversationId: conversation.id,
-          source: 'direct',
-        };
-        if (!participant.socialLedger) participant.socialLedger = [];
-        participant.socialLedger.push(thisEntry);
-        this.broadcaster?.ledgerUpdate(participantId, thisEntry);
+        if (entryType === 'promise' || entryType === 'task') {
+          // NEW: Create weighted Commitment
+          const isPublic = conversation.participants.length > 2;
+          // Parse weight prefix from LLM if present, else keyword classify
+          let weight: 1 | 3 | 5;
+          const prefixMatch = agreement.match(/^\[(CASUAL|PROMISE|OATH)\]\s*/i);
+          if (prefixMatch) {
+            const tag = prefixMatch[1].toUpperCase();
+            weight = tag === 'OATH' ? 5 : tag === 'CASUAL' ? 1 : 3;
+          } else {
+            weight = classifyCommitmentWeight(agreement, isPublic, isPublic);
+          }
+          const items = extractItemsPromised(agreement);
+          const cleanAgreement = agreement.replace(/^\[(CASUAL|PROMISE|OATH)\]\s*/i, '');
+          const expiresDay = day + (weight === 1 ? 0 : weight === 3 ? 1 : 2);
 
-        for (const otherId of otherIds) {
-          const otherAgent = this.world.getAgent(otherId);
-          if (!otherAgent) continue;
-          const otherEntry: SocialLedgerEntry = {
+          // Check weight budget before adding
+          const currentWeight = (participant.commitments ?? [])
+            .filter(c => !c.fulfilled && !c.broken)
+            .reduce((s, c) => s + c.weight, 0);
+
+          if (currentWeight + weight <= MAX_COMMITMENT_WEIGHT) {
+            for (const targetId of otherIds) {
+              const targetName = this.world.getAgent(targetId)?.config.name ?? 'someone';
+              const commitment: Commitment = {
+                id: crypto.randomUUID(),
+                targetId,
+                targetName,
+                content: cleanAgreement,
+                weight,
+                createdDay: day,
+                createdHour: this.world.time.hour,
+                expiresDay,
+                itemsPromised: items.length > 0 ? items : undefined,
+                fulfilled: false,
+                broken: false,
+                sourceConversationId: conversation.id,
+              };
+              if (!participant.commitments) participant.commitments = [];
+              participant.commitments.push(commitment);
+            }
+          }
+        } else {
+          // Keep social ledger for trades, meetings, alliances, rules
+          const expiresAt = entryType === 'meeting' ? now + 480 : now + 1440;
+          const thisEntry: SocialLedgerEntry = {
             id: crypto.randomUUID(),
             type: entryType,
             status: 'accepted',
             proposerId: participantId,
-            targetIds: [participantId, ...otherIds.filter(id => id !== otherId)],
-            description: `Agreement with ${participant.config.name}: ${agreement}`,
+            targetIds: otherIds,
+            description: `Agreement with ${othersLabel}: ${agreement}`,
             agreedBy: conversation.participants,
             rejectedBy: [],
             createdAt: now,
@@ -175,9 +199,32 @@ export class PostConversationProcessor {
             sourceConversationId: conversation.id,
             source: 'direct',
           };
-          if (!otherAgent.socialLedger) otherAgent.socialLedger = [];
-          otherAgent.socialLedger.push(otherEntry);
-          this.broadcaster?.ledgerUpdate(otherId, otherEntry);
+          if (!participant.socialLedger) participant.socialLedger = [];
+          participant.socialLedger.push(thisEntry);
+          this.broadcaster?.ledgerUpdate(participantId, thisEntry);
+
+          for (const otherId of otherIds) {
+            const otherAgent = this.world.getAgent(otherId);
+            if (!otherAgent) continue;
+            const otherEntry: SocialLedgerEntry = {
+              id: crypto.randomUUID(),
+              type: entryType,
+              status: 'accepted',
+              proposerId: participantId,
+              targetIds: [participantId, ...otherIds.filter(id => id !== otherId)],
+              description: `Agreement with ${participant.config.name}: ${agreement}`,
+              agreedBy: conversation.participants,
+              rejectedBy: [],
+              createdAt: now,
+              expiresAt,
+              day,
+              sourceConversationId: conversation.id,
+              source: 'direct',
+            };
+            if (!otherAgent.socialLedger) otherAgent.socialLedger = [];
+            otherAgent.socialLedger.push(otherEntry);
+            this.broadcaster?.ledgerUpdate(otherId, otherEntry);
+          }
         }
       }
 
@@ -228,17 +275,8 @@ export class PostConversationProcessor {
           );
         }
 
-        // Add agreements as commitment concerns
-        for (const agreement of result.agreements) {
-          cognition.fourStream.addConcern({
-            id: crypto.randomUUID(),
-            content: `Agreement with ${othersLabel}: ${agreement}`,
-            category: 'commitment',
-            relatedAgentIds: otherIds,
-            createdAt: Date.now(),
-            expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-          });
-        }
+        // Commitments are now tracked in agent.commitments[], not as concerns.
+        // Only add non-commitment concerns (tension, unresolved issues).
 
         // Add tension as unresolved concern
         if (result.tension) {

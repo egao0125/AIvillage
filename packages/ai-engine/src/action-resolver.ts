@@ -1159,7 +1159,7 @@ function executeFight(intent: ParsedIntent, agent: AgentState, world: WorldState
 
   return {
     ...base, success: true,
-    description: `Fought ${nearby.name}. Dealt ${attackerDamage} damage, took ${defenderDamage} damage.`,
+    description: `Fought ${nearby.name}. Dealt ${attackerDamage} damage, took ${defenderDamage} in retaliation. Their belongings are vulnerable.`,
     energySpent: 15,
     healthChange: -defenderDamage,          // attacker takes retaliation damage
     targetHealthChange: -attackerDamage,     // defender takes the attack damage

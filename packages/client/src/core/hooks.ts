@@ -15,6 +15,7 @@ import type {
   NarrativeEntry,
   Storyline,
   Recap,
+  VillageMemoryEntry,
 } from '@ai-village/shared';
 
 export function useAgents(): Agent[] {
@@ -167,6 +168,13 @@ export function useSocialViewOpen(): boolean {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().socialViewOpen
+  );
+}
+
+export function useVillageMemory(): VillageMemoryEntry[] {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().villageMemory
   );
 }
 
