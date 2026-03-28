@@ -86,50 +86,24 @@ export function useForceLayout(
 
     simRef.current = sim;
 
-    // Throttle updates to ~30fps
-    let lastTick = 0;
-    const tick = () => {
-      const now = performance.now();
-      if (now - lastTick > 33) {
-        lastTick = now;
-        const current = simNodes.map(n => ({ ...n }));
-        setPositioned(current);
-
-        // Save positions for next re-init
-        const posMap = new Map<string, { x: number; y: number }>();
-        for (const n of current) {
-          posMap.set(n.id, { x: n.x, y: n.y });
-        }
-        prevNodesRef.current = posMap;
-
-        if (sim.alpha() < 0.01) {
-          setReady(true);
-        }
-      }
-      if (sim.alpha() >= 0.001) {
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
-        setReady(true);
-      }
-    };
-
-    sim.on('tick', () => {});
-    // Drive with rAF instead of default timer
+    // Run simulation to completion synchronously — no incremental renders.
+    // This produces a fully settled layout in one go, then renders once.
     sim.stop();
-
-    const runSim = () => {
+    const totalTicks = Math.ceil(Math.log(sim.alphaMin()) / Math.log(1 - sim.alphaDecay()));
+    for (let i = 0; i < totalTicks; i++) {
       sim.tick();
-      tick();
-      if (sim.alpha() >= 0.001) {
-        rafRef.current = requestAnimationFrame(runSim);
-      }
-    };
-    rafRef.current = requestAnimationFrame(runSim);
+    }
 
-    return () => {
-      sim.stop();
-      cancelAnimationFrame(rafRef.current);
-    };
+    const final = simNodes.map(n => ({ ...n }));
+    setPositioned(final);
+    setReady(true);
+
+    // Save positions for next re-init
+    const posMap = new Map<string, { x: number; y: number }>();
+    for (const n of final) {
+      posMap.set(n.id, { x: n.x, y: n.y });
+    }
+    prevNodesRef.current = posMap;
   }, [nodes.length, edgeKey, width, height, enabled]);
 
   return { nodes: positioned, ready };
