@@ -1,23 +1,34 @@
-import { useState, useCallback, useRef } from 'react';
-
-interface ZoomPanState {
-  scale: number;
-  tx: number;
-  ty: number;
-}
+import { useCallback, useRef } from 'react';
 
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3.0;
 const ZOOM_FACTOR = 0.08;
 
+/**
+ * Zoom/pan hook that mutates a <g> element's transform directly via ref,
+ * bypassing React state to avoid re-rendering the entire SVG tree on every frame.
+ */
 export function useZoomPan() {
-  const [state, setState] = useState<ZoomPanState>({ scale: 1, tx: 0, ty: 0 });
+  const gRef = useRef<SVGGElement | null>(null);
+  const state = useRef({ scale: 1, tx: 0, ty: 0 });
   const dragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0, tx: 0, ty: 0 });
   const totalMovement = useRef(0);
+  const isDefaultRef = useRef(true);
+  const onDefaultChange = useRef<((v: boolean) => void) | null>(null);
 
-  const transform = `translate(${state.tx}, ${state.ty}) scale(${state.scale})`;
-  const isDefault = state.scale === 1 && state.tx === 0 && state.ty === 0;
+  const apply = () => {
+    const g = gRef.current;
+    if (g) {
+      g.setAttribute('transform', `translate(${state.current.tx}, ${state.current.ty}) scale(${state.current.scale})`);
+    }
+    const wasDefault = isDefaultRef.current;
+    const nowDefault = state.current.scale === 1 && state.current.tx === 0 && state.current.ty === 0;
+    if (wasDefault !== nowDefault) {
+      isDefaultRef.current = nowDefault;
+      onDefaultChange.current?.(nowDefault);
+    }
+  };
 
   const onWheel = useCallback((e: React.WheelEvent<SVGSVGElement>) => {
     e.preventDefault();
@@ -25,62 +36,56 @@ export function useZoomPan() {
     const cursorX = e.clientX - rect.left;
     const cursorY = e.clientY - rect.top;
 
-    setState(prev => {
-      const direction = e.deltaY > 0 ? -1 : 1;
-      const factor = 1 + direction * ZOOM_FACTOR;
-      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * factor));
+    const s = state.current;
+    const direction = e.deltaY > 0 ? -1 : 1;
+    const factor = 1 + direction * ZOOM_FACTOR;
+    const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, s.scale * factor));
 
-      // Zoom toward cursor: keep the point under cursor fixed
-      const newTx = cursorX - (cursorX - prev.tx) * (newScale / prev.scale);
-      const newTy = cursorY - (cursorY - prev.ty) * (newScale / prev.scale);
-
-      return { scale: newScale, tx: newTx, ty: newTy };
-    });
+    s.tx = cursorX - (cursorX - s.tx) * (newScale / s.scale);
+    s.ty = cursorY - (cursorY - s.ty) * (newScale / s.scale);
+    s.scale = newScale;
+    apply();
   }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
-    // Only pan on background (not on nodes/edges)
     if (e.target !== e.currentTarget) return;
     dragging.current = true;
     totalMovement.current = 0;
-    dragStart.current = { x: e.clientX, y: e.clientY, tx: state.tx, ty: state.ty };
+    dragStart.current = { x: e.clientX, y: e.clientY, tx: state.current.tx, ty: state.current.ty };
     e.currentTarget.setPointerCapture(e.pointerId);
-  }, [state.tx, state.ty]);
+  }, []);
 
   const onPointerMove = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
     if (!dragging.current) return;
     const dx = e.clientX - dragStart.current.x;
     const dy = e.clientY - dragStart.current.y;
     totalMovement.current += Math.abs(dx) + Math.abs(dy);
-    setState(prev => ({
-      ...prev,
-      tx: dragStart.current.tx + dx,
-      ty: dragStart.current.ty + dy,
-    }));
+    state.current.tx = dragStart.current.tx + dx;
+    state.current.ty = dragStart.current.ty + dy;
+    apply();
   }, []);
 
   const onPointerUp = useCallback(() => {
     dragging.current = false;
   }, []);
 
-  // Returns true if the pointer barely moved (click, not drag)
   const wasClick = useCallback(() => {
     return totalMovement.current < 5;
   }, []);
 
   const reset = useCallback(() => {
-    setState({ scale: 1, tx: 0, ty: 0 });
+    state.current = { scale: 1, tx: 0, ty: 0 };
+    apply();
   }, []);
 
   return {
-    transform,
-    isDefault,
-    scale: state.scale,
+    gRef,
     onWheel,
     onPointerDown,
     onPointerMove,
     onPointerUp,
     wasClick,
     reset,
+    onDefaultChange,
   };
 }
