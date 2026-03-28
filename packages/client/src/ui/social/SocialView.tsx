@@ -4,7 +4,6 @@ import { gameStore } from '../../core/GameStore';
 import { useSocialGraph } from './useSocialGraph';
 import { useForceLayout } from './useForceLayout';
 import { useMapLayout } from './useMapLayout';
-import { useSpringPositions } from './useSpring';
 import { SocialCanvas } from './SocialCanvas';
 import { SocialDetailPanel } from './SocialDetailPanel';
 import { SocialControls } from './SocialControls';
@@ -49,6 +48,9 @@ const SocialViewInner: React.FC = () => {
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [zoomIsDefault, setZoomIsDefault] = useState(true);
+  const [legendVisible, setLegendVisible] = useState(true);
+  const zoomPanRef = useRef<{ reset: () => void } | null>(null);
 
   // Measure container
   useEffect(() => {
@@ -78,33 +80,25 @@ const SocialViewInner: React.FC = () => {
   // Map layout
   const mapNodes = useMapLayout(nodes, svgWidth, svgHeight, layout === 'map');
 
-  // Build spring targets from current layout
+  // Use layout output directly — no spring interpolation layer
   const rawNodes = layout === 'force' ? forceNodes : mapNodes;
-  const springTargets = useMemo(() => {
-    const m = new Map<string, { x: number; y: number }>();
-    for (const n of rawNodes) {
-      m.set(n.id, { x: n.x, y: n.y });
-    }
-    return m;
-  }, [rawNodes]);
-
-  const springPositions = useSpringPositions(springTargets, { stiffness: 600, damping: 40, precision: 0.5 });
-
-  // Merge spring positions back into nodes, with circle fallback
   const displayNodes: SocialNode[] = useMemo(() => {
-    return nodes.map((n, i) => {
-      const pos = springPositions.get(n.id);
-      if (pos && (pos.x !== 0 || pos.y !== 0)) {
-        return { ...n, x: pos.x, y: pos.y };
-      }
-      // Fallback: arrange in a circle
+    return rawNodes.length > 0 ? rawNodes.map((n, i) => {
+      if (n.x !== 0 || n.y !== 0) return n;
+      // Fallback: arrange in a circle if layout hasn't positioned yet
+      const cx = svgWidth / 2;
+      const cy = svgHeight / 2;
+      const radius = Math.min(svgWidth, svgHeight) * 0.3;
+      const angle = (2 * Math.PI * i) / Math.max(rawNodes.length, 1);
+      return { ...n, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
+    }) : nodes.map((n, i) => {
       const cx = svgWidth / 2;
       const cy = svgHeight / 2;
       const radius = Math.min(svgWidth, svgHeight) * 0.3;
       const angle = (2 * Math.PI * i) / Math.max(nodes.length, 1);
       return { ...n, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
     });
-  }, [nodes, springPositions, svgWidth, svgHeight]);
+  }, [rawNodes, nodes, svgWidth, svgHeight]);
 
   // Close detail panel
   const closePanel = useCallback(() => {
@@ -211,6 +205,8 @@ const SocialViewInner: React.FC = () => {
             hoveredNodeId={hoveredNodeId}
             hoveredEdgeId={hoveredEdgeId}
             selectedNodeId={selectedNodeId}
+            zoomPanRef={zoomPanRef}
+            onZoomChange={setZoomIsDefault}
             selectedEdgeId={selectedEdgeId}
             onNodeHover={setHoveredNodeId}
             onEdgeHover={setHoveredEdgeId}
@@ -283,6 +279,58 @@ const SocialViewInner: React.FC = () => {
             <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 11 }}>
               No connections yet — agents need to interact before relationships appear.
             </div>
+          </div>
+        )}
+
+        {/* Reset zoom button */}
+        {!zoomIsDefault && (
+          <button
+            onClick={() => zoomPanRef.current?.reset()}
+            style={{
+              position: 'absolute',
+              top: 12,
+              right: hasPanel ? 362 : 12,
+              padding: '4px 10px',
+              background: COLORS.bgCard,
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 4,
+              color: COLORS.textDim,
+              cursor: 'pointer',
+              fontFamily: FONTS.pixel,
+              fontSize: 8,
+              letterSpacing: 1,
+              zIndex: 2,
+            }}
+          >
+            RESET VIEW
+          </button>
+        )}
+
+        {/* Legend */}
+        {legendVisible && nodes.length > 0 && (
+          <div style={{
+            position: 'absolute',
+            bottom: 16,
+            left: 16,
+            padding: '10px 14px',
+            background: `${COLORS.bgCard}ee`,
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 6,
+            fontFamily: FONTS.body,
+            fontSize: 10,
+            color: COLORS.textDim,
+            lineHeight: 1.8,
+            zIndex: 2,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ fontFamily: FONTS.pixel, fontSize: 8, letterSpacing: 1, color: COLORS.text }}>LEGEND</span>
+              <span onClick={() => setLegendVisible(false)} style={{ cursor: 'pointer', fontSize: 12, lineHeight: 1 }}>&times;</span>
+            </div>
+            <div><span style={{ color: COLORS.text }}>---</span> thick line = many interactions</div>
+            <div><span style={{ color: 'hsl(45, 70%, 60%)' }}>---</span> warm = positive &nbsp; <span style={{ color: 'hsl(220, 60%, 50%)' }}>---</span> cool = negative</div>
+            <div><span style={{ color: '#ff6b6b' }}>{'\u25cf'}</span> red dot = conflict / disagreement</div>
+            <div><span style={{ color: '#a78bfa' }}>{'\u25cb'}</span> ring color = agent mood</div>
+            <div style={{ color: COLORS.textDim, marginTop: 2 }}>Scroll to zoom &middot; Drag to pan</div>
           </div>
         )}
       </div>
