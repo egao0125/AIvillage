@@ -38,6 +38,9 @@ export function useForceLayout(
   // Stable node identity: preserve positions across re-renders
   const prevNodesRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
+  // Re-run simulation when graph structure changes (new agents, new interactions)
+  const edgeKey = edges.map(e => `${e.source}-${e.target}`).sort().join(',');
+
   useEffect(() => {
     if (!enabled || nodes.length === 0 || width === 0) {
       setPositioned([]);
@@ -127,7 +130,7 @@ export function useForceLayout(
       sim.stop();
       cancelAnimationFrame(rafRef.current);
     };
-  }, [nodes.length, edges.length, width, height, enabled]);
+  }, [nodes.length, edgeKey, width, height, enabled]);
 
   return { nodes: positioned, ready };
 }
