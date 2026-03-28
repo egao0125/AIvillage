@@ -36,32 +36,17 @@ export const SOCIAL_KEYFRAMES = `
 }
 `;
 
-/** Mood → border color for node mood ring */
+/** Mood → border color for node mood ring.
+ *  Uses keyword scanning since LLM returns freeform strings like
+ *  "Focused. Tired of the noise." not single-word moods. */
 export function moodColor(mood: string): string {
-  switch (mood) {
-    case 'happy':
-    case 'joyful':
-    case 'excited':
-      return '#4ade80';
-    case 'sad':
-    case 'grieving':
-    case 'melancholy':
-      return '#60a5fa';
-    case 'angry':
-    case 'furious':
-    case 'resentful':
-      return '#f87171';
-    case 'anxious':
-    case 'fearful':
-    case 'paranoid':
-      return '#fbbf24';
-    case 'neutral':
-    case 'calm':
-    case 'content':
-      return '#a78bfa';
-    default:
-      return '#8888aa';
-  }
+  const m = mood.toLowerCase();
+  if (/happy|joyful|excited|hopeful|relieved|grateful|proud|warm/.test(m)) return '#4ade80';
+  if (/sad|grieving|melancholy|lonely|loss|hollow|numb|empty/.test(m)) return '#60a5fa';
+  if (/angry|furious|resentful|frustrated|bitter|rage/.test(m)) return '#f87171';
+  if (/anxious|fearful|paranoid|nervous|worried|terrified|scared|tense|uneasy/.test(m)) return '#fbbf24';
+  if (/neutral|calm|content|steady|quiet|settled|focused|clear|grounded/.test(m)) return '#a78bfa';
+  return '#8888aa';
 }
 
 /** Agent state → node fill opacity */

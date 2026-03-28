@@ -680,6 +680,11 @@ export class AgentController {
       const result = await this.cognition.reflect(socialCtx || undefined);
       this.handleApiSuccess();
 
+      // Update mood from reflection
+      if (result.mood) {
+        this.agent.mood = result.mood;
+      }
+
       // Update mental models from reflection
       if (result.mentalModels) {
         this.agent.mentalModels = result.mentalModels;
