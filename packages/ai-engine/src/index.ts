@@ -739,6 +739,11 @@ Inventory: ${invStr}`;
     }
 
     // Attention reordering: in survival crisis, put vitals FIRST (before identity, before world rules)
+    const jsonInstruction = `Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
+
+Reply with ONLY valid JSON:
+{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?"}`;
+
     const systemPrompt = survivalCrisis
       ? `${vitalsSection}
 
@@ -759,7 +764,11 @@ ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
 
-${actionMenu}`
+${actionMenu}
+
+SURVIVE FIRST. Pick an action that keeps you alive.
+
+${jsonInstruction}`
       : `${this.worldView}
 
 ${this.buildIdentityBlock()}
@@ -787,10 +796,7 @@ Not the safe choice. Not the polite choice. The honest one — what would THIS p
 
 Consider: what you need right now, who's nearby and what they have, what you've been doing today, what your relationships look like, and whether it's time to build something bigger — an alliance, a rule, a plan.
 
-Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
-
-Reply with ONLY valid JSON:
-{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?"}`;
+${jsonInstruction}`;
 
     let memoryText: string;
     if (this.fourStream) {
