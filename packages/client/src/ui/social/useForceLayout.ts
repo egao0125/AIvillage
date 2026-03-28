@@ -76,12 +76,12 @@ export function useForceLayout(
     const sim = forceSimulation<PositionedNode>(simNodes)
       .force('link', forceLink<PositionedNode, any>(simLinks)
         .id((d: any) => d.id)
-        .distance((d: any) => Math.max(120, 280 - d.interactionCount * 15))
-        .strength(0.3)
+        .distance((d: any) => Math.max(200, 400 - d.interactionCount * 20))
+        .strength(0.2)
       )
-      .force('charge', forceManyBody().strength(-600))
+      .force('charge', forceManyBody().strength(-1200))
       .force('center', forceCenter(width / 2, height / 2))
-      .force('collide', forceCollide(65))
+      .force('collide', forceCollide(90))
       .alphaDecay(0.05);
 
     simRef.current = sim;
