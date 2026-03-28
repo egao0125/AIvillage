@@ -95,6 +95,10 @@ export interface Agent {
 
   // --- Strategy Tracking ---
   strategyHistory?: StrategySnapshot[];
+
+  // --- Commitment System ---
+  commitments?: Commitment[];
+  archivedCommitments?: Commitment[];
 }
 
 // --- Strategy Tracking ---
@@ -109,11 +113,30 @@ export interface StrategySnapshot {
   reputation: number;
 }
 
+// --- Commitment System ---
+// Weighted promises: casual(1) = 12hr, promise(3) = 24hr, oath(5) = 48hr.
+// Weight budget of 15 per agent prevents over-promising.
+export interface Commitment {
+  id: string;
+  targetId: string;
+  targetName: string;
+  content: string;
+  weight: 1 | 3 | 5;
+  createdDay: number;
+  createdHour: number;
+  expiresDay: number;
+  itemsPromised?: string[];
+  fulfilled: boolean;
+  broken: boolean;
+  sourceConversationId?: string;
+  archivedAt?: number;
+}
+
 // --- Village Memory ---
 // Collective history shared by all agents — deaths, rules, betrayals, alliances.
 export interface VillageMemoryEntry {
   content: string;
-  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis';
+  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath';
   day: number;
   significance: number; // 1-10
 }
