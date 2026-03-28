@@ -9,13 +9,21 @@ interface SocialStringProps {
   y2: number;
   dimmed: boolean;
   hovered: boolean;
+  sourceName: string;
+  targetName: string;
   onClick: (edgeId: string) => void;
   onMouseEnter: (edgeId: string) => void;
   onMouseLeave: () => void;
 }
 
+function sentimentLabel(rep: number): string {
+  if (rep > 20) return 'positive';
+  if (rep < -20) return 'negative';
+  return 'neutral';
+}
+
 export const SocialStringComponent: React.FC<SocialStringProps> = ({
-  edge, x1, y1, x2, y2, dimmed, hovered, onClick, onMouseEnter, onMouseLeave,
+  edge, x1, y1, x2, y2, dimmed, hovered, sourceName, targetName, onClick, onMouseEnter, onMouseLeave,
 }) => {
   const opacity = dimmed ? 0.08 : hovered ? 1 : 0.6;
 
@@ -44,8 +52,11 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
     };
   }
 
+  const tooltip = `${sourceName} \u2194 ${targetName}: ${edge.interactionCount} interaction${edge.interactionCount !== 1 ? 's' : ''}, ${sentimentLabel(edge.avgReputation)}${edge.hasDisagreement ? ' \u26a0 disagreement' : ''}`;
+
   return (
     <g style={{ transition: 'opacity 200ms ease', opacity, cursor: 'pointer' }}>
+      <title>{tooltip}</title>
       {/* Invisible fat hit area */}
       <path
         d={pathD}
