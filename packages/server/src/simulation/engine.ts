@@ -237,6 +237,13 @@ export class SimulationEngine {
       void this.generatePostReactions(e.post);
     });
 
+    // Nightly vote — at hour 21, vote on all pending proposals
+    this.bus.on('hour_changed', (e) => {
+      if (e.hour === 21) {
+        void this.resolveNightlyVotes();
+      }
+    });
+
     // Periodic save
     this.bus.on('save_requested', () => {
       if (this.persistence) {
@@ -295,6 +302,11 @@ export class SimulationEngine {
           for (const [key, val] of Object.entries(worldData.resourcePools)) {
             this.world.resourcePools.set(key, val as number);
           }
+        }
+
+        // Restore village collective memory
+        if (worldData.villageMemory && Array.isArray(worldData.villageMemory)) {
+          this.world.villageMemory = worldData.villageMemory as typeof this.world.villageMemory;
         }
 
         console.log(`[Engine] World state restored (day ${this.world.time.day}, hour ${this.world.time.hour})`);
@@ -1329,6 +1341,23 @@ export class SimulationEngine {
         timestamp: Date.now(),
         relatedAgentIds: [agentId],
       });
+
+      // Personalized grief concern based on relationship
+      const dossier = cognition.fourStream?.getDossier(agentId);
+      const trust = dossier?.trust ?? 0;
+      let concern: string;
+      if (trust > 50) {
+        concern = `${name} is dead. ${cause}. I lost someone I cared about. Could I have done more?`;
+      } else if (trust < -20) {
+        concern = `${name} is dead. ${cause}. One fewer threat.`;
+      } else {
+        concern = `${name} died of ${cause}. That could be me. I need to survive.`;
+      }
+      cognition.fourStream?.addConcern({
+        id: crypto.randomUUID(), content: concern,
+        category: 'threat', relatedAgentIds: [agentId],
+        createdAt: this.world.time.totalMinutes,
+      });
     }
 
     console.log(`[Engine] ${name} has died: ${cause}. Diary created, all agents notified.`);
@@ -1336,11 +1365,12 @@ export class SimulationEngine {
 
   getSnapshot(): WorldSnapshot {
     const snapshot = this.world.getSnapshot();
-    // Enrich agents with worldView from cognition
+    // Enrich agents with worldView and sync memory streams from cognition
     for (const agent of snapshot.agents) {
       const cognition = this.cognitions.get(agent.id);
       if (cognition) {
         agent.worldView = cognition.worldView;
+        cognition.fourStream?.syncAllToAgent();
       }
     }
     snapshot.narratives = this.narrator.getRecentNarratives();
@@ -1394,19 +1424,129 @@ export class SimulationEngine {
    * reaction that becomes a comment on the post.
    */
   private async generatePostReactions(post: BoardPost): Promise<void> {
-    // Skip system death notices (too many at once) and system-only posts
+    // Skip system death notices (too many at once)
     if (post.authorId === 'system' && post.content.includes('has died')) return;
 
+    // Agents mentioned by name get a concern
+    for (const [agentId2, agent2] of this.world.agents) {
+      if (agent2.alive === false || agentId2 === post.authorId) continue;
+      const firstName = agent2.config.name.split(' ')[0].toLowerCase();
+      if (post.content.toLowerCase().includes(firstName)) {
+        const cog = this.cognitions.get(agentId2);
+        if (cog?.fourStream) {
+          cog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${post.authorName} posted about me: "${post.content.slice(0, 40)}". People are reading this.`,
+            category: post.type === 'rumor' ? 'threat' : 'unresolved',
+            relatedAgentIds: [post.authorId],
+            createdAt: Date.now(),
+          });
+        }
+      }
+    }
+
+    // Collect eligible agents (skip busy ones)
+    const eligible: string[] = [];
     for (const [agentId, agent] of this.world.agents) {
       if (agent.alive === false) continue;
       if (agentId === post.authorId) continue;
-
-      // Skip group posts for non-members
       if (post.channel === 'group' && post.groupId) {
-        const isMember = agent.socialLedger?.some((e: any) =>
-          e.id === post.groupId && e.type === 'alliance' && e.status === 'accepted'
+        const inst = this.world.getInstitution(post.groupId);
+        if (!inst?.members.some(m => m.agentId === agentId)) continue;
+      }
+      const controller = this.controllers.get(agentId);
+      if (controller?.apiExhausted) continue;
+      // Skip agents who are busy
+      if ((controller as any)?.state === 'conversing' ||
+          (controller as any)?.state === 'deciding' ||
+          (controller as any)?.state === 'reflecting') continue;
+      eligible.push(agentId);
+    }
+
+    // Pick up to 3 random agents to react
+    const reactors = eligible
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 3);
+
+    console.log(`[PostReaction] ${reactors.length} of ${eligible.length} agents reacting to: "${post.content.slice(0, 50)}"`);
+
+    for (const agentId of reactors) {
+      const agent = this.world.getAgent(agentId);
+      const cognition = this.cognitions.get(agentId);
+      if (!agent || !cognition) continue;
+
+      try {
+        // Build context IDs for dossier loading (author + mentioned agents)
+        const contextIds: string[] = [];
+        if (post.authorId && post.authorId !== 'system') {
+          contextIds.push(post.authorId);
+        }
+        for (const [aid, ag] of this.world.agents) {
+          if (ag.alive === false || aid === agentId) continue;
+          const fn = ag.config.name.split(' ')[0].toLowerCase();
+          if (post.content.toLowerCase().includes(fn)) {
+            contextIds.push(aid);
+          }
+        }
+
+        // Post type label
+        const typeLabel = post.type === 'rule' ? 'RULE PROPOSAL'
+          : post.type === 'news' ? 'NEWS'
+          : post.type === 'rumor' ? 'ACCUSATION/RUMOR'
+          : 'POST';
+
+        // Author reputation context
+        let authorRep = '';
+        if (post.authorId !== 'system') {
+          const repEntry = this.world.reputation?.find(
+            r => r.toAgentId === post.authorId && r.fromAgentId === 'system'
+          );
+          if (repEntry && repEntry.score !== 0) {
+            authorRep = ` (reputation: ${repEntry.score > 0 ? '+' : ''}${repEntry.score})`;
+          }
+        }
+
+        const output = await cognition.think(
+          `[${typeLabel}] ${post.authorName}${authorRep}: "${post.content}"`,
+          `React honestly in 1 sentence. What do you think about this and the person who posted it?`,
+          contextIds.length > 0 ? contextIds : undefined,
         );
-        if (!isMember) continue;
+
+        if (!post.comments) post.comments = [];
+        post.comments.push({
+          agentId,
+          agentName: agent.config.name,
+          content: output.thought,
+          timestamp: Date.now(),
+        });
+        this.broadcaster.boardPostUpdate(post);
+      } catch (err) {
+        console.error(`[PostReaction] ${agent.config.name} failed:`, err);
+      }
+
+      // Small delay between reactions to avoid API flooding
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+
+  /**
+   * When a rule is proposed, every alive agent votes via a single LLM call.
+   * Majority decides: passed or rejected. Results broadcast to all.
+   */
+  private async conductRuleVote(rulePost: BoardPost): Promise<void> {
+    if (!rulePost.votes) rulePost.votes = [];
+    const proposerName = rulePost.authorName;
+    // Track who already voted to prevent duplicates
+    const alreadyVoted = new Set(rulePost.votes.map(v => v.agentId));
+
+    for (const [agentId, agent] of this.world.agents) {
+      if (agent.alive === false) continue;
+      if (alreadyVoted.has(agentId)) continue;
+      if (agentId === rulePost.authorId) {
+        // Proposer auto-votes for their own rule
+        rulePost.votes.push({ agentId, vote: 'like' });
+        alreadyVoted.add(agentId);
+        continue;
       }
 
       const cognition = this.cognitions.get(agentId);
@@ -1415,27 +1555,348 @@ export class SimulationEngine {
       const controller = this.controllers.get(agentId);
       if (controller?.apiExhausted) continue;
 
+      // Skip agents in conversation — they're busy
+      if ((controller as any)?.state === 'conversing') {
+        console.log(`[RuleVote] ${agent.config.name} abstained (in conversation)`);
+        continue;
+      }
+
       try {
-        const output = await cognition.think(
-          `A new post appeared on the village board: "${post.content}" — posted by ${post.authorName}`,
-          `This is a ${post.type}. React honestly in 1 sentence. What do you think about this?`
+        // Build rich voting context
+        // 1. Dossier on proposer
+        let proposerContext = '';
+        const dossier = cognition.fourStream?.getDossier?.(rulePost.authorId);
+        if (dossier) {
+          proposerContext = `\nYour relationship with ${proposerName}: ${dossier.summary.slice(0, 100)}. Trust: ${dossier.trust}.`;
+        }
+
+        // 2. Proposer reputation
+        let repContext = '';
+        const repEntry = this.world.reputation?.find(
+          r => r.toAgentId === rulePost.authorId && r.fromAgentId === 'system'
+        );
+        if (repEntry) {
+          repContext = ` Their public reputation: ${repEntry.score}.`;
+        }
+
+        // 3. Existing passed rules
+        const passedRules = this.world.getActiveBoard()
+          .filter(p => p.type === 'rule' && p.ruleStatus === 'passed')
+          .map(p => p.content.slice(0, 50));
+        const existingRulesCtx = passedRules.length > 0
+          ? `\nExisting village rules: ${passedRules.join('; ')}`
+          : '\nNo village rules exist yet.';
+
+        // 4. Village state
+        const aliveCount = Array.from(this.world.agents.values())
+          .filter(a => a.alive !== false).length;
+        const deadCount = Array.from(this.world.agents.values())
+          .filter(a => a.alive === false).length;
+        const seasonIdx = Math.floor((this.world.time.day - 1) / 30) % 4;
+        const seasons = ['spring', 'summer', 'autumn', 'winter'];
+        const villageCtx = `\nVillage: Day ${this.world.time.day}, ${seasons[seasonIdx]}. ${aliveCount} alive, ${deadCount} dead.`;
+
+        // 5. Beliefs
+        let beliefCtx = '';
+        const beliefs = cognition.fourStream?.getTopBeliefs?.(3) ?? [];
+        if (beliefs.length > 0) {
+          beliefCtx = `\nYour beliefs: ${beliefs.map(b => b.content?.slice(0, 40)).join('; ')}`;
+        }
+
+        // 6. Commitment to vote a certain way?
+        let commitmentCtx = '';
+        const concerns = cognition.fourStream?.getAllConcerns?.() ?? [];
+        const voteConcern = concerns.find(c =>
+          c.content.toLowerCase().includes('vote') &&
+          (c.content.toLowerCase().includes(proposerName.toLowerCase()) ||
+           c.content.toLowerCase().includes(rulePost.content.slice(0, 20).toLowerCase()))
+        );
+        if (voteConcern) {
+          commitmentCtx = `\nYou previously committed: "${voteConcern.content.slice(0, 60)}"`;
+        }
+
+        const result = await cognition.llmProvider.complete(
+          `You are ${agent.config.name}. Answer with ONLY "support" or "oppose". Nothing else.`,
+          `${cognition.identityBlock}
+${villageCtx}${existingRulesCtx}
+${proposerName} proposed a new village rule:
+"${rulePost.content}"
+${proposerContext}${repContext}${beliefCtx}${commitmentCtx}
+
+Consider: is it aligned with the community you want to build? Does it address a real problem? Do you trust the person proposing it?
+Answer with ONLY one word: "support" or "oppose".`,
         );
 
-        // Add as comment on the post
-        if (!post.comments) post.comments = [];
-        post.comments.push({
-          agentId,
-          agentName: agent.config.name,
-          content: output.thought,
-          timestamp: Date.now(),
+        const vote = result.trim().toLowerCase().includes('support') ? 'like' as const : 'dislike' as const;
+        rulePost.votes.push({ agentId, vote });
+
+        void cognition.addMemory({
+          id: crypto.randomUUID(), agentId, type: 'action_outcome',
+          content: `I voted ${vote === 'like' ? 'for' : 'against'} ${proposerName}'s rule: "${rulePost.content.slice(0, 60)}"`,
+          importance: 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
         });
 
-        // Broadcast updated post so UI refreshes
-        this.broadcaster.boardPostUpdate(post);
-
+        this.broadcaster.agentAction(agentId, `voted ${vote === 'like' ? 'for' : 'against'} ${proposerName}'s rule`);
       } catch (err) {
-        console.error(`[PostReaction] ${agent.config.name} failed to react:`, err);
+        console.error(`[RuleVote] ${agent.config.name} failed to vote:`, err);
       }
+
+      // Broadcast incremental vote updates to clients
+      this.broadcaster.boardPostUpdate(rulePost);
+    }
+
+    // Tally and resolve
+    const likeCount = rulePost.votes.filter(v => v.vote === 'like').length;
+    const dislikeCount = rulePost.votes.filter(v => v.vote === 'dislike').length;
+
+    // Build vote breakdown for transparency
+    const supporters = rulePost.votes
+      .filter(v => v.vote === 'like')
+      .map(v => this.world.getAgent(v.agentId)?.config.name)
+      .filter(Boolean);
+    const opposers = rulePost.votes
+      .filter(v => v.vote === 'dislike')
+      .map(v => this.world.getAgent(v.agentId)?.config.name)
+      .filter(Boolean);
+    const voteBreakdown = `For: ${supporters.join(', ') || 'none'}. Against: ${opposers.join(', ') || 'none'}.`;
+
+    if (likeCount > dislikeCount) {
+      rulePost.ruleStatus = 'passed';
+
+      // Village collective memory — rule passed
+      this.world.addVillageMemory({
+        content: `"${rulePost.content.slice(0, 60)}" rule passed ${likeCount}-${dislikeCount}. Proposed by ${rulePost.authorName}.`,
+        type: 'rule',
+        day: this.world.time.day,
+        significance: 7,
+      });
+
+      // Handle property claim if this is a claim vote
+      if (rulePost.claimTarget) {
+        const ct = rulePost.claimTarget;
+        if (ct.type === 'area') {
+          const prop = this.world.claimProperty(ct.id, rulePost.authorId, this.world.time.day);
+          if (prop) this.broadcaster.propertyChange(prop);
+        } else if (ct.type === 'building') {
+          const building = this.world.getBuilding(ct.id);
+          if (building) {
+            building.ownerId = rulePost.authorId;
+            this.broadcaster.buildingUpdate(building);
+          }
+        }
+      }
+
+      // Add permanent concern to ALL agents (rule or claim)
+      const concernContent = rulePost.claimTarget
+        ? `Property: ${rulePost.content}`
+        : `Village rule: ${rulePost.content}`;
+      for (const [id, agent] of this.world.agents) {
+        if (agent.alive === false) continue;
+        const cog = this.cognitions.get(id);
+        if (cog?.fourStream) {
+          cog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: concernContent,
+            category: 'rule',
+            relatedAgentIds: [],
+            createdAt: this.world.time.totalMinutes,
+            permanent: true,
+          });
+        }
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(), agentId: id, type: 'observation',
+            content: id === rulePost.authorId
+              ? `My rule passed (${likeCount}-${dislikeCount})! "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`
+              : `Vote passed (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`,
+            importance: id === rulePost.authorId ? 9 : 7,
+            timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
+          });
+        }
+      }
+
+      // Personalized post-vote concerns for passed rules
+      for (const v of rulePost.votes) {
+        if (v.agentId === rulePost.authorId) continue;
+        const agentCog = this.cognitions.get(v.agentId);
+        if (!agentCog?.fourStream) continue;
+        if (v.vote === 'dislike') {
+          agentCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `A rule I opposed passed: "${rulePost.content.slice(0, 40)}". I must follow it or face consequences.`,
+            category: 'unresolved',
+            relatedAgentIds: [rulePost.authorId],
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      // Proposer learns who supported them
+      const supporterIds = rulePost.votes
+        .filter(v => v.vote === 'like' && v.agentId !== rulePost.authorId)
+        .map(v => v.agentId);
+      if (supporterIds.length > 0) {
+        const proposerCog = this.cognitions.get(rulePost.authorId);
+        if (proposerCog?.fourStream) {
+          const supporterNames = supporterIds
+            .map(id => this.world.getAgent(id)?.config.name)
+            .filter(Boolean).join(', ');
+          proposerCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${supporterNames} supported my rule. They're my political allies.`,
+            category: 'goal',
+            relatedAgentIds: supporterIds,
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      // News post with vote breakdown
+      const newsPost: BoardPost = {
+        id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+        type: 'news', channel: 'all',
+        content: `${rulePost.claimTarget ? 'Claim' : 'Rule'} passed (${likeCount}-${dislikeCount}): "${rulePost.content}". ${voteBreakdown}`,
+        timestamp: Date.now(), day: this.world.time.day,
+      };
+      this.world.addBoardPost(newsPost);
+      this.broadcaster.boardPost(newsPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: newsPost });
+
+      // Reputation boost for proposer
+      const proposerCtrlP = this.controllers.get(rulePost.authorId);
+      proposerCtrlP?.adjustReputation(rulePost.authorId, +5, 'Governance');
+
+      console.log(`[RuleVote] PASSED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
+    } else {
+      rulePost.ruleStatus = 'rejected';
+
+      // Village collective memory — rule rejected
+      this.world.addVillageMemory({
+        content: `"${rulePost.content.slice(0, 60)}" rule rejected ${likeCount}-${dislikeCount}. Proposed by ${rulePost.authorName}.`,
+        type: 'rule',
+        day: this.world.time.day,
+        significance: 5,
+      });
+
+      // Notify all agents of the rejection with vote breakdown
+      for (const [id, agent] of this.world.agents) {
+        if (agent.alive === false) continue;
+        const cog = this.cognitions.get(id);
+        if (!cog) continue;
+        const isProposer = id === rulePost.authorId;
+        void cog.addMemory({
+          id: crypto.randomUUID(), agentId: id, type: 'observation',
+          content: isProposer
+            ? `My rule was REJECTED (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`
+            : `Vote rejected (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`,
+          importance: isProposer ? 9 : 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
+        });
+      }
+
+      // Personalized post-vote concerns for rejected rules
+      for (const v of rulePost.votes) {
+        if (v.agentId === rulePost.authorId) continue;
+        const agentCog = this.cognitions.get(v.agentId);
+        if (!agentCog?.fourStream) continue;
+        if (v.vote === 'like') {
+          agentCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `A rule I supported was rejected: "${rulePost.content.slice(0, 40)}". Need to build support or compromise.`,
+            category: 'unresolved',
+            relatedAgentIds: [rulePost.authorId],
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      // Proposer learns who opposed them
+      const opposerIds = rulePost.votes
+        .filter(v => v.vote === 'dislike')
+        .map(v => v.agentId);
+      if (opposerIds.length > 0) {
+        const proposerCog = this.cognitions.get(rulePost.authorId);
+        if (proposerCog?.fourStream) {
+          const opposerNames = opposerIds
+            .map(id => this.world.getAgent(id)?.config.name)
+            .filter(Boolean).slice(0, 3).join(', ');
+          proposerCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${opposerNames} voted against my rule. Convince them or work around them.`,
+            category: 'unresolved',
+            relatedAgentIds: opposerIds,
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      // Proposer learns who backed them (even in rejection)
+      const rejSupporterIds = rulePost.votes
+        .filter(v => v.vote === 'like' && v.agentId !== rulePost.authorId)
+        .map(v => v.agentId);
+      if (rejSupporterIds.length > 0) {
+        const proposerCog = this.cognitions.get(rulePost.authorId);
+        if (proposerCog?.fourStream) {
+          const supporterNames = rejSupporterIds
+            .map(id => this.world.getAgent(id)?.config.name)
+            .filter(Boolean).join(', ');
+          proposerCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${supporterNames} supported my rule. They're my political allies.`,
+            category: 'goal',
+            relatedAgentIds: rejSupporterIds,
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+      }
+
+      // Consequence concern for the proposer
+      const proposerCtrl = this.controllers.get(rulePost.authorId);
+      proposerCtrl?.addConsequence(
+        `My ${rulePost.claimTarget ? 'claim' : 'rule'} was rejected. Need allies or different approach.`,
+        'unresolved', []
+      );
+
+      // Reputation hit for failed proposal
+      proposerCtrl?.adjustReputation(rulePost.authorId, -2, 'Failed proposal');
+
+      // News post with vote breakdown
+      const rejNewsPost: BoardPost = {
+        id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+        type: 'news', channel: 'all',
+        content: `${rulePost.claimTarget ? 'Claim' : 'Rule'} rejected (${likeCount}-${dislikeCount}): "${rulePost.content}". ${voteBreakdown}`,
+        timestamp: Date.now(), day: this.world.time.day,
+      };
+      this.world.addBoardPost(rejNewsPost);
+      this.broadcaster.boardPost(rejNewsPost);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post: rejNewsPost });
+
+      console.log(`[RuleVote] REJECTED: "${rulePost.content}" (${likeCount}-${dislikeCount})`);
+    }
+
+    this.broadcaster.boardPostUpdate(rulePost);
+  }
+
+  private nightlyVoteInProgress = false;
+
+  /**
+   * At hour 21 each night, find all pending proposals and vote on each.
+   */
+  private async resolveNightlyVotes(): Promise<void> {
+    if (this.nightlyVoteInProgress) return;
+    this.nightlyVoteInProgress = true;
+
+    try {
+    const pending = this.world.getActiveBoard()
+      .filter(p => p.type === 'rule' && p.ruleStatus === 'proposed');
+
+    if (pending.length === 0) { this.nightlyVoteInProgress = false; return; }
+
+    console.log(`[NightlyVote] Resolving ${pending.length} pending proposal(s)...`);
+    for (const post of pending) {
+      await this.conductRuleVote(post);
+    }
+    } finally {
+      this.nightlyVoteInProgress = false;
     }
   }
 
@@ -1660,6 +2121,7 @@ export class SimulationEngine {
     this.world.dailyGatherCounts.clear();
     this.world.activeBuildProjects.clear();
     this.world.pendingTrades.clear();
+    this.world.villageMemory = [];
     for (const spawn of this.world.materialSpawns) {
       spawn.lastGathered = undefined;
     }

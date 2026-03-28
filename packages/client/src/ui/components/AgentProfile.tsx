@@ -737,6 +737,31 @@ export const AgentProfile: React.FC<AgentProfileProps> = ({
           ))}
         </div>
       )}
+
+      {/* Evolved Identity — beliefs learned from experience */}
+      {agent.beliefs && agent.beliefs.length > 0 && (
+        <div>
+          <div style={sectionLabel}>WHO THEY'VE BECOME</div>
+          {agent.beliefs.slice(-5).reverse().map((belief, i) => (
+            <div
+              key={i}
+              style={{
+                padding: '6px 10px',
+                marginBottom: 3,
+                background: COLORS.bgCard,
+                borderRadius: 4,
+                borderLeft: `3px solid #a78bfa`,
+                color: COLORS.text,
+                fontSize: '12px',
+                lineHeight: '1.5',
+                fontStyle: 'italic',
+              }}
+            >
+              {belief.content}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

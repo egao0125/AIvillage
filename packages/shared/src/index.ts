@@ -38,6 +38,11 @@ export interface AgentConfig {
   humorStyle?: string;        // "Dry sarcasm" or "nervous laughter" or "never jokes"
   coreValues?: string[];      // What they'd die for
   startingRelationships?: Record<string, string>; // agentName -> "my rival", "secretly in love"
+
+  // --- Constitutional Rules ---
+  // Personality as inviolable constraints — stronger than soul/backstory because LLMs
+  // follow explicit instructions more reliably than character descriptions.
+  constitutionalRules?: string[];
 }
 
 export interface Agent {
@@ -86,6 +91,54 @@ export interface Agent {
   // --- Four Stream Memory ---
   dossiers?: RelationshipDossier[];
   activeConcerns?: ActiveConcern[];
+  beliefs?: { content: string; timestamp: number }[];
+
+  // --- Strategy Tracking ---
+  strategyHistory?: StrategySnapshot[];
+
+  // --- Commitment System ---
+  commitments?: Commitment[];
+  archivedCommitments?: Commitment[];
+}
+
+// --- Strategy Tracking ---
+// Snapshot after each action so agents can see which strategies work/fail over time.
+export interface StrategySnapshot {
+  actionType: string;
+  day: number;
+  hungerAt: number;
+  healthAt: number;
+  inventoryCount: number;
+  avgTrust: number;
+  reputation: number;
+}
+
+// --- Commitment System ---
+// Weighted promises: casual(1) = 12hr, promise(3) = 24hr, oath(5) = 48hr.
+// Weight budget of 15 per agent prevents over-promising.
+export interface Commitment {
+  id: string;
+  targetId: string;
+  targetName: string;
+  content: string;
+  weight: 1 | 3 | 5;
+  createdDay: number;
+  createdHour: number;
+  expiresDay: number;
+  itemsPromised?: string[];
+  fulfilled: boolean;
+  broken: boolean;
+  sourceConversationId?: string;
+  archivedAt?: number;
+}
+
+// --- Village Memory ---
+// Collective history shared by all agents — deaths, rules, betrayals, alliances.
+export interface VillageMemoryEntry {
+  content: string;
+  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath';
+  day: number;
+  significance: number; // 1-10
 }
 
 export type AgentState =
@@ -593,6 +646,7 @@ export interface BoardPost {
   revoked?: boolean;      // if a rule/decree was revoked
   votes?: { agentId: string; vote: 'like' | 'dislike' }[];
   ruleStatus?: 'proposed' | 'passed' | 'rejected' | 'repealed';
+  claimTarget?: { type: 'area' | 'building'; id: string };  // if this is a property claim vote
   comments?: { agentId: string; agentName: string; content: string; timestamp: number }[];
 }
 
@@ -614,4 +668,5 @@ export interface WorldSnapshot {
   narratives?: NarrativeEntry[];
   storylines?: Storyline[];
   weeklySummary?: string | null;
+  villageMemory?: VillageMemoryEntry[];
 }

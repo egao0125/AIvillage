@@ -152,9 +152,8 @@ export class EventBroadcaster {
   }
 
   agentMood(agentId: string, mood: string): void {
+    // Mood is UI-only. No persistence, no memory, no timeline.
     this.io.emit('agent:mood', { agentId, mood });
-    this.narrator?.logEvent(`An agent's mood changed to ${mood}`);
-    this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'mood_change', description: `Mood changed to ${mood}`, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
   }
 
   agentInventory(agentId: string, inventory: Item[]): void {

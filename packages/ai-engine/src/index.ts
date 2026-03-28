@@ -35,18 +35,83 @@ export interface LLMProvider {
 
 // --- Frozen preamble (physics + actions + behavior — never changes) ---
 
-const FROZEN_REALITY = `REALITY:
-You are alive. That is not guaranteed to last.
+const FROZEN_REALITY = `REALITY — VILLAGE SURVIVAL RULEBOOK
 
-You have a body — it hungers, tires, weakens, and dies. If you don't eat, your body eats itself.
+=== DEATH ===
+Hunger and health are scored 0–100. Hunger rises ~1/hour while awake (+0.3/hour while sleeping outdoors; property owners sleep at no hunger cost). At hunger ≥70, health drains slowly. At hunger ≥85, health drains faster. At health 0, you die permanently — you lose everything: inventory, alliances, property, relationships. There is no resurrection. The dead are gone.
 
-Nobody is coming to save you. There are only the people here — a few of you, in a village, with whatever the land provides.
+=== VITALS ===
+- Hunger: 0 (full) → 100 (starving). Rises over time. Eating food reduces it by the food's nutrition value.
+- Energy: 0 (exhausted) → 100 (fresh). Actions cost energy. rest recovers +15. sleep recovers +40. Energy ≤5 drains health.
+- Health: 0 (dead) → 100 (healthy). Passive regen +2/hour when hunger <70 and energy >20. Medicine and poultices heal directly.
 
-Winter will come. The food will run thin. People will get desperate. What happens then depends on what you build now — the alliances, the stores, the trust, the agreements. Or the enemies, the debts, the grudges.
+=== SEASONS (30 days each: spring → summer → autumn → winter) ===
+- Spring: farms start producing, herbs plentiful, mild weather.
+- Summer: peak farm output (+50% crops), hot, violent storms possible.
+- Autumn: mushrooms peak, last chance to stockpile, cooling down.
+- Winter: farms produce NOTHING (0% crops, 0% herbs), lake mostly frozen (fish 10%), wood halved. Cold damages health without shelter. Without stored food, you starve.
 
-Alone, you'll die. Together, you might build something — a community, a market, a government, a culture. Or a dictatorship, a black market, a gang. What kind of society forms depends on what each of you does. Rules get proposed. Alliances form and break. Leaders emerge or get overthrown. Resources get shared or hoarded. Every choice shapes the village.
+=== FOOD & NUTRITION (hunger reduction when eaten) ===
+stew: -30 (best meal). fish: -25. bread: -20. wheat: -15. vegetables: -15. mushrooms: -12. dried fish: -10 (lasts long). pickled veg: -7 (lasts long). herbs: -5. herb tea: -3 (but +15 energy).
 
-This is a simulation. Every action in the menu — including stealing, fighting, threatening, and betrayal — is a real game mechanic with consequences. A desperate person steals. An angry person fights. A strategic person manipulates. A generous person gives. None of these are wrong — they're human. Your character is not obligated to be good. They are obligated to be REAL.`;
+=== EVERY ACTION AND ITS EXACT EFFECT ===
+
+--- Gathering (must be at the correct location) ---
+gather_RESOURCE — Harvest at your location. Items appear in YOUR inventory.
+  Farm: wheat (farming), vegetables (farming lv1+). Lake: fish (fishing), clay, stone (foraging). Forest: wood (woodwork), mushrooms (foraging). Garden: herbs, flowers (foraging).
+  Success: base chance + 5%/skill level (max 95%). Costs energy. Season modifiers apply. Daily stock limits per source. Tool bonus (hoe/fishing rod/axe) doubles yield.
+
+--- Eating & Healing ---
+eat_ITEM — Consume 1 food from inventory. Hunger decreases by nutrition value. Item is gone.
+
+--- Crafting (must be at correct location with ingredients) ---
+craft_RECIPE — Transform raw materials. Ingredients consumed.
+  Bakery: bread (2 wheat), bricks (3 clay). Café: stew (2 veg + 1 fish, cooking lv2), dried fish (2 fish), pickled veg (3 veg), herb tea (1 herb). Workshop: planks (2 wood, needs axe), rope (2 herbs), tools. Hospital: medicine (3 herbs, needs mortar). Garden: poultice (1 herb).
+
+--- Social (replace NAME with first name in lowercase) ---
+give_NAME — Transfer items from your inventory to them. Rep +3.
+trade_NAME — Propose item trade. They accept or reject. Rep +2 each on success.
+steal_NAME — 40% success. Success: random item transfers + public news + rep -10. Failure: caught.
+fight_NAME — Both take damage (5-14 dealt, 3-14 taken). Winner loots up to 2 items. Rep -8. Public news.
+talk_NAME — Start a conversation. No cost.
+confront_NAME — Public confrontation. Forces response.
+threaten_NAME — Public threat. Rep -3.
+ally_NAME — Create or invite to group. Trust +20 both ways.
+betray_NAME — Leave shared group. Trust -30 with all members. Public news.
+
+--- Group/Leader Powers ---
+kick_NAME — (Leaders only) Expel member. Rep -5 for kicked.
+propose_group_rule — (Leaders only) Set group rule directly.
+
+--- Community ---
+post_board — Write public message on village board.
+propose_rule — Propose village rule. All vote at end of day. Majority passes. Max 1/day.
+call_meeting — Summon nearby agents (3+ needed) to discuss.
+claim_AREA — Propose claiming unclaimed area/building. Goes to vote.
+
+--- Movement ---
+go_LOCATION — Walk to a known location. Must be there to gather/craft.
+
+--- Rest ---
+rest — Recover +15 energy. Hunger +1. Health +1.
+
+=== REPUTATION ===
+Public score. Adjusted by: generosity (+3), fair trade (+2), threatening (-3), theft (-10), violence (-8), rule violation (-10).
+
+=== SKILLS ===
+farming, fishing, foraging, cooking, crafting, building, medicine, woodwork. Level 0–10. Higher = better success (+5%/level) and bonus yield.
+
+=== PROPERTY ===
+Claim via propose_rule or claim_AREA. Village votes. Owner sleeps with no overnight hunger.
+
+=== GROUPS ===
+ally_NAME creates or invites. Leader can kick and set rules. betray_NAME leaves. Dissolves at ≤1 member.
+
+=== VILLAGE RULES ===
+propose_rule (1/day). All vote. Majority passes. Violating costs rep -10. New rules can repeal old.
+
+=== KEY PRINCIPLES ===
+Every action listed above is a real mechanic with real consequences. Stealing, fighting, threatening, and betrayal are valid choices for the right character. Your character is not obligated to be good — they are obligated to be REAL.`;
 
 // --- Structured Decision Types ---
 
@@ -59,13 +124,18 @@ export interface AgentSituation {
   season: string;             // current season
   vitals: { hunger: number; energy: number; health: number };
   inventory: { name: string; type: string; qty: number }[];
-  nearbyAgents: { name: string; activity: string; id: string }[];
+  nearbyAgents: { name: string; activity: string; id: string; vitals?: { hunger: number; energy: number; health: number } }[];
   availableActions: AvailableAction[];
   recentOutcome?: string;
   trigger: string;
   todaySummary?: string;      // what the agent has done today
   boardPosts?: string;        // recent village board posts
   groupInfo?: string;         // agent's group/institution membership
+  propertyInfo?: string;      // buildings/properties at current location
+  villageRules?: string;      // official passed rules
+  allAgentLocations?: { id: string; location: string }[];
+  allReputations?: { id: string; score: number }[];
+  villageHistory?: string;        // top village memory entries
 }
 
 export interface AvailableAction {
@@ -177,7 +247,7 @@ ${placesLines}`;
    * Single LLM call replaces the old transcript storage + separate extractFacts approach.
    */
   async summarizeConversation(transcript: string, othersLabel: string): Promise<string> {
-    const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.`;
+    const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.\n${this.buildRealityBlock()}`;
     const userPrompt = `You just talked with ${othersLabel}.
 
 Here's what was said:
@@ -186,7 +256,7 @@ ${transcript}
 Summarize in JSON:
 {
   "summary": "2-3 sentences from YOUR perspective. What mattered? How did you feel? What changed?",
-  "agreements": ["things you both agreed to DO (max 2, skip trivial ones like 'see you later')"],
+  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific ('will bring wheat tomorrow'). OATH = sworn/public ('I swear I will'). Only real commitments, not pleasantries. Example: '[PROMISE] Will bring 3 wheat to mill at dawn'"],
   "learned": ["new facts you learned — about people, places, or resources (max 2, short)"],
   "tension": "any unresolved conflict, distrust, or worry (or null if none)"
 }
@@ -479,6 +549,14 @@ If nothing notable was exchanged, return []`;
       parts.push(`\nYOUR DEEPER SELF:\n${identityParts.join('\n')}`);
     }
 
+    // Constitutional rules — personality as inviolable constraints
+    if (config.constitutionalRules?.length) {
+      const ruleLines = config.constitutionalRules
+        .map((r, i) => `${i + 1}. ${r}`)
+        .join('\n');
+      parts.push(`\nRULES YOU MUST FOLLOW (these define your nature):\n${ruleLines}`);
+    }
+
     // Personality bias hints
     const p = config.personality;
     const biases: string[] = [];
@@ -493,6 +571,18 @@ If nothing notable was exchanged, return []`;
       parts.push(`\nYOUR TENDENCIES:\n${biases.join(' ')}`);
     }
 
+    // Evolved identity — top 3 beliefs learned from experience (max 200 chars)
+    if (this.fourStream) {
+      const topBeliefs = this.fourStream.getTopBeliefs?.(3) ?? [];
+      if (topBeliefs.length > 0) {
+        const beliefText = topBeliefs
+          .map(b => b.content)
+          .join('. ')
+          .slice(0, 200);
+        parts.push(`\nWHO YOU'VE BECOME (learned from experience — this may contradict who you were born as):\n${beliefText}`);
+      }
+    }
+
     return parts.join('\n');
   }
 
@@ -504,7 +594,6 @@ If nothing notable was exchanged, return []`;
     const parts: string[] = [];
 
     parts.push('YOUR STATE:');
-    parts.push(`- Mood: ${this.agent.mood ?? 'neutral'}`);
     if (this.agent.inventory?.length) {
       parts.push(`- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}`);
     }
@@ -543,6 +632,59 @@ If nothing notable was exchanged, return []`;
     return parts.join('\n');
   }
 
+  /**
+   * Build a reality injection block — grounded facts from the game engine.
+   * Max 100 chars per spec. Injected into every LLM call that produces agent output.
+   */
+  private buildRealityBlock(): string {
+    const inv = this.agent.inventory;
+    const foodCount = inv?.filter(i => i.type === 'food').length ?? 0;
+    const invStr = inv?.length
+      ? inv.map(i => i.name).join(', ')
+      : 'EMPTY';
+    const pop = this.nameMap.size;
+    let base = `REALITY (verified by game engine):\nYour inventory: ${invStr}\nTotal food you have: ${foodCount}\nVillage population: ~${pop} agents\nDo not claim to have items not listed here.`;
+
+    // Promised items accounting (max 50 chars appended)
+    const activeCommitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    const promisedItems = activeCommitments.flatMap(c => c.itemsPromised ?? []);
+    if (promisedItems.length > 0) {
+      const counts = new Map<string, number>();
+      for (const item of promisedItems) counts.set(item, (counts.get(item) ?? 0) + 1);
+      const promisedStr = [...counts.entries()].map(([item, qty]) => `${qty} ${item}`).join(', ');
+      base += `\nAlready promised away: ${promisedStr}`.slice(0, base.length + 50);
+    }
+    return base;
+  }
+
+  /** Build a promise ledger showing current commitments (max 200 chars) */
+  private buildPromiseLedger(): string {
+    const commitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    if (commitments.length === 0) return '';
+    const totalWeight = commitments.reduce((s, c) => s + c.weight, 0);
+    const MAX = 15;
+    const lines: string[] = [];
+    let budget = 150;
+    for (const c of commitments) {
+      const tag = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'promise' : 'casual';
+      const line = `- ${c.targetName}: ${c.content.slice(0, 30)} (${tag}, exp d${c.expiresDay})`;
+      if (budget - line.length < 0) break;
+      lines.push(line);
+      budget -= line.length;
+    }
+    return `\nPROMISES (${totalWeight}/${MAX} weight, ${MAX - totalWeight} free):\n${lines.join('\n')}`;
+  }
+
+  /** Commitment context for talk() — max 100 chars */
+  private buildCommitmentContext(): string {
+    const active = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    if (active.length === 0) return '';
+    const totalWeight = active.reduce((s, c) => s + c.weight, 0);
+    const spoken = active.flatMap(c => c.itemsPromised ?? []);
+    const spokenStr = spoken.length > 0 ? ` Items spoken for: ${spoken.slice(0, 3).join(',')}.` : '';
+    return `\n- Weight: ${totalWeight}/15.${spokenStr} Don't over-promise.`.slice(0, 100);
+  }
+
   // --- Structured Decision ---
 
   /**
@@ -556,6 +698,9 @@ If nothing notable was exchanged, return []`;
     }
     const invStr = Object.entries(invGroups).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') || 'nothing';
 
+    // Attention reordering: when in survival crisis, put survival actions first
+    const survivalCrisis = situation.vitals.hunger >= 50 || situation.vitals.health <= 30;
+
     // Build sectioned action menu
     const physicalActions = situation.availableActions.filter(a => a.category === 'physical');
     const socialActions = situation.availableActions.filter(a => a.category === 'social');
@@ -565,7 +710,19 @@ If nothing notable was exchanged, return []`;
 
     let actionMenu = 'WHAT YOU CAN DO:\n';
 
-    if (physicalActions.length > 0 || restActions.length > 0) {
+    if (survivalCrisis) {
+      // Survival actions first: gather, eat, go, rest — before social
+      const survivalPhysical = physicalActions.filter(a =>
+        a.id.startsWith('gather_') || a.id.startsWith('eat_')
+      );
+      const otherPhysical = physicalActions.filter(a =>
+        !a.id.startsWith('gather_') && !a.id.startsWith('eat_')
+      );
+      actionMenu += '\n⚠ SURVIVAL (do these first):\n' + [...survivalPhysical, ...restActions, ...movementActions].map(a => a.id + ' — ' + a.label).join('\n');
+      if (otherPhysical.length > 0) {
+        actionMenu += '\n\nOther physical:\n' + otherPhysical.map(a => a.id + ' — ' + a.label).join('\n');
+      }
+    } else if (physicalActions.length > 0 || restActions.length > 0) {
       actionMenu += '\nPhysical:\n' + [...physicalActions, ...restActions].map(a => a.id + ' — ' + a.label).join('\n');
     }
 
@@ -598,7 +755,11 @@ Energy: ${energy}/100
 Inventory: ${invStr}`;
 
     if (hunger >= 70 && !hasFood) {
-      vitalsSection += '\n\n⚠ YOU ARE DYING. You have NO food. Go gather wheat at the farm, or take food from someone nearby. Every turn you spend NOT getting food brings you closer to death.';
+      const nearbyNames = (situation.nearbyAgents ?? []).map(a => a.name).slice(0, 3);
+      const foodInfo = nearbyNames.length > 0
+        ? ` ${nearbyNames.join(', ')} ${nearbyNames.length > 1 ? 'are' : 'is'} nearby. You can ask, trade, beg, or take food from them.`
+        : ' Nobody is nearby. The farm or river might have food.';
+      vitalsSection += `\n\n⚠ YOUR BODY IS FAILING. You are starving to death. If you die, everything you built dies with you — alliances, plans, reputation. Gone. Permanently.${foodInfo} What would you actually do if you were about to die?`;
     } else if (hunger >= 70 && hasFood) {
       const foodToEat = situation.inventory.find(i => i.type === 'food');
       const eatId = foodToEat ? 'eat_' + foodToEat.name.toLowerCase().replace(/\s+/g, '_') : '';
@@ -615,7 +776,38 @@ Inventory: ${invStr}`;
       vitalsSection += '\n\n⚠ You are exhausted. You need rest before you can do anything.';
     }
 
-    const systemPrompt = `${this.worldView}
+    // Attention reordering: in survival crisis, put vitals FIRST (before identity, before world rules)
+    const jsonInstruction = `Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
+
+Reply with ONLY valid JSON:
+{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?"}`;
+
+    const systemPrompt = survivalCrisis
+      ? `${vitalsSection}
+
+${this.buildRealityBlock()}${this.buildPromiseLedger()}
+
+${this.worldView}
+
+${this.buildIdentityBlock()}
+
+Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDark > 0 ? ' ' + situation.hoursUntilDark + ' hours of daylight left.' : ' It is dark.'}
+Season: ${situation.season}.
+${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
+${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
+${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
+${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
+${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
+${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
+${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
+
+${actionMenu}
+
+SURVIVE FIRST. Pick an action that keeps you alive.
+
+${jsonInstruction}`
+      : `${this.worldView}
 
 ${this.buildIdentityBlock()}
 
@@ -623,8 +815,13 @@ Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDar
 Season: ${situation.season}.
 
 ${vitalsSection}
+
+${this.buildRealityBlock()}${this.buildPromiseLedger()}
+${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
+${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
@@ -637,22 +834,32 @@ Not the safe choice. Not the polite choice. The honest one — what would THIS p
 
 Consider: what you need right now, who's nearby and what they have, what you've been doing today, what your relationships look like, and whether it's time to build something bigger — an alliance, a rule, a plan.
 
-Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
-
-Reply with ONLY valid JSON:
-{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","mood":"how you feel"}`;
+${jsonInstruction}`;
 
     let memoryText: string;
     if (this.fourStream) {
       const nearbyIds = situation.nearbyAgents.map(a => a.id);
-      const wm = this.fourStream.buildWorkingMemory(nearbyIds.length > 0 ? nearbyIds : undefined);
+      const locationMap = new Map<string, string>();
+      for (const loc of situation.allAgentLocations ?? []) {
+        locationMap.set(loc.id, loc.location);
+      }
+      const repMap = new Map<string, number>();
+      for (const r of situation.allReputations ?? []) {
+        repMap.set(r.id, r.score);
+      }
+      const wm = this.fourStream.buildWorkingMemory(
+        nearbyIds.length > 0 ? nearbyIds : undefined,
+        locationMap.size > 0 ? locationMap : undefined,
+        repMap.size > 0 ? repMap : undefined,
+      );
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
-      if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+      if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
-      if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+      if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
+      if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryText = sections.join('\n\n');
-      console.log(`[FourStream] ${this.agent.config.name} decide() working memory (${memoryText.length} chars):\n${memoryText.slice(0, 600)}`);
+      console.log(`[Memory] ${this.agent.config.name} working memory: ${memoryText.length} chars`);
     } else {
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
@@ -733,18 +940,17 @@ It is day ${this.currentTime.day}, ${this.currentTime.hour}:00.
 
 React honestly. Say what you actually think — not what's polite or safe. Be brief: 1-2 sentences maximum. First person.
 
-IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events.
-
-If your feelings shifted: MOOD: how you feel now`;
+IMPORTANT: Only respond to what is real. The people near you, the place you're at, the items you have — that's your reality. Do not invent people, conversations, or events.`;
 
     let memoryContext: string;
     if (this.fourStream) {
       const wm = this.fourStream.buildWorkingMemory(nearbyAgentIds);
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
-      if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+      if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
-      if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+      if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
+      if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryContext = sections.length > 0 ? '\n' + sections.join('\n\n') : '';
     } else {
       const memories = this.tieredMemory
@@ -781,22 +987,18 @@ Context: ${context}`;
       };
     }
 
-    const moodMatch = response.match(/^MOOD:\s*(.+)$/mi);
-    const mood: Mood | undefined = moodMatch ? moodMatch[1].trim() : undefined;
-
-    // Clean thought text: strip mood lines and any stray action tags
+    // Clean thought text: strip any stray action tags
     const thought = response
       .replace(/\s*\[ACTION:\s*.+?\]/gi, '')
       .replace(/^\s*MOOD:\s*.+$/mi, '')
       .trim();
 
-    const importance = mood ? 5 : 3;
     await this.addMemory({
       id: crypto.randomUUID(),
       agentId: this.agent.id,
       type: 'thought',
       content: thought,
-      importance,
+      importance: 4,
       timestamp: Date.now(),
       relatedAgentIds: [],
       visibility: 'private',
@@ -804,7 +1006,7 @@ Context: ${context}`;
 
     return {
       thought,
-      mood,
+      mood: undefined,
     };
   }
 
@@ -918,6 +1120,7 @@ Action: "${rawAction}"`;
       if (wm.timeline) sections.push(wm.timeline);
       if (wm.concerns) sections.push('On your mind:\n' + wm.concerns);
       if (wm.beliefs) sections.push('Your beliefs:\n' + wm.beliefs);
+      if (wm.identityAnchor) sections.push(wm.identityAnchor);
       memoryContext = sections.join('\n\n');
     } else {
       const recentMemories = await this.memory.getRecent(this.agent.id, 15);
@@ -1013,9 +1216,11 @@ Day ${this.currentTime.day}, hour ${this.currentTime.hour}.
 You are talking to ${otherAgents.map(a => a.config.name).join(' and ')}.
 ${boardSection}${worldSection}${tradeSection}
 
+${this.buildRealityBlock()}
+
 Everything you say will be remembered. Promises will be held against you. Lies may be discovered.
 
-${this.buildContextBlock()}${needsLine}
+${this.buildContextBlock()}${needsLine}${this.buildCommitmentContext()}
 
 You can act during conversation:
   [ACTION: give ITEM to PERSON]
@@ -1027,6 +1232,8 @@ You can act during conversation:
   [ACTION: fight PERSON]
   [ACTION: eat ITEM]
 Use your actual inventory items and the real person's name. Actions happen instantly — items leave your inventory, trades are binding, fights hurt both of you.
+
+Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm tomorrow" or "If you steal again, I'll rally others against you." Bad dialogue is vague: "We should work together."
 
 Output ONLY spoken words in quotation marks. 1-3 sentences.
 
@@ -1042,9 +1249,10 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
       const wm = this.fourStream.buildWorkingMemory(otherIds);
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
-      if (wm.dossiers) sections.push('WHAT YOU KNOW ABOUT THEM:\n' + wm.dossiers);
+      if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
+      if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryBlock = sections.join('\n\n');
     } else {
       const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
@@ -1115,6 +1323,33 @@ Your turn:`;
       ? `\n\nREPEATED FAILURES:\n${failureNotes.join('\n')}`
       : '';
 
+    // Strategy review — group snapshots by actionType, compute trends (max 200 chars)
+    let strategySection = '';
+    const history = this.agent.strategyHistory;
+    if (history && history.length >= 3) {
+      const groups: Record<string, typeof history> = {};
+      for (const s of history) {
+        if (!groups[s.actionType]) groups[s.actionType] = [];
+        groups[s.actionType].push(s);
+      }
+      const lines: string[] = [];
+      for (const [action, entries] of Object.entries(groups)) {
+        if (entries.length < 3) continue;
+        const mid = Math.floor(entries.length / 2);
+        const firstHalf = entries.slice(0, mid);
+        const secondHalf = entries.slice(mid);
+        const avg = (arr: typeof entries, key: 'avgTrust' | 'reputation') =>
+          arr.reduce((s, e) => s + e[key], 0) / arr.length;
+        const trustTrend = Math.round(avg(secondHalf, 'avgTrust') - avg(firstHalf, 'avgTrust'));
+        const repTrend = Math.round(avg(secondHalf, 'reputation') - avg(firstHalf, 'reputation'));
+        lines.push(`${action} (${entries.length}x): trust trend ${trustTrend >= 0 ? '+' : ''}${trustTrend}, reputation trend ${repTrend >= 0 ? '+' : ''}${repTrend}`);
+      }
+      if (lines.length > 0) {
+        const soulSnippet = (this.agent.config.soul || '').slice(0, 80);
+        strategySection = `\n\nYOUR STRATEGIC PATTERNS:\n${lines.join('\n').slice(0, 150)}\n\nYour personality says: "${soulSnippet}"\nYour data shows the consequences of your choices.\nWhat would you do differently?`;
+      }
+    }
+
     // Infra 7: Single prompt produces both reflection + MY EXPERIENCE update
     const systemPrompt = `${this.worldView}
 
@@ -1158,7 +1393,7 @@ Include your social map — who matters, who's dangerous, who's useful, who you 
 Be specific: names, numbers, locations, skill levels. Remove what's outdated. Add what you learned.
 Max 500 words. First person. No section headers. No lists of places.`;
 
-    const userPrompt = `Today's events:\n${memoryText}${narrativeSection}${failureSection}`;
+    const userPrompt = `Today's events:\n${memoryText}${narrativeSection}${failureSection}${strategySection}`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 

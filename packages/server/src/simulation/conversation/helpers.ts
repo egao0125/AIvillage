@@ -75,6 +75,31 @@ export function buildWorldStateForResolver(world: World): ResolverWorldState {
   };
 }
 
+/** Classify commitment weight from agreement text + context */
+export function classifyCommitmentWeight(
+  agreement: string,
+  isPublic: boolean,
+  hasWitness: boolean,
+): 1 | 3 | 5 {
+  const lower = agreement.toLowerCase();
+  if (/\b(swear|oath|vow|on my life|sacred|pledge)\b/.test(lower) || (isPublic && hasWitness)) return 5;
+  if (/\b(maybe|could|might|try|if i can|when possible|sometime)\b/.test(lower)) return 1;
+  if (/\b(promise|will bring|will give|commit|guarantee|i owe|i'll deliver)\b/.test(lower)) return 3;
+  return 3; // default to promise
+}
+
+/** Extract item names referenced in an agreement */
+export function extractItemsPromised(agreement: string): string[] {
+  const items: string[] = [];
+  const pattern = /(\d+)?\s*(wheat|bread|fish|stew|food|herb|mushroom|wood|stone|planks|medicine|vegetables|clay|flour|tea)/gi;
+  let match;
+  while ((match = pattern.exec(agreement)) !== null) {
+    const qty = match[1] ? parseInt(match[1]) : 1;
+    for (let i = 0; i < qty; i++) items.push(match[2].toLowerCase());
+  }
+  return items;
+}
+
 export function buildInstitutionContext(world: World, agentId: string): string {
   const institutions = Array.from(world.institutions.values()).filter(i => !i.dissolved);
   if (institutions.length === 0) return '';

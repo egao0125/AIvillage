@@ -18,6 +18,7 @@ import type {
   Storyline,
   Recap,
   SocialLedgerEntry,
+  VillageMemoryEntry,
 } from '@ai-village/shared';
 
 export interface ActionLogEntry {
@@ -48,6 +49,7 @@ interface GameState {
   characterPageAgentId: string | null;
   activeRecap: Recap | null;
   weeklySummary: string | null;
+  villageMemory: VillageMemoryEntry[];
   actionLog: Map<string, ActionLogEntry[]>;
   socialViewOpen: boolean;
 }
@@ -92,6 +94,7 @@ class GameStore {
     characterPageAgentId: null,
     activeRecap: null,
     weeklySummary: null,
+    villageMemory: [],
     actionLog: new Map(),
     socialViewOpen: false,
   };
@@ -570,6 +573,11 @@ class GameStore {
 
   closeSocialView(): void {
     this.state = { ...this.state, socialViewOpen: false };
+    this.notify();
+  }
+
+  setVillageMemory(villageMemory: VillageMemoryEntry[]): void {
+    this.state = { ...this.state, villageMemory };
     this.notify();
   }
 }
