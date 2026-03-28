@@ -311,7 +311,7 @@ const SocialViewInner: React.FC = () => {
           <div style={{
             position: 'absolute',
             bottom: 16,
-            left: 16,
+            right: hasPanel ? 366 : 16,
             padding: '10px 14px',
             background: `${COLORS.bgCard}ee`,
             border: `1px solid ${COLORS.border}`,
