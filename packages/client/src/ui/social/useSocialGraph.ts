@@ -4,10 +4,10 @@ import type { Agent, ReputationEntry, SocialLedgerEntry } from '@ai-village/shar
 import type { SocialNode, SocialEdge, MatchedEntry, SocialFilter } from './types';
 import { DEFAULT_FILTER } from './types';
 
-function edgeColor(avgRep: number): string {
-  if (avgRep > 10) return 'hsl(45, 70%, 60%)';   // warm — positive
-  if (avgRep < -10) return 'hsl(220, 60%, 50%)';  // cool — negative
-  return 'hsl(240, 10%, 45%)';                     // gray — neutral
+function edgeColor(avgTrust: number): string {
+  if (avgTrust > 30) return 'hsl(45, 70%, 60%)';   // warm — positive trust
+  if (avgTrust < -30) return 'hsl(220, 60%, 50%)';  // cool — negative trust
+  return 'hsl(240, 10%, 45%)';                       // gray — neutral/unknown
 }
 
 function matchLedgerEntries(
@@ -112,16 +112,16 @@ export function useSocialGraph(filter: SocialFilter = DEFAULT_FILTER) {
         const bEntries = bAgent.socialLedger || [];
 
         const sharedEntries = matchLedgerEntries(aEntries, bEntries, aId, bId);
-        if (sharedEntries.length === 0) {
-          // Check if there's reputation even without ledger entries
-          const repAB = repMap.get(`${aId}:${bId}`);
-          const repBA = repMap.get(`${bId}:${aId}`);
-          if (repAB === undefined && repBA === undefined) continue;
-        }
 
-        const repAB = repMap.get(`${aId}:${bId}`) ?? 0;
-        const repBA = repMap.get(`${bId}:${aId}`) ?? 0;
-        const avgRep = (repAB + repBA) / 2;
+        // Use mental model trust (rich data) instead of sparse reputation system
+        const aModel = aAgent.mentalModels?.find(m => m.targetId === bId);
+        const bModel = bAgent.mentalModels?.find(m => m.targetId === aId);
+        const trustAB = aModel?.trust ?? 0;
+        const trustBA = bModel?.trust ?? 0;
+        const avgTrust = (trustAB + trustBA) / 2;
+
+        // Need either ledger entries or mental models to show an edge
+        if (sharedEntries.length === 0 && !aModel && !bModel) continue;
 
         const types = new Set(sharedEntries.map(e => e.sourceEntry.type));
         const hasDisagreement = sharedEntries.some(e => e.disagreement);
@@ -147,9 +147,9 @@ export function useSocialGraph(filter: SocialFilter = DEFAULT_FILTER) {
           source: aId,
           target: bId,
           interactionCount,
-          avgReputation: avgRep,
+          avgReputation: avgTrust,
           thickness,
-          color: edgeColor(avgRep),
+          color: edgeColor(avgTrust),
           types,
           hasDisagreement,
           sharedEntries,
