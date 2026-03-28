@@ -88,7 +88,7 @@ const SocialViewInner: React.FC = () => {
     return m;
   }, [rawNodes]);
 
-  const springPositions = useSpringPositions(springTargets);
+  const springPositions = useSpringPositions(springTargets, { stiffness: 600, damping: 40, precision: 0.5 });
 
   // Merge spring positions back into nodes, with circle fallback
   const displayNodes: SocialNode[] = useMemo(() => {
