@@ -50,7 +50,6 @@ export class AgentController {
   private reflectingInProgress: boolean = false;
   private currentAreaId: string | null = null; // track where the agent is performing
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
-  private askCooldown: number = 0; // ticks remaining before agent can ask again
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
@@ -78,6 +77,8 @@ export class AgentController {
   private lastBeliefTick: number = 0;
   private postConversationPending: boolean = false;
   private postConvWaitTimer: number = 0;
+  private lastObligationText: string = '';
+  private obligationCooldown: number = 0;
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -274,7 +275,7 @@ export class AgentController {
     }
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
-    if (this.askCooldown > 0) this.askCooldown--;
+    if (this.obligationCooldown > 0) this.obligationCooldown--;
 
     // Universal sleep check — fires once at exact sleep hour, then winds down gracefully
     if (this.state !== 'sleeping' && this.state !== 'reflecting' && this.state !== 'waking' && this.state !== 'deciding') {
@@ -1360,7 +1361,7 @@ export class AgentController {
 
     const nearby = this.world.getNearbyAgents(this.agent.position, 5)
       .filter(a => a.id !== this.agent.id && a.alive !== false && a.state !== 'sleeping');
-    const nearbyForSituation: { name: string; activity: string; id: string }[] = [];
+    const nearbyForSituation: { name: string; activity: string; id: string; vitals?: { hunger: number; energy: number; health: number } }[] = [];
 
     for (const a of nearby) {
       const otherInv = a.inventory.length > 0
@@ -1376,6 +1377,7 @@ export class AgentController {
         name: a.config.name,
         activity: (a.currentAction || 'idle') + otherInvStr,
         id: a.id,
+        vitals: a.vitals,
       });
     }
 
@@ -1388,18 +1390,12 @@ export class AgentController {
         actions.push({ id: 'give_NAME', label: 'Give something to someone', category: 'social' });
         actions.push({ id: 'trade_NAME', label: 'Trade with someone', category: 'social' });
       }
-      // ask is rate-limited: cooldown after use, hidden when starving
-      if (this.askCooldown <= 0 && (this.agent.vitals?.hunger ?? 0) < 70) {
-        actions.push({ id: 'ask_NAME', label: 'Ask someone for something', category: 'social' });
-      }
-      actions.push({ id: 'teach_NAME', label: 'Teach someone a skill', category: 'social' });
       actions.push({ id: 'steal_NAME', label: 'Steal from someone', category: 'social' });
       actions.push({ id: 'confront_NAME', label: 'Confront someone', category: 'social' });
       actions.push({ id: 'threaten_NAME', label: 'Threaten someone', category: 'social' });
       actions.push({ id: 'ally_NAME', label: 'Propose alliance with someone', category: 'social' });
       actions.push({ id: 'betray_NAME', label: 'Break an alliance with someone', category: 'social' });
       actions.push({ id: 'fight_NAME', label: 'Attack someone', category: 'social' });
-      actions.push({ id: 'observe_NAME', label: 'Watch someone without interacting', category: 'social' });
     }
 
     // ========================================
@@ -1619,6 +1615,109 @@ export class AgentController {
         .filter(r => r.fromAgentId === 'system' && r.score !== 0)
         .map(r => ({ id: r.toAgentId, score: r.score })),
     };
+  }
+
+  /** Step 3b: Check if any obligations should override the trigger */
+  private checkObligations(situation: AgentSituation): string | undefined {
+    if (this.obligationCooldown > 0) return undefined;
+
+    const nearbyIds = new Set(situation.nearbyAgents.map(a => a.id));
+
+    // 1. Check commitment concerns — promises made in conversations
+    const commitments = this.cognition.fourStream?.getAllConcerns()
+      .filter(c => c.category === 'commitment') ?? [];
+
+    for (const c of commitments) {
+      const text = c.content.toLowerCase();
+
+      // Does this commitment mention a nearby person?
+      const mentionedPerson = c.relatedAgentIds?.find(id => nearbyIds.has(id));
+      if (!mentionedPerson) continue;
+
+      const personAgent = this.world.getAgent(mentionedPerson);
+      if (!personAgent || personAgent.alive === false) continue;
+      const firstName = personAgent.config.name.split(' ')[0];
+
+      // "Give" type commitments — do I have the item?
+      const giveMatch = text.match(/give|bring|deliver|share|provide|wheat|bread|fish|food/);
+      const itemMatch = text.match(/wheat|bread|fish|stew|food|herb|mushroom|wood|stone/);
+
+      if (giveMatch && itemMatch) {
+        const item = itemMatch[0];
+        const hasItem = this.agent.inventory.some(
+          i => i.name.toLowerCase().includes(item)
+        );
+        if (hasItem) {
+          return `YOU PROMISED: ${c.content}. ${firstName} is RIGHT HERE and you have ${item}. Honor your promise: give_${firstName.toLowerCase()}. Or break it — but your reputation will suffer.`;
+        }
+      }
+
+      // "Meet/talk" type commitments
+      const talkMatch = text.match(/meet|talk|discuss|tell|warn|confess|report|present/);
+      if (talkMatch) {
+        return `YOU PROMISED: ${c.content}. ${firstName} is RIGHT HERE. Follow through: talk_${firstName.toLowerCase()}.`;
+      }
+
+      // Generic: person is nearby and commitment mentions them
+      return `Reminder: you committed to something involving ${firstName}: ${c.content}. They're right here.`;
+    }
+
+    // 2. Check dossier active commitments — "Owe" items
+    if (this.cognition.fourStream) {
+      for (const nearby of situation.nearbyAgents) {
+        const dossier = this.cognition.fourStream.getDossier?.(nearby.id);
+        if (!dossier?.activeCommitments?.length) continue;
+
+        for (const commit of dossier.activeCommitments) {
+          const text = commit.toLowerCase();
+          const firstName = nearby.name.split(' ')[0];
+
+          const itemMatch = text.match(/wheat|bread|fish|stew|food|herb|mushroom|wood|stone/);
+          if (itemMatch) {
+            const hasItem = this.agent.inventory.some(
+              i => i.name.toLowerCase().includes(itemMatch[0])
+            );
+            if (hasItem) {
+              return `YOU OWE ${firstName.toUpperCase()}: ${commit}. They're here. You have ${itemMatch[0]}. Do it: give_${firstName.toLowerCase()}.`;
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Ally in crisis — trusted person nearby dying
+    for (const nearby of situation.nearbyAgents) {
+      const dossier = this.cognition.fourStream?.getDossier?.(nearby.id);
+      const trust = dossier?.trust ?? 0;
+      if (trust > 30 && nearby.vitals) {
+        if (nearby.vitals.hunger >= 70 || nearby.vitals.health <= 20) {
+          const firstName = nearby.name.split(' ')[0];
+          const hasFood = this.agent.inventory.some(i => i.type === 'food');
+          if (hasFood) {
+            return `${firstName.toUpperCase()} IS DYING (hunger:${nearby.vitals.hunger} health:${nearby.vitals.health}). You trust them (${trust}). You have food. Give it: give_${firstName.toLowerCase()}. They will die if you don't act.`;
+          } else {
+            return `${firstName.toUpperCase()} IS DYING (hunger:${nearby.vitals.hunger} health:${nearby.vitals.health}). You trust them (${trust}). You have no food — go gather some immediately.`;
+          }
+        }
+      }
+    }
+
+    // 4. Recent threat — person who wronged you is nearby
+    const threats = this.cognition.fourStream?.getAllConcerns()
+      .filter(c => c.category === 'threat') ?? [];
+    for (const t of threats) {
+      const threatSource = t.relatedAgentIds?.find(id => nearbyIds.has(id));
+      if (!threatSource) continue;
+      const person = this.world.getAgent(threatSource);
+      if (!person || person.alive === false) continue;
+      const ageMinutes = this.world.time.totalMinutes - (t.createdAt || 0);
+      if (ageMinutes < 120) {
+        const firstName = person.config.name.split(' ')[0];
+        return `${firstName} threatened/wronged you recently: "${t.content.slice(0, 80)}". They're right here. Confront them? Avoid them? Your choice.`;
+      }
+    }
+
+    return undefined;
   }
 
   /** Step 4: Apply an ActionOutcome to the world (items, vitals, skills, resources) */
@@ -2012,28 +2111,6 @@ export class AgentController {
     }
 
     // --- Teach ---
-    if (actionId.startsWith('teach_')) {
-      const firstName = actionId.replace('teach_', '');
-      const target = this.findNearbyByFirstName(firstName);
-      const skill = this.agent.skills?.find(s => s.level >= 1);
-      if (!target || !skill) {
-        this.lastTrigger = 'You wanted to teach but couldn\'t.';
-        this.state = 'idle'; this.idleTimer = 0; return;
-      }
-      const agentState = this.buildAgentStateForResolver(situation);
-      const worldState = this.buildWorldState();
-      const intent = { type: 'teach' as const, skill: skill.name, targetAgent: target.config.name.split(' ')[0], raw: `teach ${skill.name} to ${target.config.name}` };
-      const outcome = executeAction(intent, agentState, worldState);
-      this.applyOutcomeToWorld(outcome);
-      this.lastOutcome = outcome.description;
-      this.lastTrigger = outcome.description;
-      this.adjustTrust(target, this.agent, 5);
-      this.state = 'performing'; this.activityTimer = 5;
-      this.world.updateAgentState(this.agent.id, 'active', `teaching ${skill.name} to ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `teaching ${skill.name} to ${target.config.name} — "${shortReason}"`);
-      return;
-    }
-
     // --- Threaten ---
     if (actionId.startsWith('threaten_')) {
       const firstName = actionId.replace('threaten_', '');
@@ -2094,90 +2171,24 @@ export class AgentController {
       this.broadcaster.boardPost(threatPost);
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: threatPost });
 
+      // Threatener gets follow-through commitment
+      if (this.cognition.fourStream) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: `I threatened ${target.config.name}: "${threatText.slice(0, 40)}". Follow through or lose credibility.`,
+          category: 'commitment',
+          relatedAgentIds: [target.id],
+          createdAt: this.world.time.totalMinutes,
+          expiresAt: this.world.time.totalMinutes + (24 * 60),
+        });
+      }
+      this.adjustReputation(this.agent.id, -3, 'Threatening');
+
       this.lastOutcome = `You threatened ${target.config.name}.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `threatening ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `threatened ${target.config.name} — "${shortReason}"`);
-      return;
-    }
-
-    // --- Ask ---
-    if (actionId.startsWith('ask_')) {
-      const firstName = actionId.replace('ask_', '');
-      const target = this.findNearbyByFirstName(firstName);
-      if (!target) {
-        this.lastTrigger = 'You wanted to ask someone but they weren\'t here.';
-        this.state = 'idle'; this.idleTimer = 0; return;
-      }
-
-      void this.cognition.addMemory({
-        id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
-        content: `I asked ${target.config.name} for help: ${decision.reason}`,
-        importance: 6, timestamp: Date.now(), relatedAgentIds: [target.id],
-      });
-
-      const targetCog = (this.world as any).cognitions?.get?.(target.id);
-      if (targetCog) {
-        void targetCog.addMemory({
-          id: crypto.randomUUID(), agentId: target.id, type: 'observation',
-          content: `${this.agent.config.name} asked me for help: ${decision.reason}`,
-          importance: 6, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
-        });
-        if (targetCog.fourStream) {
-          targetCog.fourStream.addConcern({
-            id: crypto.randomUUID(),
-            content: `${this.agent.config.name} asked me for something. I should respond.`,
-            category: 'unresolved', relatedAgentIds: [this.agent.id],
-            createdAt: this.world.time.totalMinutes,
-            expiresAt: this.world.time.totalMinutes + 480,
-          });
-        }
-      }
-
-      if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
-          `I asked ${target.config.name} for help.`, this.cognition.llmProvider);
-      }
-
-      this.lastOutcome = `You asked ${target.config.name} for help. They haven't given you anything yet.`;
-      this.lastTrigger = `You asked for help but got nothing yet. If you need food, you'll have to gather it, trade for it, or take it yourself.`;
-      this.askCooldown = 8;  // Can't ask again for 8 ticks
-      this.state = 'performing'; this.activityTimer = 3;
-      this.world.updateAgentState(this.agent.id, 'active', `asking ${target.config.name}`);
-      this.broadcaster.agentAction(this.agent.id, `asked ${target.config.name} for something — "${shortReason}"`);
-      return;
-    }
-
-    // --- Observe ---
-    if (actionId.startsWith('observe_')) {
-      const firstName = actionId.replace('observe_', '');
-      const target = this.findNearbyByFirstName(firstName);
-      if (!target) {
-        this.lastTrigger = 'You wanted to observe someone but they weren\'t here.';
-        this.state = 'idle'; this.idleTimer = 0; return;
-      }
-
-      const targetActivity = target.currentAction || 'idle';
-      const targetInv = target.inventory.length > 0
-        ? target.inventory.map(i => i.name).join(', ') : 'nothing';
-      const observation = `I watched ${target.config.name}. They were ${targetActivity}. They were carrying: ${targetInv}.`;
-
-      void this.cognition.addMemory({
-        id: crypto.randomUUID(), agentId: this.agent.id, type: 'observation',
-        content: observation, importance: 5, timestamp: Date.now(),
-        relatedAgentIds: [target.id],
-      });
-
-      if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name,
-          observation, this.cognition.llmProvider);
-      }
-
-      this.lastOutcome = observation;
-      this.lastTrigger = `You observed ${target.config.name}. ${observation}`;
-      this.state = 'performing'; this.activityTimer = 4;
-      this.world.updateAgentState(this.agent.id, 'active', `observing ${target.config.name}`);
       return;
     }
 
@@ -2227,6 +2238,27 @@ export class AgentController {
       this.world.addBoardPost(confrontPost);
       this.broadcaster.boardPost(confrontPost);
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: confrontPost });
+
+      // Confronter needs resolution
+      if (this.cognition.fourStream) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: `I confronted ${target.config.name}: "${confrontText.slice(0, 40)}". Need resolution.`,
+          category: 'unresolved',
+          relatedAgentIds: [target.id],
+          createdAt: this.world.time.totalMinutes,
+        });
+      }
+      // Target must address it
+      if (targetCognition?.fourStream) {
+        targetCognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: `${this.agent.config.name} publicly confronted me: "${confrontText.slice(0, 40)}". Others saw. Must respond.`,
+          category: 'unresolved',
+          relatedAgentIds: [this.agent.id],
+          createdAt: this.world.time.totalMinutes,
+        });
+      }
 
       this.lastOutcome = `You confronted ${target.config.name}.`;
       this.lastTrigger = `You just confronted ${target.config.name}. How do they react?`;
@@ -2870,6 +2902,29 @@ export class AgentController {
       if (accused) {
         this.adjustTrust(this.agent, accused, -15);
         this.adjustTrust(accused, this.agent, -15);
+        this.adjustReputation(accused.id, -3, 'Publicly accused');
+        this.adjustReputation(this.agent.id, -2, 'Made accusation');
+
+        const accusedCog = (this.world as any).cognitions?.get?.(accused.id);
+        if (accusedCog?.fourStream) {
+          accusedCog.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `${this.agent.config.name} publicly accused me: "${accusation.slice(0, 40)}". My reputation is at stake.`,
+            category: 'threat',
+            relatedAgentIds: [this.agent.id],
+            createdAt: this.world.time.totalMinutes,
+          });
+        }
+        if (this.cognition.fourStream) {
+          this.cognition.fourStream.addConcern({
+            id: crypto.randomUUID(),
+            content: `I accused ${accused.config.name}. Must back it up or lose credibility.`,
+            category: 'commitment',
+            relatedAgentIds: [accused.id],
+            createdAt: this.world.time.totalMinutes,
+            expiresAt: this.world.time.totalMinutes + (24 * 60),
+          });
+        }
       }
       this.lastOutcome = `You publicly accused ${accused?.config.name ?? 'someone'}.`;
       this.lastTrigger = this.lastOutcome;
@@ -3069,6 +3124,18 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
       this.world.addBoardPost(meetingPost);
       this.broadcaster.boardPost(meetingPost);
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: meetingPost });
+
+      // Meeting caller gets follow-up commitment
+      if (this.cognition.fourStream) {
+        this.cognition.fourStream.addConcern({
+          id: crypto.randomUUID(),
+          content: `I called a meeting about: "${meetingTopic.slice(0, 40)}". Follow up with attendees.`,
+          category: 'commitment',
+          relatedAgentIds: nearbyAll.map(a => a.id),
+          createdAt: this.world.time.totalMinutes,
+          expiresAt: this.world.time.totalMinutes + (24 * 60),
+        });
+      }
 
       this.lastOutcome = `You called a meeting. Speaking with ${names}.`;
       this.lastTrigger = this.lastOutcome;
@@ -3336,6 +3403,15 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
     try {
       const situation = this.buildSituation(this.lastTrigger, this.lastOutcome);
       this.lastOutcome = undefined;
+
+      // Check if any obligations should be surfaced as the trigger
+      const obligationPrompt = this.checkObligations(situation);
+      if (obligationPrompt && obligationPrompt !== this.lastObligationText) {
+        situation.trigger = obligationPrompt;
+        this.lastObligationText = obligationPrompt;
+        this.obligationCooldown = 5; // Don't repeat same obligation for 5 ticks
+        console.log(`[Obligation] ${this.agent.config.name}: ${obligationPrompt.slice(0, 100)}`);
+      }
 
       const decision = await this.cognition.decide(situation);
       this.handleApiSuccess();

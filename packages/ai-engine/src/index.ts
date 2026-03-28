@@ -65,7 +65,7 @@ export interface AgentSituation {
   season: string;             // current season
   vitals: { hunger: number; energy: number; health: number };
   inventory: { name: string; type: string; qty: number }[];
-  nearbyAgents: { name: string; activity: string; id: string }[];
+  nearbyAgents: { name: string; activity: string; id: string; vitals?: { hunger: number; energy: number; health: number } }[];
   availableActions: AvailableAction[];
   recentOutcome?: string;
   trigger: string;

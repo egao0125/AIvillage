@@ -219,11 +219,21 @@ export class PostConversationProcessor {
           );
         }
 
-        // Add agreements as commitment concerns
+        // Add agreements as commitment concerns with action hints
         for (const agreement of result.agreements) {
+          const lower = agreement.toLowerCase();
+          const firstOtherName = othersLabel.split(',')[0].split(' ')[0]?.toLowerCase() ?? '';
+          let actionHint = '';
+          if (/give|bring|deliver|share|provide/.test(lower)) {
+            actionHint = ` → give_${firstOtherName}`;
+          } else if (/vote|support|back|endorse/.test(lower)) {
+            actionHint = ' → vote support tonight';
+          } else if (/meet|talk|discuss|tell/.test(lower)) {
+            actionHint = ` → talk_${firstOtherName}`;
+          }
           cognition.fourStream.addConcern({
             id: crypto.randomUUID(),
-            content: `Agreement with ${othersLabel}: ${agreement}`,
+            content: `Agreement with ${othersLabel}: ${agreement}${actionHint}`,
             category: 'commitment',
             relatedAgentIds: otherIds,
             createdAt: Date.now(),
