@@ -54,6 +54,7 @@ export function connectSocket(): Socket {
     if (snapshot.narratives) gameStore.setNarratives(snapshot.narratives);
     if (snapshot.storylines) gameStore.setStorylines(snapshot.storylines);
     if (snapshot.weeklySummary) gameStore.setWeeklySummary(snapshot.weeklySummary);
+    if (snapshot.villageMemory) gameStore.setVillageMemory(snapshot.villageMemory);
 
     // Check if we need a recap (returning after 2+ game days absence)
     const lastSeenDay = parseInt(localStorage.getItem('ai-village-last-seen-day') || '0');

@@ -113,6 +113,10 @@ export class FourStreamMemory {
       .filter((d): d is RelationshipDossier => d !== undefined);
   }
 
+  getAllDossiers(): RelationshipDossier[] {
+    return Array.from(this.dossiers.values());
+  }
+
   // Dossier update queue — serializes concurrent updates per target
   private dossierUpdateQueue: Map<string, {
     targetName: string;
@@ -303,10 +307,14 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
   }
 
   pruneExpired(currentGameMinutes: number): void {
+    const now = Date.now();
     this.concerns = this.concerns.filter(c => {
-      if (c.permanent) return true;  // Rules never expire
+      if (c.permanent) return true;  // Village rules never expire
       if (c.resolved) return false;
       if (c.expiresAt && currentGameMinutes >= c.expiresAt) return false;
+      // Auto-prune unresolved concerns older than 48 hours
+      const ageHours = (now - (c.createdAt || now)) / 3_600_000;
+      if (ageHours > 48 && c.category !== 'rule') return false;
       return true;
     });
     this.syncConcernsToAgent();

@@ -38,6 +38,11 @@ export interface AgentConfig {
   humorStyle?: string;        // "Dry sarcasm" or "nervous laughter" or "never jokes"
   coreValues?: string[];      // What they'd die for
   startingRelationships?: Record<string, string>; // agentName -> "my rival", "secretly in love"
+
+  // --- Constitutional Rules ---
+  // Personality as inviolable constraints — stronger than soul/backstory because LLMs
+  // follow explicit instructions more reliably than character descriptions.
+  constitutionalRules?: string[];
 }
 
 export interface Agent {
@@ -87,6 +92,30 @@ export interface Agent {
   dossiers?: RelationshipDossier[];
   activeConcerns?: ActiveConcern[];
   beliefs?: { content: string; timestamp: number }[];
+
+  // --- Strategy Tracking ---
+  strategyHistory?: StrategySnapshot[];
+}
+
+// --- Strategy Tracking ---
+// Snapshot after each action so agents can see which strategies work/fail over time.
+export interface StrategySnapshot {
+  actionType: string;
+  day: number;
+  hungerAt: number;
+  healthAt: number;
+  inventoryCount: number;
+  avgTrust: number;
+  reputation: number;
+}
+
+// --- Village Memory ---
+// Collective history shared by all agents — deaths, rules, betrayals, alliances.
+export interface VillageMemoryEntry {
+  content: string;
+  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis';
+  day: number;
+  significance: number; // 1-10
 }
 
 export type AgentState =
@@ -616,4 +645,5 @@ export interface WorldSnapshot {
   narratives?: NarrativeEntry[];
   storylines?: Storyline[];
   weeklySummary?: string | null;
+  villageMemory?: VillageMemoryEntry[];
 }

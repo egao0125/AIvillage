@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useBoard, useElections, useProperties, useInstitutions, useAgents, useWeather, useWorldTime, useBuildings } from '../../core/hooks';
+import { useBoard, useElections, useProperties, useInstitutions, useAgents, useWeather, useWorldTime, useBuildings, useVillageMemory } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 import { nameToColor, hexToString } from '../../utils/color';
 
@@ -37,6 +37,7 @@ export const VillageDashboard: React.FC = () => {
   const weather = useWeather();
   const time = useWorldTime();
 
+  const villageMemory = useVillageMemory();
   const aliveAgents = agents.filter(a => a.alive !== false);
 
   // SNS filtering
@@ -187,6 +188,41 @@ export const VillageDashboard: React.FC = () => {
           <div style={{ fontFamily: FONTS.pixel, fontSize: '11px' }}>{time.hour}:{String(time.minute).padStart(2, '0')}</div>
         </div>
       </div>
+
+      {/* Village Timeline */}
+      {villageMemory.length > 0 && (
+        <>
+          <div style={sectionLabel}>VILLAGE HISTORY</div>
+          {[...villageMemory]
+            .sort((a, b) => b.significance - a.significance)
+            .slice(0, 10)
+            .map((entry, i) => {
+              const typeIcon: Record<string, { icon: string; color: string }> = {
+                death: { icon: '\u{1F480}', color: '#ef4444' },
+                rule: { icon: '\u{2696}', color: '#fbbf24' },
+                betrayal: { icon: '\u{1F5E1}', color: '#f97316' },
+                alliance: { icon: '\u{1F91D}', color: '#4ade80' },
+                crisis: { icon: '\u{26A0}', color: '#f59e0b' },
+              };
+              const s = typeIcon[entry.type] || typeIcon.crisis;
+              return (
+                <div key={i} style={{
+                  padding: '6px 10px',
+                  marginBottom: 3,
+                  background: COLORS.bgCard,
+                  borderRadius: 4,
+                  borderLeft: `3px solid ${s.color}`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '10px' }}>{s.icon}</span>
+                    <span style={{ color: COLORS.text, fontSize: '11px', lineHeight: '1.4', flex: 1 }}>{entry.content}</span>
+                  </div>
+                  <div style={{ color: COLORS.textDim, fontSize: '9px', marginTop: 2 }}>Day {entry.day}</div>
+                </div>
+              );
+            })}
+        </>
+      )}
 
       {/* Rules & Property */}
       {(() => {

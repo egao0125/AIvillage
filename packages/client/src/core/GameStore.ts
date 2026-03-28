@@ -17,6 +17,7 @@ import type {
   NarrativeEntry,
   Storyline,
   Recap,
+  VillageMemoryEntry,
 } from '@ai-village/shared';
 
 export interface ActionLogEntry {
@@ -47,6 +48,7 @@ interface GameState {
   characterPageAgentId: string | null;
   activeRecap: Recap | null;
   weeklySummary: string | null;
+  villageMemory: VillageMemoryEntry[];
   actionLog: Map<string, ActionLogEntry[]>;
 }
 
@@ -90,6 +92,7 @@ class GameStore {
     characterPageAgentId: null,
     activeRecap: null,
     weeklySummary: null,
+    villageMemory: [],
     actionLog: new Map(),
   };
   private subscribers: Set<() => void> = new Set();
@@ -536,6 +539,11 @@ class GameStore {
 
   setWeeklySummary(summary: string | null): void {
     this.state = { ...this.state, weeklySummary: summary };
+    this.notify();
+  }
+
+  setVillageMemory(villageMemory: VillageMemoryEntry[]): void {
+    this.state = { ...this.state, villageMemory };
     this.notify();
   }
 }
