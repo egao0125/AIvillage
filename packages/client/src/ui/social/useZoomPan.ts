@@ -2,11 +2,12 @@ import { useCallback, useRef } from 'react';
 
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3.0;
-const ZOOM_FACTOR = 0.08;
+const ZOOM_FACTOR = 0.06;
 
 /**
  * Zoom/pan hook that mutates a <g> element's transform directly via ref,
  * bypassing React state to avoid re-rendering the entire SVG tree on every frame.
+ * Uses CSS transition for smooth zoom, disables it during drag for instant pan.
  */
 export function useZoomPan() {
   const gRef = useRef<SVGGElement | null>(null);
@@ -17,10 +18,11 @@ export function useZoomPan() {
   const isDefaultRef = useRef(true);
   const onDefaultChange = useRef<((v: boolean) => void) | null>(null);
 
-  const apply = () => {
+  const apply = (smooth: boolean) => {
     const g = gRef.current;
     if (g) {
-      g.setAttribute('transform', `translate(${state.current.tx}, ${state.current.ty}) scale(${state.current.scale})`);
+      g.style.transition = smooth ? 'transform 150ms ease-out' : 'none';
+      g.style.transform = `translate(${state.current.tx}px, ${state.current.ty}px) scale(${state.current.scale})`;
     }
     const wasDefault = isDefaultRef.current;
     const nowDefault = state.current.scale === 1 && state.current.tx === 0 && state.current.ty === 0;
@@ -44,7 +46,7 @@ export function useZoomPan() {
     s.tx = cursorX - (cursorX - s.tx) * (newScale / s.scale);
     s.ty = cursorY - (cursorY - s.ty) * (newScale / s.scale);
     s.scale = newScale;
-    apply();
+    apply(true); // smooth zoom
   }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent<SVGSVGElement>) => {
@@ -62,7 +64,7 @@ export function useZoomPan() {
     totalMovement.current += Math.abs(dx) + Math.abs(dy);
     state.current.tx = dragStart.current.tx + dx;
     state.current.ty = dragStart.current.ty + dy;
-    apply();
+    apply(false); // instant pan
   }, []);
 
   const onPointerUp = useCallback(() => {
@@ -75,7 +77,7 @@ export function useZoomPan() {
 
   const reset = useCallback(() => {
     state.current = { scale: 1, tx: 0, ty: 0 };
-    apply();
+    apply(true); // smooth reset
   }, []);
 
   return {
