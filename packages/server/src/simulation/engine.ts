@@ -1365,11 +1365,12 @@ export class SimulationEngine {
 
   getSnapshot(): WorldSnapshot {
     const snapshot = this.world.getSnapshot();
-    // Enrich agents with worldView from cognition
+    // Enrich agents with worldView and sync memory streams from cognition
     for (const agent of snapshot.agents) {
       const cognition = this.cognitions.get(agent.id);
       if (cognition) {
         agent.worldView = cognition.worldView;
+        cognition.fourStream?.syncAllToAgent();
       }
     }
     snapshot.narratives = this.narrator.getRecentNarratives();

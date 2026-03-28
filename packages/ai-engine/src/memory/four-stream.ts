@@ -362,6 +362,13 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
     }));
   }
 
+  /** Sync all in-memory streams back to the Agent object for snapshot/persistence */
+  syncAllToAgent(): void {
+    this.syncDossiersToAgent();
+    this.syncConcernsToAgent();
+    this.syncBeliefsToAgent();
+  }
+
   // --- RETRIEVAL SCORING (Memoria's recency-aware weighting) ---
 
   /**
