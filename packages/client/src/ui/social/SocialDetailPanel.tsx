@@ -113,10 +113,13 @@ const NodeDetail: React.FC<NodeDetailProps> = ({ node, edges, allNodes }) => {
         </Section>
       )}
 
-      {/* Active Commitments */}
-      {node.ledgerEntries.length > 0 && (
-        <Section title="Ledger Entries">
-          {node.ledgerEntries.slice(-10).reverse().map(entry => (
+      {/* Ledger Entries — active first, expired hidden by default */}
+      {node.ledgerEntries.length > 0 && (() => {
+        const active = node.ledgerEntries.filter(e => e.status !== 'expired');
+        const entries = active.length > 0 ? active : node.ledgerEntries;
+        return (
+        <Section title={`Agreements (${active.length} active)`}>
+          {entries.slice(-10).reverse().map(entry => (
             <div key={entry.id} style={{ marginBottom: 6, padding: '6px 10px', background: COLORS.bgCard, borderRadius: 4 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{
@@ -135,7 +138,8 @@ const NodeDetail: React.FC<NodeDetailProps> = ({ node, edges, allNodes }) => {
             </div>
           ))}
         </Section>
-      )}
+        );
+      })()}
 
       {/* Connections */}
       {nodeEdges.length > 0 && (
@@ -192,7 +196,7 @@ const EdgeDetail: React.FC<EdgeDetailProps> = ({ edge, allNodes }) => {
           {sourceNode?.name} ↔ {targetNode?.name}
         </h2>
         <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 12, marginTop: 4 }}>
-          {edge.interactionCount} interactions · avg rep: {edge.avgReputation.toFixed(0)}
+          {edge.interactionCount} interactions · mutual trust: {edge.avgReputation.toFixed(0)}
         </div>
       </div>
 
@@ -273,16 +277,33 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
   </div>
 );
 
+/** Diverging trust bar: center = 0, left = -100, right = +100 */
 const TrustBar: React.FC<{ trust: number }> = ({ trust }) => {
-  const normalized = (trust + 100) / 200; // 0..1
+  const barWidth = 80;
+  const center = barWidth / 2;
+  const magnitude = Math.abs(trust) / 100; // 0..1
+  const fillWidth = magnitude * center;
+  const isPositive = trust >= 0;
   const color = trust > 30 ? '#4ade80' : trust > 0 ? '#fbbf24' : trust > -30 ? '#fbbf24' : '#f87171';
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <div style={{ width: 60, height: 4, background: COLORS.border, borderRadius: 2, overflow: 'hidden' }}>
-        <div style={{ width: `${normalized * 100}%`, height: '100%', background: color, borderRadius: 2 }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ width: barWidth, height: 6, background: COLORS.border, borderRadius: 3, position: 'relative', overflow: 'hidden' }}>
+        {/* Center line */}
+        <div style={{ position: 'absolute', left: center - 0.5, top: 0, width: 1, height: '100%', background: 'rgba(255,255,255,0.2)' }} />
+        {/* Fill bar — extends left for negative, right for positive */}
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          height: '100%',
+          background: color,
+          borderRadius: 3,
+          left: isPositive ? center : center - fillWidth,
+          width: fillWidth,
+        }} />
       </div>
-      <span style={{ color: COLORS.textDim, fontSize: 10, fontFamily: FONTS.body, minWidth: 24, textAlign: 'right' }}>
-        {trust}
+      <span style={{ color, fontSize: 10, fontFamily: FONTS.body, minWidth: 28, textAlign: 'right', fontWeight: 600 }}>
+        {trust > 0 ? '+' : ''}{trust}
       </span>
     </div>
   );
