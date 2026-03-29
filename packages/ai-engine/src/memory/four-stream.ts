@@ -52,7 +52,9 @@ export class FourStreamMemory {
     }
     // Also persist to backing store
     for (const m of this.identity) {
-      void this.backingStore.add(m);
+      void this.backingStore.add(m).catch((err: unknown) => {
+        console.warn(`[FourStream] Failed to persist identity memory ${m.id} for agent ${this.agent.id}:`, (err as Error).message);
+      });
     }
 
     // Load existing dossiers and concerns from agent state
@@ -332,7 +334,9 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
 
   addBelief(belief: Memory): void {
     this.beliefs.push(belief);
-    void this.backingStore.add(belief);
+    void this.backingStore.add(belief).catch((err: unknown) => {
+      console.warn(`[FourStream] Failed to persist belief ${belief.id} for agent ${this.agent.id}:`, (err as Error).message);
+    });
     if (this.beliefs.length > 20) {
       this.beliefs.sort((a, b) => b.importance - a.importance);
       this.beliefs = this.beliefs.slice(0, 20);
