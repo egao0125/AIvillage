@@ -94,7 +94,7 @@ export class SimulationEngine {
     this.broadcaster.setDayGetter(() => this.world.time.day);
 
     // Create conversation manager
-    this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus);
+    this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus, this.controllers);
     // Wire bystander notification when conversations end
     this.conversationManager.onConversationEnd = (conv) => this.notifyConversationBystanders(conv);
 
