@@ -994,7 +994,13 @@ export class SimulationEngine {
     if (this.tickInterval) return;
 
     this.tickInterval = setInterval(() => {
-      this.tick();
+      try {
+        this.tick();
+      } catch (err) {
+        console.error('[Engine] CRITICAL: tick() threw — simulation paused to prevent corrupt state:', err);
+        this.pause();
+        this.io.emit('engine:error', { message: 'Simulation tick failed', error: String(err) });
+      }
     }, 83); // 12x speed: 1 game minute = 83ms real time (~3x previous)
 
     // Infra 3: Decision queue processing loop — dequeue and execute cold-path LLM calls
