@@ -1,5 +1,64 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { getRedis } from './redis.js';
+
+// ---------------------------------------------------------------------------
+// Auth-specific rate limiter (Redis-backed with in-memory fallback, per-IP)
+// Prevents brute-force password attacks and account enumeration.
+// ---------------------------------------------------------------------------
+
+interface RateLimitEntry { count: number; resetAt: number; }
+const authRateLimitStore: Map<string, RateLimitEntry> = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, e] of authRateLimitStore) {
+    if (now > e.resetAt) authRateLimitStore.delete(ip);
+  }
+}, 5 * 60 * 1_000);
+
+function authRateLimit(maxRequests: number, windowMs: number) {
+  const windowSec = Math.ceil(windowMs / 1_000);
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip =
+      (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
+      req.ip ||
+      req.socket.remoteAddress ||
+      'unknown';
+
+    const redis = getRedis();
+    if (redis) {
+      try {
+        const key = `rl:auth:${ip}:${maxRequests}:${windowSec}`;
+        const count = await redis.incr(key);
+        if (count === 1) await redis.expire(key, windowSec);
+        if (count > maxRequests) {
+          const ttl = await redis.ttl(key);
+          res.status(429).json({ error: 'Too many requests. Please try again later.', retryAfter: Math.max(ttl, 1) });
+          return;
+        }
+        next();
+        return;
+      } catch (err) {
+        console.warn('[Auth RateLimit] Redis error, using in-memory fallback:', (err as Error).message);
+      }
+    }
+
+    const now = Date.now();
+    const entry = authRateLimitStore.get(ip);
+    if (!entry || now > entry.resetAt) {
+      authRateLimitStore.set(ip, { count: 1, resetAt: now + windowMs });
+      next();
+      return;
+    }
+    if (entry.count >= maxRequests) {
+      res.status(429).json({ error: 'Too many requests. Please try again later.', retryAfter: Math.ceil((entry.resetAt - now) / 1_000) });
+      return;
+    }
+    entry.count++;
+    next();
+  };
+}
 
 // Extend Express Request to carry userId
 declare global {
@@ -58,8 +117,8 @@ export function createAuthRouter(url: string, serviceRoleKey: string): Router {
   const supabase = createAuthClient(url, serviceRoleKey);
   const router = Router();
 
-  // POST /api/auth/signup
-  router.post('/api/auth/signup', async (req: Request, res: Response) => {
+  // POST /api/auth/signup — 5 attempts per hour per IP
+  router.post('/api/auth/signup', authRateLimit(5, 60 * 60 * 1_000), async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
     if (!email || typeof email !== 'string' || !email.includes('@')) {
@@ -105,8 +164,8 @@ export function createAuthRouter(url: string, serviceRoleKey: string): Router {
     });
   });
 
-  // POST /api/auth/login
-  router.post('/api/auth/login', async (req: Request, res: Response) => {
+  // POST /api/auth/login — 10 attempts per 15 minutes per IP
+  router.post('/api/auth/login', authRateLimit(10, 15 * 60 * 1_000), async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
     if (!email || !password) {

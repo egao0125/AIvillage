@@ -1134,7 +1134,7 @@ export class SimulationEngine {
   private decayWorldObjects(): void {
     const DECAY_MINUTES = 7 * 24 * 60;
     for (const [id, obj] of this.world.worldObjects) {
-      if (this.world.time.totalMinutes - obj.lastInteractedAt > DECAY_MINUTES) {
+      if (this.world.time.totalMinutes - (obj.lastInteractedAt ?? 0) > DECAY_MINUTES) {
         this.world.removeWorldObject(id);
         console.log(`[Engine] WorldObject decayed: "${obj.name}" (no interaction for 7 days)`);
       }
@@ -1237,7 +1237,7 @@ export class SimulationEngine {
           c1.enterConversation();
           c2.enterConversation();
           console.log(`[Engine] Intentional conversation: ${a1.config.name} <-> ${a2.config.name}${purpose ? ` (purpose: "${purpose.substring(0, 40)}")` : ''}`);
-          return;
+          break; // break inner loop — allow other pairs to start conversations this tick
         }
 
 
@@ -1344,6 +1344,10 @@ export class SimulationEngine {
 
       const season = this.world.weather.season;
       const seasonDef = SEASONS[season];
+      if (!seasonDef) {
+        console.warn(`[Engine] checkSeasonAdvance: unknown season "${season}" — skipping announcement`);
+        return;
+      }
 
       // Board post — agents see this in plan context
       this.world.addBoardPost({
@@ -2269,6 +2273,10 @@ Answer with ONLY one word: "support" or "oppose".`,
     this.cognitions.clear();
     this.lastConversationPair.clear();
     this.tickCount = 0;
+    this.weatherStableUntil = 0;
+    this.lastWeeklySummaryDay = 0;
+    this.cachedWeeklySummary = null;
+    this.weeklySummaryGenerating = false;
 
     const sharedMemoryStore = this.persistence
       ? new SupabaseMemoryStore(this.persistence.client)
