@@ -411,7 +411,7 @@ Relationships: ${mentalModels}`;
 
       const safeModel = typeof model === 'string'
         ? model.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 100)
-        : 'claude-sonnet-4-6';
+        : process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 
       const success = engine.updateAgentApiKey(id, apiKey.trim(), safeModel);
       if (!success) {
