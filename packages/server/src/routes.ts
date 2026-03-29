@@ -173,6 +173,8 @@ export function createRouter(engine: SimulationEngine): Router {
     res.json({ status: 'ok', uptime: process.uptime() });
   });
 
+  // GET /api/config/status — public summary for UI health display.
+  // soul/backstory/fears/desires are private character data — never exposed here.
   router.get('/api/config/status', (_req, res) => {
     const snapshot = engine.getSnapshot();
     res.json({
@@ -185,14 +187,6 @@ export function createRouter(engine: SimulationEngine): Router {
         occupation: a.config.occupation,
         personality: a.config.personality,
         currency: a.currency,
-        soul: a.config.soul,
-        backstory: a.config.backstory,
-        goal: a.config.goal,
-        fears: a.config.fears,
-        desires: a.config.desires,
-        coreValues: a.config.coreValues,
-        contradictions: a.config.contradictions,
-        speechPattern: a.config.speechPattern,
       })),
     });
   });

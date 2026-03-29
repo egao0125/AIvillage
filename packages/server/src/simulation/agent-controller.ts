@@ -93,6 +93,10 @@ export class AgentController {
     sleepHour: number,
     homeArea: string = 'plaza',
     private soloActionExecutor?: SoloActionExecutor,
+    // Shared engine maps — required for cross-agent memory/controller operations.
+    // Passed by reference so new agents added after construction are visible.
+    private agentCognitions?: Map<string, AgentCognition>,
+    private agentControllers?: Map<string, AgentController>,
   ) {
     this.agent = agent;
     this.cognition = cognition;
@@ -128,7 +132,7 @@ export class AgentController {
 
   /** Add a consequence concern to another agent by ID */
   private addConsequenceToAgent(agentId: string, text: string, cat: 'threat' | 'commitment' | 'unresolved', ids: string[]): void {
-    const cog = (this.world as any).cognitions?.get?.(agentId);
+    const cog = this.agentCognitions?.get(agentId);
     cog?.fourStream?.addConcern({
       id: crypto.randomUUID(),
       content: text,
@@ -1027,7 +1031,7 @@ export class AgentController {
     // Clean up dossiers: collapse dead agent's entry for all living agents
     for (const [id, agent] of this.world.agents) {
       if (id === this.agent.id || agent.alive === false) continue;
-      const cog = (this.world as any).cognitions?.get?.(id);
+      const cog = this.agentCognitions?.get(id);
       const dossier = cog?.fourStream?.getDossier(this.agent.id);
       if (dossier) {
         dossier.summary = `Died of ${cause} on day ${this.world.time.day}.`;
@@ -2284,7 +2288,7 @@ export class AgentController {
         importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
       });
 
-      const targetCog = (this.world as any).cognitions?.get?.(target.id);
+      const targetCog = this.agentCognitions?.get(target.id);
       if (targetCog) {
         void targetCog.addMemory({
           id: crypto.randomUUID(), agentId: target.id, type: 'observation',
@@ -2309,7 +2313,7 @@ export class AgentController {
           `I threatened ${target.config.name}: ${threatText}`, this.cognition.llmProvider);
       }
 
-      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      const targetCtrl = this.agentControllers?.get(target.id);
       if (targetCtrl) {
         targetCtrl.lastTrigger = `${this.agent.config.name} just threatened you: "${threatText}". What do you do?`;
         targetCtrl.idleTimer = 7;
@@ -2360,14 +2364,14 @@ export class AgentController {
       // Memory for confronter
       void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I confronted ${target.config.name}: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
       // Memory for target
-      const targetCognition = (this.world as any).cognitions?.get?.(target.id);
+      const targetCognition = this.agentCognitions?.get(target.id);
       if (targetCognition) {
         void targetCognition.addMemory({ id: crypto.randomUUID(), agentId: target.id, type: 'action_outcome', content: `${this.agent.config.name} confronted me: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id] });
       }
       // Witness memories for all nearby
       const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.id !== target.id);
       for (const witness of nearbyAll) {
-        const wCog = (this.world as any).cognitions?.get?.(witness.id);
+        const wCog = this.agentCognitions?.get(witness.id);
         if (wCog) {
           void wCog.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `I saw ${this.agent.config.name} confront ${target.config.name}: "${confrontText}"`, importance: 5, timestamp: Date.now(), relatedAgentIds: [this.agent.id, target.id] });
         }
@@ -2378,10 +2382,10 @@ export class AgentController {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I confronted ${target.config.name}: ${confrontText}`, this.cognition.llmProvider);
       }
       // Force target to react
-      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      const targetCtrl = this.agentControllers?.get(target.id);
       if (targetCtrl) {
         targetCtrl.lastTrigger = `${this.agent.config.name} just confronted you: "${confrontText}". How do you respond?`;
-        targetCtrl.idleTimer = targetCtrl.idleThreshold;
+        targetCtrl.idleTimer = 20; // trigger decision on next tick (threshold is 20)
       }
       // PUBLIC: news post for confrontation
       const confrontPost: BoardPost = {
@@ -2458,7 +2462,7 @@ export class AgentController {
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: stealPost });
       for (const [id] of this.world.agents) {
         if (id === this.agent.id) continue;
-        const cog = (this.world as any).cognitions?.get?.(id);
+        const cog = this.agentCognitions?.get(id);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(),
@@ -2476,7 +2480,7 @@ export class AgentController {
         `I stole from ${target.config.name}. They may retaliate.`,
         'threat', [target.id]
       );
-      const vCog = (this.world as any).cognitions?.get?.(target.id);
+      const vCog = this.agentCognitions?.get(target.id);
       vCog?.fourStream?.addConcern({
         id: crypto.randomUUID(),
         content: `${this.agent.config.name} stole from me. Guard my food. Consider confronting.`,
@@ -2557,7 +2561,7 @@ export class AgentController {
         }
 
         // Force target to react immediately
-        const targetCtrl = (this.world as any).controllers?.get?.(outcome.targetAgentId) as AgentController | undefined;
+        const targetCtrl = this.agentControllers?.get(outcome.targetAgentId) as AgentController | undefined;
         if (targetCtrl && targetAgent) {
           targetCtrl.lastTrigger = this.agent.config.name + ' just attacked you! Health: ' + Math.round(targetAgent.vitals?.health ?? 0) + '/100. What do you do?';
           targetCtrl.idleTimer = 7;
@@ -2581,7 +2585,7 @@ export class AgentController {
           });
         }
         // Force witnesses to react
-        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        const wCtrl = this.agentControllers?.get(w.id) as AgentController | undefined;
         if (wCtrl) {
           wCtrl.lastTrigger = this.agent.config.name + ' just attacked ' + target.config.name + ' right in front of you! What do you do?';
           wCtrl.idleTimer = 7;
@@ -2593,9 +2597,9 @@ export class AgentController {
       this.adjustTrust(target, this.agent, -40);
       // Contextual witness trust — witnesses who already distrusted the target see justice, not violence
       for (const w of witnesses) {
-        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        const wCtrl = this.agentControllers?.get(w.id) as AgentController | undefined;
         if (wCtrl) {
-          const wDossier = ((this.world as any).cognitions?.get?.(w.id))
+          const wDossier = (this.agentCognitions?.get(w.id))
             ?.fourStream?.getDossier?.(target.id);
           const wTrustTarget = wDossier?.trust ?? 0;
           if (wTrustTarget < -20) {
@@ -2740,7 +2744,7 @@ export class AgentController {
           content: `I invited ${target.config.name} to join ${myGroup.name}. They're now a member.`,
           importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id],
         });
-        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        const targetCog = this.agentCognitions?.get(target.id);
         if (targetCog) {
           void targetCog.addMemory({
             id: crypto.randomUUID(), agentId: target.id, type: 'observation',
@@ -2822,7 +2826,7 @@ export class AgentController {
           content: `I founded ${groupName} with ${target.config.name}. ${decision.reason}`,
           importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
         });
-        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        const targetCog = this.agentCognitions?.get(target.id);
         if (targetCog) {
           void targetCog.addMemory({
             id: crypto.randomUUID(), agentId: target.id, type: 'observation',
@@ -2927,7 +2931,7 @@ export class AgentController {
 
       for (const member of group.members) {
         if (member.agentId === this.agent.id) continue;
-        const memberCog = (this.world as any).cognitions?.get?.(member.agentId);
+        const memberCog = this.agentCognitions?.get(member.agentId);
         if (memberCog) {
           void memberCog.addMemory({
             id: crypto.randomUUID(), agentId: member.agentId, type: 'observation',
@@ -3086,7 +3090,7 @@ export class AgentController {
         this.adjustReputation(accused.id, -3, 'Publicly accused');
         this.adjustReputation(this.agent.id, -2, 'Made accusation');
 
-        const accusedCog = (this.world as any).cognitions?.get?.(accused.id);
+        const accusedCog = this.agentCognitions?.get(accused.id);
         if (accusedCog?.fourStream) {
           accusedCog.fourStream.addConcern({
             id: crypto.randomUUID(),
@@ -3219,7 +3223,7 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
 
       for (const member of group.members) {
         if (member.agentId === this.agent.id) continue;
-        const cog = (this.world as any).cognitions?.get?.(member.agentId);
+        const cog = this.agentCognitions?.get(member.agentId);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(),
@@ -3283,7 +3287,7 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
 
       // All nearby agents get notified and forced to react
       for (const a of nearbyAll) {
-        const cog = (this.world as any).cognitions?.get?.(a.id);
+        const cog = this.agentCognitions?.get(a.id);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(), agentId: a.id,
@@ -3293,7 +3297,7 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
             relatedAgentIds: [this.agent.id],
           });
         }
-        const ctrl = (this.world as any).controllers?.get?.(a.id) as AgentController | undefined;
+        const ctrl = this.agentControllers?.get(a.id) as AgentController | undefined;
         if (ctrl) {
           ctrl.lastTrigger = `${this.agent.config.name} called a meeting: "${meetingTopic}". Respond to their topic.`;
           ctrl.idleTimer = 7;
@@ -3383,7 +3387,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       // All agents get a memory about the proposed rule
       for (const [id, agent] of this.world.agents) {
         if (id === this.agent.id || agent.alive === false) continue;
-        const cog = (this.world as any).cognitions?.get?.(id);
+        const cog = this.agentCognitions?.get(id);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(),
@@ -3434,7 +3438,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
 
       // Notify all members with memory + permanent concern
       for (const member of group.members) {
-        const cog = (this.world as any).cognitions?.get?.(member.agentId);
+        const cog = this.agentCognitions?.get(member.agentId);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(), agentId: member.agentId,
@@ -3514,7 +3518,7 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         importance: 8, timestamp: Date.now(),
         relatedAgentIds: [targetMember.agentId],
       });
-      const targetCog = (this.world as any).cognitions?.get?.(targetMember.agentId);
+      const targetCog = this.agentCognitions?.get(targetMember.agentId);
       if (targetCog) {
         void targetCog.addMemory({
           id: crypto.randomUUID(), agentId: targetMember.agentId,
