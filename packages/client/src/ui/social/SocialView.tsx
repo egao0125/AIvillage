@@ -81,24 +81,24 @@ const SocialViewInner: React.FC = () => {
   const mapNodes = useMapLayout(nodes, svgWidth, svgHeight, layout === 'map');
 
   // Use layout output directly — no spring interpolation layer
+  // Merge _dimmed flags from search-filtered nodes back onto positioned nodes
   const rawNodes = layout === 'force' ? forceNodes : mapNodes;
+  const dimmedMap = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const n of nodes) {
+      if ((n as any)._dimmed) m.set(n.id, true);
+    }
+    return m;
+  }, [nodes]);
+
   const displayNodes: SocialNode[] = useMemo(() => {
-    return rawNodes.length > 0 ? rawNodes.map((n, i) => {
-      if (n.x !== 0 || n.y !== 0) return n;
-      // Fallback: arrange in a circle if layout hasn't positioned yet
-      const cx = svgWidth / 2;
-      const cy = svgHeight / 2;
-      const radius = Math.min(svgWidth, svgHeight) * 0.3;
-      const angle = (2 * Math.PI * i) / Math.max(rawNodes.length, 1);
-      return { ...n, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
-    }) : nodes.map((n, i) => {
-      const cx = svgWidth / 2;
-      const cy = svgHeight / 2;
-      const radius = Math.min(svgWidth, svgHeight) * 0.3;
-      const angle = (2 * Math.PI * i) / Math.max(nodes.length, 1);
-      return { ...n, x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) };
+    const positioned = rawNodes.length > 0 ? rawNodes : nodes;
+    return positioned.map((n, i) => {
+      const x = (n.x !== 0 || n.y !== 0) ? n.x : svgWidth / 2 + Math.min(svgWidth, svgHeight) * 0.3 * Math.cos((2 * Math.PI * i) / Math.max(positioned.length, 1));
+      const y = (n.x !== 0 || n.y !== 0) ? n.y : svgHeight / 2 + Math.min(svgWidth, svgHeight) * 0.3 * Math.sin((2 * Math.PI * i) / Math.max(positioned.length, 1));
+      return { ...n, x, y, _dimmed: dimmedMap.get(n.id) ?? false } as any;
     });
-  }, [rawNodes, nodes, svgWidth, svgHeight]);
+  }, [rawNodes, nodes, dimmedMap, svgWidth, svgHeight]);
 
   // Close detail panel
   const closePanel = useCallback(() => {
