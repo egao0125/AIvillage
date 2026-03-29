@@ -329,7 +329,8 @@ If nothing notable was exchanged, return []`;
         f && typeof f.category === 'string' && typeof f.content === 'string' &&
         ['place', 'resource', 'person', 'agreement', 'need', 'skill'].includes(f.category)
       );
-    } catch {
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} extractFacts() failed:`, (err as Error).message);
       return [];
     }
   }
@@ -1062,7 +1063,8 @@ Action: "${action}"`;
     try {
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       return JSON.parse(cleaned);
-    } catch {
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} resolveAction() parse failed:`, (err as Error).message);
       return [{ op: 'observe', observation: action }];
     }
   }
@@ -1172,7 +1174,9 @@ JSON array of strings.`;
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
         return parsed.slice(0, 3);
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} plan() parse failed:`, (err as Error).message);
+    }
 
     // Fallback on parse error — let the agent figure it out via think()
     return [];
