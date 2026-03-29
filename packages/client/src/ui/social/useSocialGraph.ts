@@ -5,11 +5,12 @@ import type { SocialNode, SocialEdge, MatchedEntry, SocialFilter } from './types
 import { DEFAULT_FILTER } from './types';
 
 function edgeColor(avgTrust: number): string {
-  if (avgTrust > 60) return 'hsl(160, 80%, 55%)';    // bright teal — strong trust
-  if (avgTrust > 30) return 'hsl(45, 80%, 65%)';     // warm gold — positive trust
-  if (avgTrust < -30) return 'hsl(0, 70%, 55%)';     // warm red — negative trust
-  if (avgTrust < -60) return 'hsl(350, 80%, 45%)';   // deep red — hostility
-  return 'hsl(220, 20%, 35%)';                        // muted blue-gray — neutral
+  if (avgTrust > 50) return 'hsl(160, 80%, 50%)';    // bright teal — strong trust
+  if (avgTrust > 20) return 'hsl(120, 60%, 45%)';    // green — positive trust
+  if (avgTrust > 0)  return 'hsl(45, 70%, 55%)';     // warm gold — mild positive
+  if (avgTrust > -20) return 'hsl(220, 20%, 35%)';   // muted gray — neutral
+  if (avgTrust > -50) return 'hsl(15, 70%, 50%)';    // orange-red — negative trust
+  return 'hsl(0, 70%, 45%)';                          // deep red — hostility
 }
 
 function matchLedgerEntries(
@@ -115,9 +116,11 @@ export function useSocialGraph(filter: SocialFilter = DEFAULT_FILTER) {
 
         const sharedEntries = matchLedgerEntries(aEntries, bEntries, aId, bId);
 
-        // Use mental model trust (rich data) instead of sparse reputation system
-        const aModel = aAgent.mentalModels?.find(m => m.targetId === bId);
-        const bModel = bAgent.mentalModels?.find(m => m.targetId === aId);
+        // Use mental model trust — targetId may be UUID or agent name depending on data source
+        const bName = bAgent.config.name;
+        const aName = aAgent.config.name;
+        const aModel = aAgent.mentalModels?.find(m => m.targetId === bId || m.targetId === bName);
+        const bModel = bAgent.mentalModels?.find(m => m.targetId === aId || m.targetId === aName);
         const trustAB = aModel?.trust ?? 0;
         const trustBA = bModel?.trust ?? 0;
         const avgTrust = (trustAB + trustBA) / 2;
