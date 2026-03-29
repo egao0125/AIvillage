@@ -16,7 +16,14 @@ const rateLimitStore: Map<string, RateLimitEntry> = new Map();
 
 function rateLimit(maxRequests: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    // Prefer the leftmost (client) IP from X-Forwarded-For when behind Fly.io / a proxy.
+    // We take only the first entry to avoid spoofing via appended IPs.
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip =
+      (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
+      req.ip ||
+      req.socket.remoteAddress ||
+      'unknown';
     const now = Date.now();
     const entry = rateLimitStore.get(ip);
 
