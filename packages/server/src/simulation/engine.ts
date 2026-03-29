@@ -157,7 +157,7 @@ export class SimulationEngine {
           importance: 8,
           timestamp: Date.now(),
           relatedAgentIds: [e.thiefId, e.victimId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (theft witness):', (err as Error).message); });
 
         // Trigger reactive think — witness decides whether to intervene
         const ctrl = this.controllers.get(witness.id);
@@ -193,7 +193,7 @@ export class SimulationEngine {
           importance: 7,
           timestamp: Date.now(),
           relatedAgentIds: [e.attackerId, e.defenderId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (fight witness):', (err as Error).message); });
       }
     });
 
@@ -224,7 +224,7 @@ export class SimulationEngine {
           importance: 8,
           timestamp: Date.now(),
           relatedAgentIds: [e.agentId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule violation leader):', (err as Error).message); });
 
         // Trigger a reactive think — leader decides how to respond
         void cognition.think(
@@ -256,7 +256,7 @@ export class SimulationEngine {
           importance: 9,
           timestamp: Date.now(),
           relatedAgentIds: [e.agentId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (death witness):', (err as Error).message); });
         if (ctrl) {
           ctrl.lastTrigger = `${dead.config.name} just died right in front of you! Cause: ${e.cause}. How do you react?`;
           ctrl.idleTimer = 7;
@@ -1134,7 +1134,7 @@ export class SimulationEngine {
   private decayWorldObjects(): void {
     const DECAY_MINUTES = 7 * 24 * 60;
     for (const [id, obj] of this.world.worldObjects) {
-      if (this.world.time.totalMinutes - obj.lastInteractedAt > DECAY_MINUTES) {
+      if (this.world.time.totalMinutes - (obj.lastInteractedAt ?? 0) > DECAY_MINUTES) {
         this.world.removeWorldObject(id);
         console.log(`[Engine] WorldObject decayed: "${obj.name}" (no interaction for 7 days)`);
       }
@@ -1237,7 +1237,7 @@ export class SimulationEngine {
           c1.enterConversation();
           c2.enterConversation();
           console.log(`[Engine] Intentional conversation: ${a1.config.name} <-> ${a2.config.name}${purpose ? ` (purpose: "${purpose.substring(0, 40)}")` : ''}`);
-          return;
+          break; // break inner loop — allow other pairs to start conversations this tick
         }
 
 
@@ -1299,7 +1299,7 @@ export class SimulationEngine {
           importance: 3,
           timestamp: Date.now(),
           relatedAgentIds: conv.participants,
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (bystander):', (err as Error).message); });
       }
     }
   }
@@ -1344,6 +1344,10 @@ export class SimulationEngine {
 
       const season = this.world.weather.season;
       const seasonDef = SEASONS[season];
+      if (!seasonDef) {
+        console.warn(`[Engine] checkSeasonAdvance: unknown season "${season}" — skipping announcement`);
+        return;
+      }
 
       // Board post — agents see this in plan context
       this.world.addBoardPost({
@@ -1371,7 +1375,7 @@ export class SimulationEngine {
           importance: 8,
           timestamp: Date.now(),
           relatedAgentIds: [],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (season change):', (err as Error).message); });
       }
     }
   }
@@ -1478,7 +1482,7 @@ export class SimulationEngine {
         importance: 9,
         timestamp: Date.now(),
         relatedAgentIds: [agentId],
-      });
+      }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (agent death broadcast):', (err as Error).message); });
 
       // Personalized grief concern based on relationship
       const dossier = cognition.fourStream?.getDossier(agentId);
@@ -1552,7 +1556,8 @@ export class SimulationEngine {
         `Currently: ${agent.currentAction || 'idle'}. Mood: ${agent.mood}. Location: ${agent.state}.`
       );
       return output.thought || null;
-    } catch {
+    } catch (err) {
+      console.warn(`[Engine] generateAgentThought failed for ${agentId}:`, (err as Error).message);
       return null;
     }
   }
@@ -1595,9 +1600,9 @@ export class SimulationEngine {
       const controller = this.controllers.get(agentId);
       if (controller?.apiExhausted) continue;
       // Skip agents who are busy
-      if ((controller as any)?.state === 'conversing' ||
-          (controller as any)?.state === 'deciding' ||
-          (controller as any)?.state === 'reflecting') continue;
+      if (controller?.state === 'conversing' ||
+          controller?.state === 'deciding' ||
+          controller?.state === 'reflecting') continue;
       eligible.push(agentId);
     }
 
@@ -1694,7 +1699,7 @@ export class SimulationEngine {
       if (controller?.apiExhausted) continue;
 
       // Skip agents in conversation — they're busy
-      if ((controller as any)?.state === 'conversing') {
+      if (controller?.state === 'conversing') {
         console.log(`[RuleVote] ${agent.config.name} abstained (in conversation)`);
         continue;
       }
@@ -1772,7 +1777,7 @@ Answer with ONLY one word: "support" or "oppose".`,
           id: crypto.randomUUID(), agentId, type: 'action_outcome',
           content: `I voted ${vote === 'like' ? 'for' : 'against'} ${proposerName}'s rule: "${rulePost.content.slice(0, 60)}"`,
           importance: 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule vote):', (err as Error).message); });
 
         this.broadcaster.agentAction(agentId, `voted ${vote === 'like' ? 'for' : 'against'} ${proposerName}'s rule`);
       } catch (err) {
@@ -1849,7 +1854,7 @@ Answer with ONLY one word: "support" or "oppose".`,
               : `Vote passed (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`,
             importance: id === rulePost.authorId ? 9 : 7,
             timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
-          });
+          }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule passed):', (err as Error).message); });
         }
       }
 
@@ -1928,7 +1933,7 @@ Answer with ONLY one word: "support" or "oppose".`,
             ? `My rule was REJECTED (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`
             : `Vote rejected (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`,
           importance: isProposer ? 9 : 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule rejected):', (err as Error).message); });
       }
 
       // Personalized post-vote concerns for rejected rules
@@ -2269,6 +2274,10 @@ Answer with ONLY one word: "support" or "oppose".`,
     this.cognitions.clear();
     this.lastConversationPair.clear();
     this.tickCount = 0;
+    this.weatherStableUntil = 0;
+    this.lastWeeklySummaryDay = 0;
+    this.cachedWeeklySummary = null;
+    this.weeklySummaryGenerating = false;
 
     const sharedMemoryStore = this.persistence
       ? new SupabaseMemoryStore(this.persistence.client)
