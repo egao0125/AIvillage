@@ -3,10 +3,12 @@ import { useCallback, useRef } from 'react';
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 3.0;
 const ZOOM_FACTOR = 0.06;
+const LERP_SPEED = 0.2;
 
 /**
- * Zoom/pan hook using direct DOM mutation + rAF interpolation for smooth 60fps.
- * No React state, no CSS transitions — pure requestAnimationFrame.
+ * Zoom/pan via native SVG transform attribute (not CSS transform).
+ * setAttribute('transform') is the correct way to transform SVG <g> elements —
+ * CSS transforms on SVG cause layout thrashing across the entire document.
  */
 export function useZoomPan() {
   const gRef = useRef<SVGGElement | null>(null);
@@ -19,24 +21,24 @@ export function useZoomPan() {
   const isDefaultRef = useRef(true);
   const onDefaultChange = useRef<((v: boolean) => void) | null>(null);
 
-  const applyTransform = () => {
+  const apply = () => {
     const g = gRef.current;
     if (g) {
-      g.style.transform = `translate(${current.current.tx}px, ${current.current.ty}px) scale(${current.current.scale})`;
+      const c = current.current;
+      g.setAttribute('transform', `translate(${c.tx}, ${c.ty}) scale(${c.scale})`);
     }
   };
 
   const checkDefault = () => {
     const t = target.current;
     const wasDefault = isDefaultRef.current;
-    const nowDefault = t.scale === 1 && t.tx === 0 && t.ty === 0;
+    const nowDefault = Math.abs(t.scale - 1) < 0.01 && Math.abs(t.tx) < 1 && Math.abs(t.ty) < 1;
     if (wasDefault !== nowDefault) {
       isDefaultRef.current = nowDefault;
       onDefaultChange.current?.(nowDefault);
     }
   };
 
-  // Smooth lerp animation loop
   const startAnimation = () => {
     if (animating.current) return;
     animating.current = true;
@@ -44,25 +46,26 @@ export function useZoomPan() {
     const step = () => {
       const c = current.current;
       const t = target.current;
-      const lerp = 0.18; // smoothing factor — lower = smoother/slower
 
-      c.scale += (t.scale - c.scale) * lerp;
-      c.tx += (t.tx - c.tx) * lerp;
-      c.ty += (t.ty - c.ty) * lerp;
+      c.scale += (t.scale - c.scale) * LERP_SPEED;
+      c.tx += (t.tx - c.tx) * LERP_SPEED;
+      c.ty += (t.ty - c.ty) * LERP_SPEED;
 
-      // Snap when close enough
-      if (Math.abs(t.scale - c.scale) < 0.001 &&
-          Math.abs(t.tx - c.tx) < 0.1 &&
-          Math.abs(t.ty - c.ty) < 0.1) {
+      // Snap when close
+      const done = Math.abs(t.scale - c.scale) < 0.002 &&
+                   Math.abs(t.tx - c.tx) < 0.3 &&
+                   Math.abs(t.ty - c.ty) < 0.3;
+
+      if (done) {
         c.scale = t.scale;
         c.tx = t.tx;
         c.ty = t.ty;
-        applyTransform();
+        apply();
         animating.current = false;
         return;
       }
 
-      applyTransform();
+      apply();
       requestAnimationFrame(step);
     };
 
@@ -102,14 +105,14 @@ export function useZoomPan() {
     const dy = e.clientY - dragStart.current.y;
     totalMovement.current += Math.abs(dx) + Math.abs(dy);
 
-    // Pan is instant — set both current and target
+    // Pan is instant
     const tx = dragStart.current.tx + dx;
     const ty = dragStart.current.ty + dy;
     current.current.tx = tx;
     current.current.ty = ty;
     target.current.tx = tx;
     target.current.ty = ty;
-    applyTransform();
+    apply();
   }, []);
 
   const onPointerUp = useCallback(() => {

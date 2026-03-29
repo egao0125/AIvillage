@@ -57,9 +57,8 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
     lerpStart.current = performance.now();
   }, [x, y]);
 
-  // Continuous rAF: position lerp + breathing
+  // Position lerp (runs only during transition, then stops)
   useEffect(() => {
-    const speed = breathSpeed(state);
     const lerpDuration = 600;
 
     const animate = (now: number) => {
@@ -73,18 +72,32 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
       const cy = from.y + (target.y - from.y) * ease;
       pos.current = { x: cx, y: cy };
 
-      const breath = 1 + Math.sin(now * speed) * 0.02;
-      const s = hoverScale * breath;
-
       if (gRef.current) {
-        gRef.current.setAttribute('transform', `translate(${cx}, ${cy}) scale(${s})`);
+        gRef.current.setAttribute('transform', `translate(${cx}, ${cy}) scale(${hoverScale})`);
       }
 
-      raf.current = requestAnimationFrame(animate);
+      if (t < 1) {
+        raf.current = requestAnimationFrame(animate);
+      }
     };
 
     raf.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf.current);
+  }, [x, y, hoverScale]);
+
+  // Breathing: low-frequency interval (15fps) instead of rAF per node
+  useEffect(() => {
+    const speed = breathSpeed(state);
+    const interval = setInterval(() => {
+      if (!gRef.current) return;
+      const now = performance.now();
+      const breath = 1 + Math.sin(now * speed) * 0.02;
+      const s = hoverScale * breath;
+      const p = pos.current;
+      gRef.current.setAttribute('transform', `translate(${p.x}, ${p.y}) scale(${s})`);
+    }, 66); // ~15fps — plenty smooth for 2% oscillation
+
+    return () => clearInterval(interval);
   }, [state, hoverScale]);
 
   // First letter + last initial for label
