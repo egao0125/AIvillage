@@ -7,6 +7,7 @@ import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
 import { createAuthRouter, optionalAuth } from './auth.js';
 import { setupRedis, closeRedis } from './redis.js';
+import { isEncryptionConfigured } from './crypto.js';
 import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -26,6 +27,16 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 if (isProduction && ALLOWED_ORIGINS.length === 0) {
   console.warn('[Security] ALLOWED_ORIGINS is not set — all cross-origin requests will be rejected.');
+}
+
+// Encryption: warn loudly if API key encryption is not configured in production.
+if (isProduction && !isEncryptionConfigured()) {
+  console.warn(
+    '\n[Security] WARNING: ENCRYPTION_KEY is not set.' +
+    '\n           User API keys will be stored as plaintext in the database.' +
+    '\n           Generate a key: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"' +
+    '\n           Then set ENCRYPTION_KEY=<64-hex-chars> in your environment.\n',
+  );
 }
 
 // Redis: setup pub/sub clients before Socket.IO so the adapter is ready at startup.
