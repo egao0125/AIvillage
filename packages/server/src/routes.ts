@@ -112,6 +112,20 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.max(min, Math.min(max, num));
 }
 
+/**
+ * Middleware: require DEV_ADMIN_TOKEN header for destructive admin operations.
+ * Rejects with 403 when the token is missing, wrong, or DEV_ADMIN_TOKEN is unset.
+ */
+function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  const adminToken = process.env.DEV_ADMIN_TOKEN;
+  const provided = req.headers['x-admin-token'];
+  if (!adminToken || !provided || provided !== adminToken) {
+    res.status(403).json({ error: 'Admin access required' });
+    return;
+  }
+  next();
+}
+
 // =============================================================================
 // Security: BYOK (Bring Your Own Key)
 // Each agent carries its own API key — no global server key required.
@@ -494,10 +508,12 @@ Relationships: ${mentalModels}`;
   );
 
   // POST /api/admin/resurrect-all — bring ALL dead agents back to life
+  // Requires X-Admin-Token header matching DEV_ADMIN_TOKEN (prevents any logged-in
+  // user from nuking global agent state; consistent with Socket.IO dev:* gating).
   router.post(
     '/api/admin/resurrect-all',
     rateLimit(3, 60_000),
-    requireAuth,
+    requireAdmin,
     async (_req, res) => {
       const resurrected = await engine.resurrectAllAgents();
       res.json({ success: true, resurrected });

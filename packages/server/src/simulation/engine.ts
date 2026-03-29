@@ -80,11 +80,13 @@ export class SimulationEngine {
       this.storylineDetector = new StorylineDetector(this.world, narratorLlm);
       this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, narratorLlm);
     } else {
-      // Fallback: create with a dummy provider that will just fail gracefully
-      const dummyLlm = this.getThrottledProvider('dummy-key', globalModel);
-      this.narrator = new VillageNarrator(dummyLlm, this.world);
-      this.storylineDetector = new StorylineDetector(this.world, dummyLlm);
-      this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, dummyLlm);
+      // ANTHROPIC_API_KEY not set — narrator/storyline/recap LLM calls will be skipped.
+      // Using '' triggers auth errors on any LLM attempt, which providers handle gracefully.
+      console.warn('[Engine] ANTHROPIC_API_KEY not set — narrator, storyline, and recap features disabled');
+      const noKeyLlm = this.getThrottledProvider('', globalModel);
+      this.narrator = new VillageNarrator(noKeyLlm, this.world);
+      this.storylineDetector = new StorylineDetector(this.world, noKeyLlm);
+      this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, noKeyLlm);
     }
 
     this.characterTimeline = new CharacterTimeline();
