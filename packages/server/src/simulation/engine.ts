@@ -19,6 +19,7 @@ import { VillageNarrator } from './narrator.js';
 import { CharacterTimeline } from './character-timeline.js';
 import { StorylineDetector } from './storyline-detector.js';
 import { RecapGenerator } from './recap-generator.js';
+import { SOUL_REWRITES, AGENTS_TO_REMOVE } from './soul-rewrite.js';
 
 export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
@@ -475,6 +476,61 @@ export class SimulationEngine {
         }
       }
       console.log(`[Engine] Data cleanup complete for ${agents.length} agents (day=${currentDay})`);
+
+      // --- Soul Rewrite Migration: apply once, then fresh-start ---
+      let soulMigrationApplied = false;
+      for (const agent of this.world.agents.values()) {
+        const overwrite = SOUL_REWRITES[agent.config.name];
+        if (overwrite && agent.config.soul !== overwrite.soul) {
+          // Overwrite all soul fields
+          agent.config.soul = overwrite.soul;
+          agent.config.backstory = overwrite.backstory;
+          agent.config.goal = overwrite.goal;
+          agent.config.occupation = overwrite.occupation;
+          agent.config.personality = overwrite.personality;
+          agent.config.fears = overwrite.fears;
+          agent.config.desires = overwrite.desires;
+          agent.config.contradictions = overwrite.contradictions;
+          agent.config.secretShames = overwrite.secretShames;
+          agent.config.speechPattern = overwrite.speechPattern;
+          agent.config.humorStyle = overwrite.humorStyle;
+          agent.config.coreValues = overwrite.coreValues;
+          agent.config.constitutionalRules = overwrite.constitutionalRules;
+          agent.config.startingRelationships = overwrite.startingRelationships;
+          console.log(`[SoulRewrite] Updated: ${agent.config.name}`);
+          soulMigrationApplied = true;
+        }
+      }
+      // Remove agents marked for deletion
+      for (const name of AGENTS_TO_REMOVE) {
+        for (const agent of this.world.agents.values()) {
+          if (agent.config.name === name) {
+            console.log(`[SoulRewrite] Removing agent: ${name} (${agent.id})`);
+            this.removeAgent(agent.id);
+            soulMigrationApplied = true;
+            break;
+          }
+        }
+      }
+      if (soulMigrationApplied) {
+        console.log('[SoulRewrite] Migration applied — triggering fresh start to reset memories/state');
+        // Force all remaining agents to Haiku 4.5
+        const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
+        for (const agent of this.world.agents.values()) {
+          const keyData = this.agentApiKeys.get(agent.id);
+          if (keyData && keyData.model !== HAIKU_MODEL) {
+            console.log(`[SoulRewrite] ${agent.config.name}: ${keyData.model} → ${HAIKU_MODEL}`);
+            keyData.model = HAIKU_MODEL;
+          }
+        }
+        // Save updated configs first so freshStart preserves them
+        if (this.persistence) {
+          await this.persistence.saveAgents(this.world.agents);
+        }
+        this.refreshNameMaps();
+        await this.freshStart();
+        return; // freshStart rebuilds everything, no need to continue loadFromSupabase
+      }
 
       console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
       this.refreshNameMaps();
