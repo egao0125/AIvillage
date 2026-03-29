@@ -48,7 +48,6 @@ export class AgentController {
   idleTimer: number = 0;
   private planningInProgress: boolean = false;
   private reflectingInProgress: boolean = false;
-  private currentAreaId: string | null = null; // track where the agent is performing
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
@@ -2798,7 +2797,8 @@ export class AgentController {
           if (groupName.length < 3 || groupName.length > 40) {
             groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
           }
-        } catch {
+        } catch (err) {
+          console.warn(`[AgentController] Group name LLM failed for ${this.agent.config.name}:`, (err as Error).message);
           groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
         }
 
@@ -3429,7 +3429,8 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         if (ruleContent.length < 3 || ruleContent.length > 200) {
           ruleContent = decision.reason.slice(0, 150);
         }
-      } catch {
+      } catch (err) {
+        console.warn(`[AgentController] Rule content LLM failed for ${this.agent.config.name}:`, (err as Error).message);
         ruleContent = decision.reason.slice(0, 150);
       }
 
