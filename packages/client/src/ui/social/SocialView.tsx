@@ -327,9 +327,10 @@ const SocialViewInner: React.FC = () => {
               <span onClick={() => setLegendVisible(false)} style={{ cursor: 'pointer', fontSize: 12, lineHeight: 1 }}>&times;</span>
             </div>
             <div><span style={{ color: COLORS.text }}>---</span> thick line = many interactions</div>
-            <div><span style={{ color: 'hsl(45, 70%, 60%)' }}>---</span> warm = positive &nbsp; <span style={{ color: 'hsl(220, 60%, 50%)' }}>---</span> cool = negative</div>
-            <div><span style={{ color: '#ff6b6b' }}>{'\u25cf'}</span> red dot = conflict / disagreement</div>
+            <div><span style={{ color: 'hsl(140, 75%, 50%)' }}>---</span> green = trust &nbsp; <span style={{ color: 'hsl(0, 70%, 45%)' }}>---</span> red = distrust</div>
+            <div><span style={{ color: '#ff4444' }}>{'\u25cf'}</span> red pulse = conflict / disagreement</div>
             <div><span style={{ color: '#a78bfa' }}>{'\u25cb'}</span> ring color = agent mood</div>
+            <div><span style={{ color: '#fbbf24' }}>{'\u25cf'}</span> traveling dot = active conversation</div>
             <div style={{ color: COLORS.textDim, marginTop: 2 }}>Scroll to zoom &middot; Drag to pan</div>
           </div>
         )}
