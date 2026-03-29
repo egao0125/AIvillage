@@ -1,8 +1,9 @@
-import React, { useMemo, memo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import type { SocialNode, SocialEdge } from './types';
 import { SocialNodeComponent } from './SocialNode';
 import { SocialStringComponent } from './SocialString';
 import { useZoomPan } from './useZoomPan';
+import { useGraphEffects } from './useGraphEffects';
 
 interface SocialCanvasProps {
   nodes: SocialNode[];
@@ -30,10 +31,14 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
 }) => {
   const { gRef, onWheel, onPointerDown, onPointerMove, onPointerUp, wasClick, reset, onDefaultChange } = useZoomPan();
 
+  // Keep a ref to current nodes for effect position lookups
+  const nodesRef = useRef<SocialNode[]>(nodes);
+  nodesRef.current = nodes;
+
+  const { effectsRef, activeConvoEdges } = useGraphEffects(nodesRef);
+
   // Expose reset to parent
   if (zoomPanRef) zoomPanRef.current = { reset };
-
-  // Notify parent when zoom state changes (for showing reset button)
   onDefaultChange.current = onZoomChange ?? null;
 
   // Node lookup for names
@@ -95,6 +100,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
                 hovered={hoveredEdgeId === edge.id}
                 sourceName={sNode.name}
                 targetName={tNode.name}
+                activeConversation={activeConvoEdges.current.has(edge.id)}
                 onClick={onEdgeClick}
                 onMouseEnter={(id) => onEdgeHover(id)}
                 onMouseLeave={() => onEdgeHover(null)}
@@ -102,6 +108,9 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
             );
           })}
         </g>
+
+        {/* Effects layer (particles + ripples) — between edges and nodes */}
+        <g ref={effectsRef} />
 
         {/* Nodes layer */}
         <g>

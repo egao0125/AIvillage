@@ -194,6 +194,7 @@ export function connectSocket(): Socket {
 
   socket.on('reputation:change', (data: { fromId: string; toId: string; score: number }) => {
     gameStore.updateReputation(data.fromId, data.toId, data.score);
+    eventBus.emit('reputation:change', data);
   });
 
   // --- Phase 2-7 event listeners ---
@@ -292,6 +293,7 @@ export function connectSocket(): Socket {
   // --- Ledger real-time updates ---
   socket.on('ledger:update', (data: { agentId: string; entry: SocialLedgerEntry }) => {
     gameStore.updateAgentLedger(data.agentId, data.entry);
+    eventBus.emit('ledger:update', data);
   });
 
   // --- Infra 6: Viewport catch-up ---
