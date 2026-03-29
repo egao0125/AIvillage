@@ -153,7 +153,7 @@ export class PostConversationProcessor {
           }
           const items = extractItemsPromised(agreement);
           const cleanAgreement = agreement.replace(/^\[(CASUAL|PROMISE|OATH)\]\s*/i, '');
-          const expiresDay = day + (weight === 1 ? 0 : weight === 3 ? 1 : 2);
+          const expiresDay = day + (weight === 1 ? 1 : weight === 3 ? 2 : 3);
 
           // Check weight budget before adding
           const currentWeight = (participant.commitments ?? [])

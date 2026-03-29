@@ -156,6 +156,40 @@ export class AgentController {
     entry.lastUpdated = Date.now();
   }
 
+  /** Try to fulfill active commitments when an action targets another agent */
+  tryFulfillCommitments(targetId: string, actionType: 'give' | 'talk' | 'trade'): void {
+    const commitments = this.agent.commitments ?? [];
+    for (const c of commitments) {
+      if (c.fulfilled || c.broken) continue;
+      if (c.targetId !== targetId) continue;
+
+      const text = c.content.toLowerCase();
+      let matches = false;
+
+      if (actionType === 'give' || actionType === 'trade') {
+        // Item-based commitments or content mentioning giving/bringing/trading
+        matches = !!c.itemsPromised?.length ||
+          /give|bring|deliver|trade|share|provide|offer|hand over/.test(text);
+      } else if (actionType === 'talk') {
+        matches = /meet|talk|discuss|tell|warn|teach|show|confess|report|present|speak|chat|advise/.test(text);
+      }
+
+      if (!matches) continue;
+
+      c.fulfilled = true;
+      const repBonus = c.weight === 1 ? 1 : c.weight === 3 ? 3 : 5;
+      this.adjustReputation(this.agent.id, repBonus, `Fulfilled ${c.weight === 5 ? 'oath' : 'promise'} to ${c.targetName}`);
+
+      if (!this.agent.archivedCommitments) this.agent.archivedCommitments = [];
+      c.archivedAt = this.world.time.totalMinutes;
+      this.agent.archivedCommitments.push(c);
+      if (this.agent.archivedCommitments.length > 20) {
+        this.agent.archivedCommitments = this.agent.archivedCommitments.slice(-20);
+      }
+    }
+    this.agent.commitments = commitments.filter(c => !c.fulfilled && !c.broken);
+  }
+
   private handleApiFailure(err: unknown): void {
     this.consecutiveApiFailures++;
 
@@ -644,10 +678,16 @@ export class AgentController {
   }
 
   /** Called by ConversationManager after post-processing completes */
-  onPostConversationComplete(summary: string): void {
+  onPostConversationComplete(summary: string, partnerIds?: string[]): void {
     this.postConversationPending = false;
     this.postConvWaitTimer = 0;
     this.lastTrigger = `You just finished a conversation. ${summary}`;
+    // Mark talk-based commitments as fulfilled for conversation partners
+    if (partnerIds) {
+      for (const partnerId of partnerIds) {
+        this.tryFulfillCommitments(partnerId, 'talk');
+      }
+    }
     if (!this.decidingInProgress && !this.apiExhausted) {
       void this.decideAndAct();
     }
@@ -704,6 +744,28 @@ export class AgentController {
             this.broadcaster.ledgerUpdate(this.agent.id, entry);
           }
         }
+
+        // Also apply to weighted commitments (not just socialLedger)
+        const commitments = this.agent.commitments ?? [];
+        for (const update of result.commitmentUpdates) {
+          if (update.status !== 'fulfilled') continue;
+          const match = commitments.find(c =>
+            !c.fulfilled && !c.broken &&
+            keywordOverlap(c.content, update.description) >= 3
+          );
+          if (match) {
+            match.fulfilled = true;
+            const repBonus = match.weight === 1 ? 1 : match.weight === 3 ? 3 : 5;
+            this.adjustReputation(this.agent.id, repBonus, `Fulfilled ${match.weight === 5 ? 'oath' : 'promise'} to ${match.targetName}`);
+            if (!this.agent.archivedCommitments) this.agent.archivedCommitments = [];
+            match.archivedAt = this.world.time.totalMinutes;
+            this.agent.archivedCommitments.push(match);
+            if (this.agent.archivedCommitments.length > 20) {
+              this.agent.archivedCommitments = this.agent.archivedCommitments.slice(-20);
+            }
+          }
+        }
+        this.agent.commitments = commitments.filter(c => !c.fulfilled && !c.broken);
       }
 
       // WorldView is updated internally by cognition.reflect() → updateWorldView()
@@ -2123,6 +2185,7 @@ export class AgentController {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider);
       }
       this.adjustReputation(this.agent.id, +3, 'Generosity');
+      this.tryFulfillCommitments(target.id, 'give');
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name} — "${shortReason}"`);
@@ -2210,6 +2273,7 @@ export class AgentController {
       if (outcome.success) {
         this.adjustReputation(this.agent.id, +2, 'Fair trade');
         this.adjustReputation(target.id, +2, 'Fair trade');
+        this.tryFulfillCommitments(target.id, 'trade');
       }
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `trading with ${target.config.name}`);

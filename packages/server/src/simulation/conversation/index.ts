@@ -452,12 +452,12 @@ export class ConversationManager {
             for (const participantId of active.conversation.participants) {
               const ctrl = (this.world as any).controllers?.get?.(participantId);
               if (ctrl?.onPostConversationComplete) {
-                const otherNames = active.conversation.participants
-                  .filter((id: string) => id !== participantId)
+                const otherIds = active.conversation.participants.filter((id: string) => id !== participantId);
+                const otherNames = otherIds
                   .map((id: string) => this.world.getAgent(id)?.config.name)
                   .filter(Boolean)
                   .join(', ');
-                ctrl.onPostConversationComplete(`Talked with ${otherNames}.`);
+                ctrl.onPostConversationComplete(`Talked with ${otherNames}.`, otherIds);
               }
             }
           })
