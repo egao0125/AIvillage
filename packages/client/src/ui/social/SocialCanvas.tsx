@@ -74,7 +74,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
       onClick={(e) => {
         if (e.target === e.currentTarget && wasClick()) onBackgroundClick();
       }}
-      style={{ display: 'block', cursor: 'grab', background: '#0a0a1a' }}
+      style={{ display: 'block', cursor: 'grab', background: '#ffffff' }}
     >
       <defs>
         <radialGradient id="node-gradient" cx="35%" cy="35%">
@@ -85,7 +85,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
 
       {/* Subtle background dot grid */}
       <pattern id="dot-grid" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse">
-        <circle cx="15" cy="15" r="0.5" fill="rgba(100,255,218,0.08)" />
+        <circle cx="15" cy="15" r="0.5" fill="rgba(0,0,0,0.08)" />
       </pattern>
       <rect width={width} height={height} fill="url(#dot-grid)" style={{ pointerEvents: 'none' }} />
 
