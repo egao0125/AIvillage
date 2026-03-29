@@ -87,7 +87,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
       <pattern id="dot-grid" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse">
         <circle cx="15" cy="15" r="0.5" fill="rgba(100,255,218,0.08)" />
       </pattern>
-      <rect width={width} height={height} fill="url(#dot-grid)" />
+      <rect width={width} height={height} fill="url(#dot-grid)" style={{ pointerEvents: 'none' }} />
 
       <g ref={gRef}>
         {/* Edges layer */}
