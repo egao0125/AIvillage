@@ -150,10 +150,9 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
         textAnchor="middle"
         dominantBaseline="central"
         fill={COLORS.textAccent}
-        fontFamily="'Inter', -apple-system, sans-serif"
-        fontSize={radius > 22 ? '12px' : '10px'}
-        fontWeight={600}
-        letterSpacing="1"
+        fontFamily="'Press Start 2P', monospace"
+        fontSize={radius > 22 ? '8px' : '7px'}
+        letterSpacing="0.5"
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       >
         {initials.toUpperCase()}
@@ -163,9 +162,8 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
         y={radius + 16}
         textAnchor="middle"
         fill={COLORS.text}
-        fontFamily="'Inter', -apple-system, sans-serif"
-        fontSize="10px"
-        fontWeight={400}
+        fontFamily="'Press Start 2P', monospace"
+        fontSize="7px"
         opacity={0.8}
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       >
