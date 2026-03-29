@@ -74,8 +74,44 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
       onClick={(e) => {
         if (e.target === e.currentTarget && wasClick()) onBackgroundClick();
       }}
-      style={{ display: 'block', cursor: 'grab' }}
+      style={{ display: 'block', cursor: 'grab', background: '#0a0a1a' }}
     >
+      {/* SVG filter definitions for glow effects */}
+      <defs>
+        <filter id="glow-soft" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <filter id="glow-edge" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <filter id="glow-strong" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <radialGradient id="node-gradient" cx="35%" cy="35%">
+          <stop offset="0%" stopColor="#2a3a5e" />
+          <stop offset="100%" stopColor="#0f1629" />
+        </radialGradient>
+      </defs>
+
+      {/* Subtle background dot grid */}
+      <pattern id="dot-grid" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse">
+        <circle cx="15" cy="15" r="0.5" fill="rgba(100,255,218,0.08)" />
+      </pattern>
+      <rect width={width} height={height} fill="url(#dot-grid)" />
+
       <g ref={gRef}>
         {/* Edges layer */}
         <g>
@@ -128,6 +164,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
                 state={node.state}
                 x={node.x}
                 y={node.y}
+                connectionCount={edges.filter(e => e.source === node.id || e.target === node.id).length}
                 dimmed={dimmed || (node as any)._dimmed === true}
                 selected={selectedNodeId === node.id}
                 hovered={hoveredNodeId === node.id}
