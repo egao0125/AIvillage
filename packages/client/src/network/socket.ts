@@ -301,6 +301,7 @@ export function connectSocket(): Socket {
     for (const agent of data.agents) {
       gameStore.moveAgent(agent.id, agent.position);
       gameStore.updateAgentAction(agent.id, agent.currentAction);
+      if (agent.mood) gameStore.updateAgentMood(agent.id, agent.mood);
     }
     eventBus.emit('viewport:catchup', data);
   });
