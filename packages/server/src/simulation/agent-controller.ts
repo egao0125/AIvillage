@@ -1145,7 +1145,7 @@ export class AgentController {
     for (const c of commitments) {
       const weightLabel = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'PROMISE' : 'casual';
       const daysLeft = c.expiresDay - this.world.time.day;
-      const urgency = daysLeft <= 0 ? ' OVERDUE' : daysLeft === 0 ? ' due today' : '';
+      const urgency = daysLeft < 0 ? ' OVERDUE' : daysLeft === 0 ? ' due today' : '';
       lines.push(`- [${weightLabel}${urgency}] ${c.content} (to ${c.targetName})`);
     }
 
