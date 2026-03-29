@@ -356,11 +356,16 @@ export class VillageScene extends Phaser.Scene {
     cam.setZoom(Math.max(fitZoom, 0.5));
     cam.centerOn(worldW / 2, worldH / 2);
 
-    // Drag to pan
+    // Drag to pan — also stops following selected agent
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (pointer.isDown && pointer.button === 0 && !pointer.event.shiftKey) {
-        cam.scrollX -= (pointer.x - pointer.prevPosition.x) / cam.zoom;
-        cam.scrollY -= (pointer.y - pointer.prevPosition.y) / cam.zoom;
+        const dx = pointer.x - pointer.prevPosition.x;
+        const dy = pointer.y - pointer.prevPosition.y;
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          cam.stopFollow();
+        }
+        cam.scrollX -= dx / cam.zoom;
+        cam.scrollY -= dy / cam.zoom;
       }
     });
 
@@ -489,6 +494,7 @@ export class VillageScene extends Phaser.Scene {
     if (this.selectedAgentId === agentId) {
       this.selectedAgentId = null;
       gameStore.selectAgent(null);
+      this.cameras.main.stopFollow();
       return;
     }
 
@@ -498,7 +504,12 @@ export class VillageScene extends Phaser.Scene {
     const sprite = this.agentSprites.get(agentId);
     if (sprite) {
       sprite.setSelected(true);
-      this.cameras.main.pan(sprite.x, sprite.y, 300, 'Sine.easeInOut');
+      // Pan to agent then follow them as they move
+      this.cameras.main.pan(sprite.x, sprite.y, 300, 'Sine.easeInOut', false, (_cam: any, progress: number) => {
+        if (progress === 1) {
+          this.cameras.main.startFollow(sprite, true, 0.08, 0.08);
+        }
+      });
     }
   }
 
