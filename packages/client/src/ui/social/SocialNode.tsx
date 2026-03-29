@@ -102,23 +102,28 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
       onMouseLeave={onMouseLeave}
       onClick={() => onClick(id)}
     >
-      {/* Outer glow halo */}
+      {/* Outer glow halo — faked with wide soft stroke, no filter */}
       <circle
-        r={radius + 8}
+        r={radius + 6}
         fill="none"
         stroke={moodRingColor}
-        strokeWidth={1}
-        opacity={0.2}
-        filter="url(#glow-soft)"
+        strokeWidth={6}
+        opacity={0.08}
       />
-      {/* Mood ring with glow */}
       <circle
-        r={radius + 3}
+        r={radius + 4}
         fill="none"
         stroke={moodRingColor}
-        strokeWidth={2.5}
-        opacity={0.8}
-        filter="url(#glow-edge)"
+        strokeWidth={4}
+        opacity={0.15}
+      />
+      {/* Mood ring */}
+      <circle
+        r={radius + 2}
+        fill="none"
+        stroke={moodRingColor}
+        strokeWidth={2}
+        opacity={0.85}
       />
       {/* Selection ring */}
       {selected && (
@@ -128,7 +133,6 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
           stroke={COLORS.accent}
           strokeWidth={2}
           strokeDasharray="4 2"
-          filter="url(#glow-soft)"
         />
       )}
       {/* Node body — gradient fill for depth */}

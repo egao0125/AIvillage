@@ -76,30 +76,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
       }}
       style={{ display: 'block', cursor: 'grab', background: '#0a0a1a' }}
     >
-      {/* SVG filter definitions for glow effects */}
       <defs>
-        <filter id="glow-soft" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <filter id="glow-edge" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <filter id="glow-strong" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
         <radialGradient id="node-gradient" cx="35%" cy="35%">
           <stop offset="0%" stopColor="#2a3a5e" />
           <stop offset="100%" stopColor="#0f1629" />

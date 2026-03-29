@@ -99,15 +99,14 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
         onMouseLeave={onMouseLeave}
         onClick={() => onClick(edge.id)}
       />
-      {/* Base glow layer — soft halo behind the edge */}
+      {/* Glow layer — wide soft stroke, no filter */}
       <path
         d={pathD}
         fill="none"
-        stroke={activeConversation ? '#ffffff' : edge.color}
-        strokeWidth={edge.thickness + 4}
+        stroke={activeConversation ? '#64ffda' : edge.color}
+        strokeWidth={edge.thickness + 6}
         strokeLinecap="round"
-        opacity={activeConversation ? 0.2 : 0.1}
-        filter="url(#glow-edge)"
+        opacity={activeConversation ? 0.15 : 0.06}
         style={{ pointerEvents: 'none' }}
       />
       {/* Active conversation extra glow */}
@@ -116,10 +115,9 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
           d={pathD}
           fill="none"
           stroke="#64ffda"
-          strokeWidth={edge.thickness + strokeBoost + 6}
+          strokeWidth={edge.thickness + strokeBoost + 10}
           strokeLinecap="round"
-          opacity={0.12}
-          filter="url(#glow-strong)"
+          opacity={0.06}
           style={{ pointerEvents: 'none' }}
         />
       )}
