@@ -2123,6 +2123,36 @@ export class AgentController {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider);
       }
       this.adjustReputation(this.agent.id, +3, 'Generosity');
+
+      // --- Commitment fulfillment: check if this give fulfills an active promise ---
+      const givenName = item.name.toLowerCase().replace(/\s+/g, '_');
+      for (const commit of (this.agent.commitments ?? [])) {
+        if (commit.fulfilled || commit.broken) continue;
+        if (commit.targetId !== target.id) continue;
+        let matched = false;
+        if (commit.itemsPromised?.length) {
+          matched = commit.itemsPromised.some(p => {
+            const pn = p.toLowerCase().replace(/\s+/g, '_');
+            return givenName.includes(pn) || pn.includes(givenName);
+          });
+        } else if (/give|bring|deliver|share|provide/.test(commit.content.toLowerCase())) {
+          matched = true;
+        }
+        if (matched) {
+          commit.fulfilled = true;
+          commit.archivedAt = Date.now();
+          if (!this.agent.archivedCommitments) this.agent.archivedCommitments = [];
+          if (this.agent.archivedCommitments.length >= 20) this.agent.archivedCommitments.shift();
+          this.agent.archivedCommitments.push(commit);
+          this.adjustReputation(this.agent.id, +2, `Kept promise to ${target.config.name}`);
+          console.log(`[Commitment] ${this.agent.config.name} FULFILLED promise to ${target.config.name}: "${commit.content.slice(0, 60)}"`);
+          break; // Only fulfill one commitment per give
+        }
+      }
+      if (this.agent.commitments) {
+        this.agent.commitments = this.agent.commitments.filter(c => !c.fulfilled && !c.broken);
+      }
+
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `giving ${item.name} to ${target.config.name}`);
       this.broadcaster.agentAction(this.agent.id, `gave ${item.name} to ${target.config.name} — "${shortReason}"`);
@@ -2135,6 +2165,25 @@ export class AgentController {
       for (const agent of this.world.agents.values()) {
         if (agent.id !== this.agent.id &&
             agent.config.name.split(' ')[0].toLowerCase() === firstName) {
+          // Fulfill talk/meet commitments targeting this person
+          for (const commit of (this.agent.commitments ?? [])) {
+            if (commit.fulfilled || commit.broken) continue;
+            if (commit.targetId !== agent.id) continue;
+            if (/meet|talk|discuss|tell|warn|teach|show|confess|report|present|testify/.test(commit.content.toLowerCase())) {
+              commit.fulfilled = true;
+              commit.archivedAt = Date.now();
+              if (!this.agent.archivedCommitments) this.agent.archivedCommitments = [];
+              if (this.agent.archivedCommitments.length >= 20) this.agent.archivedCommitments.shift();
+              this.agent.archivedCommitments.push(commit);
+              this.adjustReputation(this.agent.id, +2, `Kept promise to ${agent.config.name}`);
+              console.log(`[Commitment] ${this.agent.config.name} FULFILLED talk commitment to ${agent.config.name}: "${commit.content.slice(0, 60)}"`);
+              break;
+            }
+          }
+          if (this.agent.commitments) {
+            this.agent.commitments = this.agent.commitments.filter(c => !c.fulfilled && !c.broken);
+          }
+
           this.pendingConversationTarget = agent.id;
           this.pendingConversationPurpose = decision.reason;
           const dist = Math.abs(this.agent.position.x - agent.position.x) + Math.abs(this.agent.position.y - agent.position.y);
@@ -2672,6 +2721,14 @@ export class AgentController {
         this.state = 'idle'; this.idleTimer = 0; return;
       }
 
+      // Check if target already has a group (one institution per agent)
+      const targetGroupId = target.institutionIds?.[0];
+      const targetGroup = targetGroupId ? this.world.getInstitution(targetGroupId) : undefined;
+      if (targetGroup && !targetGroup.dissolved && myGroup && targetGroup.id !== myGroup.id) {
+        this.lastTrigger = `${target.config.name} is already in ${targetGroup.name}. They must leave first.`;
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
       if (myGroup && !myGroup.dissolved) {
         // I'm in a group → INVITE target to join
         this.world.addInstitutionMember(myGroup.id, {
@@ -2756,10 +2813,9 @@ export class AgentController {
           createdAt: Date.now(),
         };
         this.world.addInstitution(group);
-        if (!this.agent.institutionIds) this.agent.institutionIds = [];
-        this.agent.institutionIds.push(group.id);
-        if (!target.institutionIds) target.institutionIds = [];
-        target.institutionIds.push(group.id);
+        // One institution per agent — replace, don't push
+        this.agent.institutionIds = [group.id];
+        target.institutionIds = [group.id];
 
         void this.cognition.addMemory({
           id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',

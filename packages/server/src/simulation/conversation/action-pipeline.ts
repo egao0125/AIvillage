@@ -906,6 +906,42 @@ export class ActionPipeline {
         }
         this.broadcaster.agentInventory(target.id, target.inventory);
         // Memory is handled by the unified target handler above
+
+        // --- Commitment fulfillment: check if this give fulfills an active promise ---
+        const actor = this.world.getAgent(actorId);
+        if (actor?.commitments) {
+          const givenResources = outcome.itemsConsumed!.map(c => c.resource.toLowerCase().replace(/\s+/g, '_'));
+          for (const commit of actor.commitments) {
+            if (commit.fulfilled || commit.broken) continue;
+            if (commit.targetId !== target.id) continue;
+            // Check if promised items overlap with given items
+            if (commit.itemsPromised && commit.itemsPromised.length > 0) {
+              const promised = commit.itemsPromised.map(i => i.toLowerCase().replace(/\s+/g, '_'));
+              const matched = promised.some(p => givenResources.some(g => g.includes(p) || p.includes(g)));
+              if (matched) {
+                commit.fulfilled = true;
+                commit.archivedAt = Date.now();
+                if (!actor.archivedCommitments) actor.archivedCommitments = [];
+                if (actor.archivedCommitments.length >= 20) actor.archivedCommitments.shift();
+                actor.archivedCommitments.push(commit);
+                console.log(`[Commitment] ${actorName} FULFILLED promise to ${target.config.name}: "${commit.content.slice(0, 60)}"`);
+              }
+            } else {
+              // No specific items promised — check if content mentions giving/bringing
+              const text = commit.content.toLowerCase();
+              if (/give|bring|deliver|share|provide/.test(text)) {
+                commit.fulfilled = true;
+                commit.archivedAt = Date.now();
+                if (!actor.archivedCommitments) actor.archivedCommitments = [];
+                if (actor.archivedCommitments.length >= 20) actor.archivedCommitments.shift();
+                actor.archivedCommitments.push(commit);
+                console.log(`[Commitment] ${actorName} FULFILLED promise to ${target.config.name}: "${commit.content.slice(0, 60)}"`);
+              }
+            }
+          }
+          // Clean fulfilled from active list
+          actor.commitments = actor.commitments.filter(c => !c.fulfilled && !c.broken);
+        }
       }
     }
 
