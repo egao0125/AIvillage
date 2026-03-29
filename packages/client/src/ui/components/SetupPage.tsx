@@ -740,7 +740,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
                           max={100}
                           step={1}
                           value={personality[key]}
-                          onChange={(e) => setPersonality(prev => ({ ...prev, [key]: parseInt(e.target.value) }))}
+                          onChange={(e) => setPersonality(prev => ({ ...prev, [key]: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)) }))}
                           style={{ flex: 1, accentColor: ACCENT }}
                         />
                         <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM, width: 70 }}>{high}</span>
