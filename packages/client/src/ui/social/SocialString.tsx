@@ -9,8 +9,8 @@ const DisagreementGlow: React.FC<{ pathD: string; thickness: number }> = ({ path
     const interval = setInterval(() => {
       if (!glowRef.current) return;
       const now = performance.now();
-      const pulse = 0.08 + Math.sin(now * 0.003) * 0.06; // oscillates 0.02–0.14
-      const width = thickness + 10 + Math.sin(now * 0.003) * 4; // oscillates ±4
+      const pulse = 0.2 + Math.sin(now * 0.003) * 0.12; // oscillates 0.08–0.32
+      const width = thickness + 14 + Math.sin(now * 0.003) * 5; // oscillates ±5
       glowRef.current.setAttribute('opacity', `${pulse}`);
       glowRef.current.setAttribute('stroke-width', `${width}`);
     }, 66); // 15fps
@@ -23,9 +23,9 @@ const DisagreementGlow: React.FC<{ pathD: string; thickness: number }> = ({ path
       d={pathD}
       fill="none"
       stroke="#ff4444"
-      strokeWidth={thickness + 10}
+      strokeWidth={thickness + 14}
       strokeLinecap="round"
-      opacity={0.1}
+      opacity={0.2}
       style={{ pointerEvents: 'none' }}
     />
   );
@@ -57,8 +57,8 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
   edge, x1, y1, x2, y2, dimmed, hovered, sourceName, targetName, activeConversation,
   onClick, onMouseEnter, onMouseLeave,
 }) => {
-  const baseOpacity = dimmed ? 0.08 : hovered ? 1 : 0.6;
-  const convoBoost = activeConversation ? 0.3 : 0;
+  const baseOpacity = dimmed ? 0.08 : hovered ? 1 : 0.85;
+  const convoBoost = activeConversation ? 0.15 : 0;
   const opacity = Math.min(1, baseOpacity + convoBoost);
   const strokeBoost = activeConversation ? 1.5 : 0;
 
@@ -136,7 +136,7 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
         stroke={activeConversation ? '#64ffda' : edge.color}
         strokeWidth={edge.thickness + 6}
         strokeLinecap="round"
-        opacity={activeConversation ? 0.15 : 0.06}
+        opacity={activeConversation ? 0.25 : 0.12}
         style={{ pointerEvents: 'none' }}
       />
       {/* Active conversation extra glow */}
