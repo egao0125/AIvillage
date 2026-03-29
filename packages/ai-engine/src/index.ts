@@ -49,7 +49,7 @@ Hunger and health are scored 0–100. Hunger rises ~1/hour while awake (+0.3/hou
 - Spring: farms start producing, herbs plentiful, mild weather.
 - Summer: peak farm output (+50% crops), hot, violent storms possible.
 - Autumn: mushrooms peak, last chance to stockpile, cooling down.
-- Winter: farms produce NOTHING (0% crops, 0% herbs), lake mostly frozen (fish 10%), wood halved. Cold damages health without shelter. Without stored food, you starve.
+- Winter: Without stored food, you starve.
 
 === FOOD & NUTRITION (hunger reduction when eaten) ===
 stew: -30 (best meal). fish: -25. bread: -20. wheat: -15. vegetables: -15. mushrooms: -12. dried fish: -10 (lasts long). pickled veg: -7 (lasts long). herbs: -5. herb tea: -3 (but +15 energy).
