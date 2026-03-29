@@ -13,7 +13,11 @@ export const RecapOverlay: React.FC = () => {
   const dismiss = () => {
     gameStore.setActiveRecap(null);
     const time = gameStore.getState().time;
-    localStorage.setItem('ai-village-last-seen-day', String(time.day));
+    try {
+      localStorage.setItem('ai-village-last-seen-day', String(time.day));
+    } catch {
+      // localStorage may be unavailable in private browsing mode
+    }
   };
 
   // Highlight agent names in text
