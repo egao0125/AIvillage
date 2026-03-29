@@ -234,6 +234,32 @@ export class SimulationEngine {
       console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}"`);
     });
 
+    // Agent death — nearby witnesses form a memory and react immediately
+    this.bus.on('agent_died', (e) => {
+      const dead = this.world.getAgent(e.agentId);
+      if (!dead) return;
+      const nearby = this.world.getNearbyAgents(dead.position, 6);
+      for (const witness of nearby) {
+        if (witness.id === e.agentId || witness.alive === false) continue;
+        const cognition = this.cognitions.get(witness.id);
+        const ctrl = this.controllers.get(witness.id);
+        if (!cognition) continue;
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: witness.id,
+          type: 'observation',
+          content: `I witnessed ${dead.config.name} die. Cause: ${e.cause}`,
+          importance: 9,
+          timestamp: Date.now(),
+          relatedAgentIds: [e.agentId],
+        });
+        if (ctrl) {
+          ctrl.lastTrigger = `${dead.config.name} just died right in front of you! Cause: ${e.cause}. How do you react?`;
+          ctrl.idleTimer = 7;
+        }
+      }
+    });
+
     // Board post reactions — each alive agent generates a 1-2 sentence comment
     this.bus.on('board_post_created', (e) => {
       void this.generatePostReactions(e.post);
@@ -309,6 +335,13 @@ export class SimulationEngine {
         // Restore village collective memory
         if (worldData.villageMemory && Array.isArray(worldData.villageMemory)) {
           this.world.villageMemory = worldData.villageMemory as typeof this.world.villageMemory;
+        }
+
+        // Restore in-progress building projects
+        if (worldData.activeBuildProjects && typeof worldData.activeBuildProjects === 'object') {
+          for (const [key, val] of Object.entries(worldData.activeBuildProjects)) {
+            this.world.activeBuildProjects.set(key, val as typeof this.world.activeBuildProjects extends Map<string, infer V> ? V : never);
+          }
         }
 
         console.log(`[Engine] World state restored (day ${this.world.time.day}, hour ${this.world.time.hour})`);
@@ -432,8 +465,6 @@ export class SimulationEngine {
         if (agent.activeConcerns) {
           const seen = new Set<string>();
           agent.activeConcerns = agent.activeConcerns.filter(c => {
-            // Remove resolved
-            if ((c as any).resolved) return false;
             // Deduplicate rules by content
             if (c.category === 'rule') {
               const key = c.content.toLowerCase().slice(0, 80);

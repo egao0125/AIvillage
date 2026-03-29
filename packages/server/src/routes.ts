@@ -108,7 +108,8 @@ function sanitizeText(text: string, maxLength: number): string {
 
 /** Validate and clamp a number within range */
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
-  const num = typeof value === 'number' ? value : fallback;
+  // typeof NaN === 'number', so we must also guard with isFinite
+  const num = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
   return Math.max(min, Math.min(max, num));
 }
 
@@ -411,7 +412,7 @@ Relationships: ${mentalModels}`;
 
       const safeModel = typeof model === 'string'
         ? model.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 100)
-        : 'claude-sonnet-4-6';
+        : process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 
       const success = engine.updateAgentApiKey(id, apiKey.trim(), safeModel);
       if (!success) {

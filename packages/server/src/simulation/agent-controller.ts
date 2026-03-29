@@ -1732,7 +1732,7 @@ export class AgentController {
       const text = c.content.toLowerCase();
       const weightLabel = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'PROMISE' : 'casual promise';
       const daysLeft = c.expiresDay - this.world.time.day;
-      const urgency = daysLeft <= 0 ? ' OVERDUE!' : daysLeft === 0 ? ' Due TODAY!' : '';
+      const urgency = daysLeft < 0 ? ' OVERDUE!' : daysLeft === 0 ? ' Due TODAY!' : '';
 
       // Check if promised items are involved
       if (c.itemsPromised && c.itemsPromised.length > 0) {
@@ -2547,7 +2547,7 @@ export class AgentController {
         }
 
         // Target gets a memory of being attacked
-        const targetCog = (this as any).world?.cognitions?.get?.(outcome.targetAgentId);
+        const targetCog = this.agentCognitions?.get(outcome.targetAgentId);
         if (targetCog) {
           void targetCog.addMemory({
             id: crypto.randomUUID(),
@@ -2572,7 +2572,7 @@ export class AgentController {
       const witnesses = this.world.getNearbyAgents(this.agent.position, 5)
         .filter(a => a.id !== this.agent.id && a.id !== target.id && a.alive !== false);
       for (const w of witnesses) {
-        const wCog = (this as any).world?.cognitions?.get?.(w.id);
+        const wCog = this.agentCognitions?.get(w.id);
         if (wCog) {
           void wCog.addMemory({
             id: crypto.randomUUID(),

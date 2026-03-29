@@ -38,6 +38,7 @@ export interface WorldStateData {
   culturalNames?: Record<string, unknown>;
   resourcePools?: Record<string, number>;
   villageMemory?: unknown[];
+  activeBuildProjects?: Record<string, unknown>;
 }
 
 export class SupabasePersistence {
@@ -69,6 +70,8 @@ export class SupabasePersistence {
       worldObjects: Array.from(world.worldObjects.values()),
       culturalNames: Object.fromEntries(world.culturalNames),
       resourcePools: Object.fromEntries(world.resourcePools),
+      villageMemory: world.villageMemory,
+      activeBuildProjects: mapToRecord(world.activeBuildProjects),
     };
 
     const { error } = await this.client
