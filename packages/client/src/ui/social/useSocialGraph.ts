@@ -5,9 +5,11 @@ import type { SocialNode, SocialEdge, MatchedEntry, SocialFilter } from './types
 import { DEFAULT_FILTER } from './types';
 
 function edgeColor(avgTrust: number): string {
-  if (avgTrust > 30) return 'hsl(45, 70%, 60%)';   // warm — positive trust
-  if (avgTrust < -30) return 'hsl(220, 60%, 50%)';  // cool — negative trust
-  return 'hsl(240, 10%, 45%)';                       // gray — neutral/unknown
+  if (avgTrust > 60) return 'hsl(160, 80%, 55%)';    // bright teal — strong trust
+  if (avgTrust > 30) return 'hsl(45, 80%, 65%)';     // warm gold — positive trust
+  if (avgTrust < -30) return 'hsl(0, 70%, 55%)';     // warm red — negative trust
+  if (avgTrust < -60) return 'hsl(350, 80%, 45%)';   // deep red — hostility
+  return 'hsl(220, 20%, 35%)';                        // muted blue-gray — neutral
 }
 
 function matchLedgerEntries(

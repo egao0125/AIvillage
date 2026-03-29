@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { COLORS } from '../styles';
 import { moodColor, stateOpacity } from './socialAnimations';
 
 interface SocialNodeProps {
@@ -9,6 +9,7 @@ interface SocialNodeProps {
   state: string;
   x: number;
   y: number;
+  connectionCount: number;
   dimmed: boolean;
   selected: boolean;
   hovered: boolean;
@@ -28,13 +29,15 @@ function breathSpeed(state: string): number {
 }
 
 export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
-  id, name, mood, state, x, y, dimmed, selected, hovered, onMouseEnter, onMouseLeave, onClick,
+  id, name, mood, state, x, y, connectionCount, dimmed, selected, hovered,
+  onMouseEnter, onMouseLeave, onClick,
 }) => {
-  const radius = 18;
+  // Scale node size by connectivity (min 18, max 28)
+  const radius = Math.min(28, 18 + connectionCount * 1.5);
   const moodRingColor = moodColor(mood);
   const baseOpacity = stateOpacity(state);
-  const opacity = dimmed ? 0.15 : baseOpacity;
-  const hoverScale = hovered ? 1.15 : 1;
+  const opacity = dimmed ? 0.12 : baseOpacity;
+  const hoverScale = hovered ? 1.12 : 1;
 
   const gRef = useRef<SVGGElement>(null);
   const pos = useRef({ x, y });
@@ -43,10 +46,8 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
   const lerpFrom = useRef({ x, y });
   const raf = useRef(0);
 
-  // Update target when props change
   useEffect(() => {
     if (pos.current.x === 0 && pos.current.y === 0) {
-      // First render — snap
       pos.current = { x, y };
       lerpFrom.current = { x, y };
     } else {
@@ -56,16 +57,15 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
     lerpStart.current = performance.now();
   }, [x, y]);
 
-  // Continuous rAF loop: position lerp + breathing
+  // Continuous rAF: position lerp + breathing
   useEffect(() => {
     const speed = breathSpeed(state);
     const lerpDuration = 600;
 
     const animate = (now: number) => {
-      // Position lerp
       const elapsed = now - lerpStart.current;
       const t = Math.min(1, elapsed / lerpDuration);
-      const ease = 1 - Math.pow(1 - t, 3); // cubic ease-out
+      const ease = 1 - Math.pow(1 - t, 3);
 
       const target = targetPos.current;
       const from = lerpFrom.current;
@@ -73,7 +73,6 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
       const cy = from.y + (target.y - from.y) * ease;
       pos.current = { x: cx, y: cy };
 
-      // Breathing
       const breath = 1 + Math.sin(now * speed) * 0.02;
       const s = hoverScale * breath;
 
@@ -88,6 +87,12 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
     return () => cancelAnimationFrame(raf.current);
   }, [state, hoverScale]);
 
+  // First letter + last initial for label
+  const parts = name.split(' ');
+  const initials = parts.length > 1
+    ? parts[0][0] + parts[parts.length - 1][0]
+    : name.slice(0, 2);
+
   return (
     <g
       ref={gRef}
@@ -97,13 +102,23 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
       onMouseLeave={onMouseLeave}
       onClick={() => onClick(id)}
     >
-      {/* Mood ring */}
+      {/* Outer glow halo */}
+      <circle
+        r={radius + 8}
+        fill="none"
+        stroke={moodRingColor}
+        strokeWidth={1}
+        opacity={0.2}
+        filter="url(#glow-soft)"
+      />
+      {/* Mood ring with glow */}
       <circle
         r={radius + 3}
         fill="none"
         stroke={moodRingColor}
-        strokeWidth={3}
-        opacity={0.7}
+        strokeWidth={2.5}
+        opacity={0.8}
+        filter="url(#glow-edge)"
       />
       {/* Selection ring */}
       {selected && (
@@ -113,33 +128,45 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
           stroke={COLORS.accent}
           strokeWidth={2}
           strokeDasharray="4 2"
+          filter="url(#glow-soft)"
         />
       )}
-      {/* Node body */}
+      {/* Node body — gradient fill for depth */}
       <circle
         r={radius}
-        fill={COLORS.bgCard}
-        stroke={COLORS.border}
-        strokeWidth={1.5}
+        fill="url(#node-gradient)"
+        stroke="rgba(100,255,218,0.15)"
+        strokeWidth={1}
       />
-      {/* Initial letter */}
+      {/* Inner highlight for 3D effect */}
+      <circle
+        r={radius * 0.6}
+        fill="none"
+        stroke="rgba(255,255,255,0.04)"
+        strokeWidth={radius * 0.3}
+      />
+      {/* Initials */}
       <text
         textAnchor="middle"
         dominantBaseline="central"
         fill={COLORS.textAccent}
-        fontFamily={FONTS.pixel}
-        fontSize="11px"
+        fontFamily="'Inter', -apple-system, sans-serif"
+        fontSize={radius > 22 ? '12px' : '10px'}
+        fontWeight={600}
+        letterSpacing="1"
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       >
-        {name.charAt(0).toUpperCase()}
+        {initials.toUpperCase()}
       </text>
       {/* Name label below */}
       <text
-        y={radius + 14}
+        y={radius + 16}
         textAnchor="middle"
         fill={COLORS.text}
-        fontFamily={FONTS.body}
-        fontSize="11px"
+        fontFamily="'Inter', -apple-system, sans-serif"
+        fontSize="10px"
+        fontWeight={400}
+        opacity={0.8}
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       >
         {name}

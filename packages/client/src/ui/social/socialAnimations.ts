@@ -38,15 +38,16 @@ export const SOCIAL_KEYFRAMES = `
 
 /** Mood → border color for node mood ring.
  *  Uses keyword scanning since LLM returns freeform strings like
- *  "Focused. Tired of the noise." not single-word moods. */
+ *  "Focused. Tired of the noise." not single-word moods.
+ *  Colors are neon-saturated for glow filter visibility. */
 export function moodColor(mood: string): string {
   const m = mood.toLowerCase();
-  if (/happy|joyful|excited|hopeful|relieved|grateful|proud|warm/.test(m)) return '#4ade80';
-  if (/sad|grieving|melancholy|lonely|loss|hollow|numb|empty/.test(m)) return '#60a5fa';
-  if (/angry|furious|resentful|frustrated|bitter|rage/.test(m)) return '#f87171';
-  if (/anxious|fearful|paranoid|nervous|worried|terrified|scared|tense|uneasy/.test(m)) return '#fbbf24';
-  if (/neutral|calm|content|steady|quiet|settled|focused|clear|grounded/.test(m)) return '#a78bfa';
-  return '#8888aa';
+  if (/happy|joyful|excited|hopeful|relieved|grateful|proud|warm/.test(m)) return '#00ff88';
+  if (/sad|grieving|melancholy|lonely|loss|hollow|numb|empty/.test(m)) return '#4488ff';
+  if (/angry|furious|resentful|frustrated|bitter|rage/.test(m)) return '#ff4444';
+  if (/anxious|fearful|paranoid|nervous|worried|terrified|scared|tense|uneasy/.test(m)) return '#ffaa00';
+  if (/neutral|calm|content|steady|quiet|settled|focused|clear|grounded/.test(m)) return '#8866ff';
+  return '#556688';
 }
 
 /** Agent state → node fill opacity */
