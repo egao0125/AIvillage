@@ -54,9 +54,9 @@ export function moodColor(mood: string): string {
 export function stateOpacity(state: string): number {
   switch (state) {
     case 'active': return 1;
-    case 'routine': return 0.85;
-    case 'idle': return 0.6;
-    case 'sleeping': return 0.4;
-    default: return 0.3;
+    case 'routine': return 0.95;
+    case 'idle': return 0.85;
+    case 'sleeping': return 0.65;
+    default: return 0.7;
   }
 }
