@@ -340,6 +340,7 @@ export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void
 export function selectAgent(agentId: string): void {
   socket?.emit('agent:select', agentId);
   gameStore.selectAgent(agentId);
+  eventBus.emit('agent:select', agentId);
 }
 
 export function watchThoughts(agentId: string): void {
