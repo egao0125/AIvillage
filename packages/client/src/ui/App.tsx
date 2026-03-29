@@ -15,8 +15,8 @@ import { SocialView } from './social/SocialView';
 import { connectSocket } from '../network/socket';
 import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../core/hooks';
 
-// Toggle dev tools — set to false to remove entirely
-const DEV_TOOLS_ENABLED = true;
+// Toggle dev tools — controlled by VITE_DEV_TOOLS_ENABLED env var (default: false)
+const DEV_TOOLS_ENABLED = import.meta.env.VITE_DEV_TOOLS_ENABLED === 'true';
 
 export const App: React.FC = () => {
   const [entered, setEntered] = useState(false);

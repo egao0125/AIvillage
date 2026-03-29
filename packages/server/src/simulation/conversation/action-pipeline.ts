@@ -89,7 +89,7 @@ export class ActionPipeline {
           gold: actor.currency,
         });
         console.log(`[Social] ${actorName} creative action: ${JSON.stringify(ops)}`);
-        return this.applyResolvedOps(actorId, actorName, ops, cognition);
+        return this.applyResolvedOps(actorId, actorName, ops, cognition, cognitions, requestConversation);
       } catch (err) {
         console.error(`[Social] ${actorName} creative resolveAction failed:`, (err as Error).message);
         // Fall through to normal classification path
@@ -127,7 +127,7 @@ export class ActionPipeline {
           gold: actor.currency,
         });
         console.log(`[Social] ${actorName} open-ended action: ${JSON.stringify(ops)}`);
-        const result = this.applyResolvedOps(actorId, actorName, ops, cognition);
+        const result = this.applyResolvedOps(actorId, actorName, ops, cognition, cognitions, requestConversation);
         return result;
       } catch (err) {
         console.error(`[Social] ${actorName} resolveAction failed:`, (err as Error).message);
@@ -178,6 +178,8 @@ export class ActionPipeline {
     actorName: string,
     ops: { op: string; [key: string]: any }[],
     cognition: AgentCognition,
+    cognitions?: Map<string, AgentCognition>,
+    requestConversation?: (initiatorId: string, targetId: string) => boolean,
   ): string {
     const actor = this.world.getAgent(actorId);
     if (!actor || ops.length === 0) return 'FAILED: Could not resolve action.';
@@ -189,7 +191,7 @@ export class ActionPipeline {
 
     const descriptions: string[] = [];
     for (const op of ops) {
-      this.executeOp(actorId, actorName, op, cognition);
+      this.executeOp(actorId, actorName, op, cognition, cognitions, requestConversation);
       if (op.op === 'observe') {
         descriptions.push(op.observation || op.content || 'Observed surroundings.');
       } else if (op.op === 'create') {

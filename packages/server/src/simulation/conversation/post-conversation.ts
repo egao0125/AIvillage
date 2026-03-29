@@ -131,7 +131,9 @@ export class PostConversationProcessor {
               relatedAgentIds: [participantId],
               causedBy: conversationMemoryId,
             });
-          } catch {}
+          } catch (err) {
+            console.warn(`[post-conversation] Failed to write agreement memory for agent ${otherId}:`, err);
+          }
         }
 
         // Classify and create commitment or social ledger entry

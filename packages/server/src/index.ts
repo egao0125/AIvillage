@@ -142,8 +142,16 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Recap request — DISABLED (only weekly recap uses the global API key)
-
+  // Recap request — generate a catch-up recap for returning viewers
+  socket.on('recap:request', async (data: { sinceDay: number }) => {
+    if (typeof data?.sinceDay !== 'number') return;
+    try {
+      const recap = await engine.recapGenerator?.generateRecap(data.sinceDay);
+      if (recap) socket.emit('recap:ready', recap);
+    } catch (err) {
+      console.warn('[Recap] generateRecap failed:', (err as Error).message);
+    }
+  });
 
   // Spectator chat — relay to all clients
   socket.on('spectator:comment', (data: { message: string }) => {
