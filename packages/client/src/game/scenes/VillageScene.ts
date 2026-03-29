@@ -504,17 +504,12 @@ export class VillageScene extends Phaser.Scene {
     const sprite = this.agentSprites.get(agentId);
     if (sprite) {
       sprite.setSelected(true);
-      // Offset to center agent in visible area (right of 420px sidebar)
-      // followOffset is in world pixels, so convert screen offset to world
       const cam = this.cameras.main;
-      const sidebarScreenPx = 210; // half of 420px sidebar
-      const offsetX = sidebarScreenPx / cam.zoom;
-      this.cameras.main.pan(sprite.x + offsetX, sprite.y, 300, 'Sine.easeInOut', false, (_cam: any, progress: number) => {
-        if (progress === 1) {
-          cam.startFollow(sprite, true, 0.08, 0.08);
-          cam.followOffset.set(-offsetX, 0);
-        }
-      });
+      // Offset to center agent in visible area (right of sidebar)
+      const sidebarHalf = 210 / cam.zoom;
+      cam.stopFollow();
+      cam.startFollow(sprite, true, 0.06, 0.06);
+      cam.followOffset.set(-sidebarHalf, 0);
     }
   }
 
