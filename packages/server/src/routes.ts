@@ -195,7 +195,7 @@ export function createRouter(engine: SimulationEngine): Router {
 
   router.get('/api/agents/:id/timeline', (req, res) => {
     const id = req.params.id as string;
-    const limit = parseInt(req.query.limit as string) || 50;
+    const limit = clampNumber(parseInt(req.query.limit as string), 1, 500, 50);
     const timeline = engine.getCharacterTimeline(id, limit);
     res.json(timeline);
   });
