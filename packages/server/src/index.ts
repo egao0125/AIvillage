@@ -2,9 +2,11 @@ import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
 import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
 import { createAuthRouter, optionalAuth } from './auth.js';
+import { setupRedis, closeRedis } from './redis.js';
 import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -26,6 +28,10 @@ if (isProduction && ALLOWED_ORIGINS.length === 0) {
   console.warn('[Security] ALLOWED_ORIGINS is not set — all cross-origin requests will be rejected.');
 }
 
+// Redis: setup pub/sub clients before Socket.IO so the adapter is ready at startup.
+// Falls back to in-memory (single-instance) when REDIS_URL is not set.
+const redis = setupRedis();
+
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -33,6 +39,13 @@ const io = new Server(httpServer, {
     ? { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] }
     : { origin: CLIENT_URL, methods: ['GET', 'POST'] },
 });
+
+if (redis) {
+  io.adapter(createAdapter(redis.pub, redis.sub));
+  console.log('[Server] Socket.IO Redis adapter enabled — multi-instance ready');
+} else {
+  console.log('[Server] Socket.IO using in-memory adapter (single-instance only)');
+}
 
 // Limit request body size to prevent abuse
 app.use(express.json({ limit: '16kb' }));
@@ -227,11 +240,13 @@ engine.initialize().then(() => {
 process.on('SIGTERM', async () => {
   console.log('[Server] SIGTERM — saving state...');
   await engine.stop();
+  await closeRedis();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   console.log('[Server] SIGINT — saving state...');
   await engine.stop();
+  await closeRedis();
   process.exit(0);
 });
