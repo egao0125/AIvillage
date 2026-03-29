@@ -8,6 +8,8 @@ dist
 docs
 assets
 scripts
+tasks
 CONTRIBUTING.md
 LICENSE
 README.md
+fly.toml
