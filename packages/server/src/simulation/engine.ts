@@ -231,7 +231,7 @@ export class SimulationEngine {
           `${e.agentName}, a member of ${e.institutionName}, just broke the rule: "${e.rule}". They ${e.action}.`,
           `You are a leader of ${e.institutionName}. You must decide how to respond — warn them, confront them, expel them, or let it slide.`,
         ).catch((err: unknown) => {
-          console.warn(`[Engine] Leader think failed for ${leader.id}:`, (err as Error).message);
+          console.warn(`[Engine] Leader think failed for ${leaderId}:`, (err as Error).message);
         });
       }
 

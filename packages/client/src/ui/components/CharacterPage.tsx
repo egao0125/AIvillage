@@ -30,6 +30,9 @@ export const CharacterPage: React.FC = () => {
       setTimeline(timelineData);
       setArcSummary(arcData.summary || null);
       setLoading(false);
+    }).catch((err: unknown) => {
+      console.warn('[CharacterPage] Failed to load agent data:', (err as Error).message);
+      setLoading(false);
     });
   }, [agentId]);
 
