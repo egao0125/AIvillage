@@ -326,12 +326,17 @@ export function sendSpectatorComment(message: string): void {
 }
 
 // --- Dev tools ---
-export function devPause(): void { socket?.emit('dev:pause'); }
-export function devResume(): void { socket?.emit('dev:resume'); }
-export function devStep(): void { socket?.emit('dev:step'); }
-export function devResetVitals(): void { socket?.emit('dev:reset-vitals'); }
-export function devFreshStart(): void { socket?.emit('dev:fresh-start'); }
-export function devRequestStatus(): void { socket?.emit('dev:status-request'); }
+// Server requires DEV_ADMIN_TOKEN as first argument for all dev:* commands.
+// Set VITE_DEV_ADMIN_TOKEN in the client build environment (e.g. .env.local)
+// to enable the dev panel. Leave unset to disable dev commands from this client.
+const DEV_TOKEN: string = (import.meta as { env?: Record<string, string> }).env?.VITE_DEV_ADMIN_TOKEN ?? '';
+
+export function devPause(): void { socket?.emit('dev:pause', DEV_TOKEN); }
+export function devResume(): void { socket?.emit('dev:resume', DEV_TOKEN); }
+export function devStep(): void { socket?.emit('dev:step', DEV_TOKEN); }
+export function devResetVitals(): void { socket?.emit('dev:reset-vitals', DEV_TOKEN); }
+export function devFreshStart(): void { socket?.emit('dev:fresh-start', DEV_TOKEN); }
+export function devRequestStatus(): void { socket?.emit('dev:status-request', DEV_TOKEN); }
 export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void {
   socket?.on('dev:status', cb);
   return () => { socket?.off('dev:status', cb); };
