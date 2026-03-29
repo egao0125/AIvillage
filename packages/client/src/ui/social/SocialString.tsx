@@ -1,6 +1,36 @@
 import React, { useRef, useEffect } from 'react';
 import type { SocialEdge } from './types';
 
+/** Pulsing red glow along the edge path for disagreements */
+const DisagreementGlow: React.FC<{ pathD: string; thickness: number }> = ({ pathD, thickness }) => {
+  const glowRef = useRef<SVGPathElement>(null);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!glowRef.current) return;
+      const now = performance.now();
+      const pulse = 0.08 + Math.sin(now * 0.003) * 0.06; // oscillates 0.02–0.14
+      const width = thickness + 10 + Math.sin(now * 0.003) * 4; // oscillates ±4
+      glowRef.current.setAttribute('opacity', `${pulse}`);
+      glowRef.current.setAttribute('stroke-width', `${width}`);
+    }, 66); // 15fps
+    return () => clearInterval(interval);
+  }, [thickness]);
+
+  return (
+    <path
+      ref={glowRef}
+      d={pathD}
+      fill="none"
+      stroke="#ff4444"
+      strokeWidth={thickness + 10}
+      strokeLinecap="round"
+      opacity={0.1}
+      style={{ pointerEvents: 'none' }}
+    />
+  );
+};
+
 interface SocialStringProps {
   edge: SocialEdge;
   x1: number;
@@ -130,9 +160,9 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
         strokeLinecap="round"
         style={{ ...edgeStyle, pointerEvents: 'none' }}
       />
-      {/* Disagreement marker */}
+      {/* Disagreement glow pulse — red halo that breathes */}
       {edge.hasDisagreement && (
-        <circle cx={cx} cy={cy} r={4} fill="#ff6b6b" opacity={0.9} />
+        <DisagreementGlow pathD={pathD} thickness={edge.thickness} />
       )}
       {/* Conversation traveling dot */}
       <circle
