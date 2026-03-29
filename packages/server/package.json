@@ -11,9 +11,11 @@
   "dependencies": {
     "@ai-village/ai-engine": "workspace:*",
     "@ai-village/shared": "workspace:*",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@supabase/supabase-js": "^2.99.3",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
+    "ioredis": "^5.10.1",
     "socket.io": "^4.7.0"
   },
   "devDependencies": {

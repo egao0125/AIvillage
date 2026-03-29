@@ -1,10 +1,14 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import type { SimulationEngine } from './simulation/engine.js';
 import { requireAuth } from './auth.js';
+import { getRedis } from './redis.js';
 
 // =============================================================================
-// Security: Rate Limiting (in-memory, per-IP)
+// Security: Rate Limiting (Redis-backed with in-memory fallback, per-IP)
 // Prevents mass agent spawning (Moltbook: one agent registered 500K accounts)
+//
+// When REDIS_URL is set: uses Redis INCR+EXPIRE (works across multiple instances)
+// When REDIS_URL is unset: falls back to in-memory Map (single-instance only)
 // =============================================================================
 
 interface RateLimitEntry {
@@ -12,10 +16,21 @@ interface RateLimitEntry {
   resetAt: number;
 }
 
+// In-memory fallback store — only used when Redis is unavailable
 const rateLimitStore: Map<string, RateLimitEntry> = new Map();
 
+// Cleanup stale in-memory entries every 5 minutes (no-op when Redis is active)
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitStore) {
+    if (now > entry.resetAt) rateLimitStore.delete(ip);
+  }
+}, 5 * 60 * 1_000);
+
 function rateLimit(maxRequests: number, windowMs: number) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  const windowSec = Math.ceil(windowMs / 1_000);
+
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Prefer the leftmost (client) IP from X-Forwarded-For when behind Fly.io / a proxy.
     // We take only the first entry to avoid spoofing via appended IPs.
     const forwarded = req.headers['x-forwarded-for'];
@@ -24,35 +39,50 @@ function rateLimit(maxRequests: number, windowMs: number) {
       req.ip ||
       req.socket.remoteAddress ||
       'unknown';
+
+    const redis = getRedis();
+
+    if (redis) {
+      // Redis path: atomic INCR + TTL — works correctly across multiple server instances
+      try {
+        const key = `rl:${ip}:${maxRequests}:${windowSec}`;
+        const count = await redis.incr(key);
+        if (count === 1) await redis.expire(key, windowSec);
+        if (count > maxRequests) {
+          const ttl = await redis.ttl(key);
+          res.status(429).json({
+            error: 'Too many requests. Please try again later.',
+            retryAfter: Math.max(ttl, 1),
+          });
+          return;
+        }
+        next();
+        return;
+      } catch (err) {
+        // Redis unavailable — fall through to in-memory
+        console.warn('[RateLimit] Redis error, using in-memory fallback:', (err as Error).message);
+      }
+    }
+
+    // In-memory fallback path
     const now = Date.now();
     const entry = rateLimitStore.get(ip);
-
     if (!entry || now > entry.resetAt) {
       rateLimitStore.set(ip, { count: 1, resetAt: now + windowMs });
       next();
       return;
     }
-
     if (entry.count >= maxRequests) {
       res.status(429).json({
         error: 'Too many requests. Please try again later.',
-        retryAfter: Math.ceil((entry.resetAt - now) / 1000),
+        retryAfter: Math.ceil((entry.resetAt - now) / 1_000),
       });
       return;
     }
-
     entry.count++;
     next();
   };
 }
-
-// Cleanup stale entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of rateLimitStore) {
-    if (now > entry.resetAt) rateLimitStore.delete(ip);
-  }
-}, 5 * 60 * 1000);
 
 // =============================================================================
 // Security: Input Sanitization
