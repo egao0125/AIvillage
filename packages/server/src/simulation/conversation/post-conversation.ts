@@ -105,16 +105,20 @@ export class PostConversationProcessor {
       // --- 2. Agreements → memories + social ledger entries (max 2) ---
       for (const agreement of result.agreements.slice(0, 2)) {
         // Memory for this participant
-        await cognition.addLinkedMemory({
-          id: crypto.randomUUID(),
-          agentId: participantId,
-          type: 'plan',
-          content: `AGREEMENT with ${othersLabel}: ${agreement}`,
-          importance: 7,
-          timestamp: Date.now(),
-          relatedAgentIds: otherIds,
-          causedBy: conversationMemoryId,
-        });
+        try {
+          await cognition.addLinkedMemory({
+            id: crypto.randomUUID(),
+            agentId: participantId,
+            type: 'plan',
+            content: `AGREEMENT with ${othersLabel}: ${agreement}`,
+            importance: 7,
+            timestamp: Date.now(),
+            relatedAgentIds: otherIds,
+            causedBy: conversationMemoryId,
+          });
+        } catch (err) {
+          console.warn(`[post-conversation] Failed to write agreement memory for ${participantId}:`, (err as Error).message);
+        }
 
         // Memory for other participants
         for (const otherId of otherIds) {
@@ -241,30 +245,38 @@ export class PostConversationProcessor {
           }
         }
 
-        await cognition.addLinkedMemory({
-          id: crypto.randomUUID(),
-          agentId: participantId,
-          type: 'observation',
-          content: `${othersLabel} told me: ${fact}`,
-          importance: 5,
-          timestamp: Date.now(),
-          relatedAgentIds: otherIds,
-          causedBy: conversationMemoryId,
-        });
+        try {
+          await cognition.addLinkedMemory({
+            id: crypto.randomUUID(),
+            agentId: participantId,
+            type: 'observation',
+            content: `${othersLabel} told me: ${fact}`,
+            importance: 5,
+            timestamp: Date.now(),
+            relatedAgentIds: otherIds,
+            causedBy: conversationMemoryId,
+          });
+        } catch (err) {
+          console.warn(`[post-conversation] Failed to write learned-fact memory for ${participantId}:`, (err as Error).message);
+        }
       }
 
       // --- 4. Tension → thought memory ---
       if (result.tension) {
-        await cognition.addLinkedMemory({
-          id: crypto.randomUUID(),
-          agentId: participantId,
-          type: 'thought',
-          content: result.tension,
-          importance: 6,
-          timestamp: Date.now(),
-          relatedAgentIds: otherIds,
-          causedBy: conversationMemoryId,
-        });
+        try {
+          await cognition.addLinkedMemory({
+            id: crypto.randomUUID(),
+            agentId: participantId,
+            type: 'thought',
+            content: result.tension,
+            importance: 6,
+            timestamp: Date.now(),
+            relatedAgentIds: otherIds,
+            causedBy: conversationMemoryId,
+          });
+        } catch (err) {
+          console.warn(`[post-conversation] Failed to write tension memory for ${participantId}:`, (err as Error).message);
+        }
       }
 
       // --- 5. Four Stream: update dossiers + add concerns ---
