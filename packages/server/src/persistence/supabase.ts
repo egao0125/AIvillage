@@ -2,6 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Agent } from '@ai-village/shared';
 import type { World } from '../simulation/world.js';
 import type { AgentController } from '../simulation/agent-controller.js';
+import { encryptApiKey, decryptApiKey } from '../crypto.js';
 
 export interface ControllerData {
   controllerState: string;
@@ -110,7 +111,7 @@ export class SupabasePersistence {
           homeArea: ctrl.homeArea,
           worldView: ctrl.cognition.worldView,
           worldViewParts: ctrl.cognition.worldViewParts,
-          apiKey: keyData?.apiKey,
+          apiKey: keyData?.apiKey ? encryptApiKey(keyData.apiKey) : undefined,
           model: keyData?.model,
         } satisfies ControllerData,
         updated_at: new Date().toISOString(),
@@ -175,7 +176,11 @@ export class SupabasePersistence {
 
     const map = new Map<string, ControllerData>();
     for (const row of data) {
-      map.set(row.agent_id as string, row.data as ControllerData);
+      const ctrl = row.data as ControllerData;
+      if (ctrl.apiKey) {
+        ctrl.apiKey = decryptApiKey(ctrl.apiKey);
+      }
+      map.set(row.agent_id as string, ctrl);
     }
     return map;
   }
