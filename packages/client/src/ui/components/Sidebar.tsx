@@ -83,8 +83,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed }) => {
             cursor: 'pointer',
             padding: '4px 8px',
             color: COLORS.textDim,
-            fontFamily: FONTS.body,
-            fontSize: 14,
+            fontFamily: FONTS.pixel,
+            fontSize: 7,
+            letterSpacing: 1,
             lineHeight: 1,
             transition: 'color 0.2s, border-color 0.2s',
           }}
@@ -97,7 +98,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed }) => {
             e.currentTarget.style.borderColor = COLORS.border;
           }}
         >
-          &#x1F578;
+          SOCIAL GRAPH
         </button>
       </div>
 
