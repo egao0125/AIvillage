@@ -147,7 +147,6 @@ export function createRouter(engine: SimulationEngine): Router {
     // Never expose API keys or internal IDs to clients
     res.json(snapshot.agents.map(a => ({
       id: a.id,
-      ownerId: a.ownerId,
       config: {
         name: a.config.name,
         age: a.config.age,

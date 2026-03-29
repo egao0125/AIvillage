@@ -41,11 +41,21 @@ function loadKey(): Buffer | null {
 
 /**
  * Encrypt a plaintext API key.
- * Returns the plaintext unchanged if ENCRYPTION_KEY is not set.
+ * In production: throws if ENCRYPTION_KEY is not set (fail-secure — never store plaintext).
+ * In development: returns plaintext with a warning for convenience.
  */
 export function encryptApiKey(plaintext: string): string {
   const key = loadKey();
-  if (!key) return plaintext;
+  if (!key) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        '[Crypto] ENCRYPTION_KEY is not set. Refusing to store API key in plaintext in production. ' +
+        'Set ENCRYPTION_KEY to a 64-character hex string.',
+      );
+    }
+    console.warn('[Crypto] ENCRYPTION_KEY not set — storing API key as plaintext (development only).');
+    return plaintext;
+  }
 
   const iv = randomBytes(IV_LEN);
   const cipher = createCipheriv(ALGO, key, iv);

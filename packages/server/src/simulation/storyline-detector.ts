@@ -183,7 +183,8 @@ ${eventDump}`;
         summary: String(parsed.summary || '').substring(0, 200),
         theme: validThemes.includes(parsed.theme) ? parsed.theme : 'mystery',
       };
-    } catch {
+    } catch (err) {
+      console.warn('[StorylineDetector] LLM response parse failed:', (err as Error).message);
       return { title: 'Developing Story', summary: 'A storyline is forming...', theme: 'mystery' };
     }
   }
