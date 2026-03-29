@@ -333,15 +333,18 @@ export class SimulationEngine {
 
         let effectiveKey: string;
         let keyLabel: string;
-        if (savedKey && savedKey !== 'dummy-key') {
+        if (savedKey) {
           // BYOK key persisted — restore it
           effectiveKey = savedKey;
           keyLabel = 'BYOK';
         } else {
           // No saved key — round-robin across env var keys
           const useKey2 = globalKey2 && i % 2 === 1;
-          effectiveKey = useKey2 ? globalKey2 : (globalKey || 'dummy-key');
+          effectiveKey = (useKey2 ? globalKey2 : globalKey) ?? '';
           keyLabel = useKey2 ? 'KEY_2' : 'KEY_1';
+          if (!effectiveKey) {
+            console.warn(`[Engine] No API key for agent ${agent.config.name} — LLM calls will be skipped`);
+          }
         }
         const effectiveModel = savedModel || defaultModel;
         this.agentApiKeys.set(agent.id, { apiKey: effectiveKey, model: effectiveModel });
@@ -550,7 +553,7 @@ export class SimulationEngine {
     const memoryStore = this.persistence
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
-    const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
+    const llmProvider = this.getThrottledProvider(effectiveKey ?? '', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
     this.wireFourStreamMemory(cognition, agent, memoryStore);
@@ -717,8 +720,11 @@ export class SimulationEngine {
 
     // Recreate cognition
     const keyData = this.agentApiKeys.get(id);
-    const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+    const effectiveKey = keyData?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
     const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    if (!effectiveKey) {
+      console.warn(`[Engine] No API key for agent ${id} on resume — LLM calls will be skipped`);
+    }
 
     const memoryStore = this.persistence
       ? new SupabaseMemoryStore(this.persistence.client)
@@ -828,8 +834,11 @@ export class SimulationEngine {
 
     // Recreate cognition with fresh worldView — no stale knowledge from past life
     const keyData = this.agentApiKeys.get(id);
-    const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+    const effectiveKey = keyData?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
     const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    if (!effectiveKey) {
+      console.warn(`[Engine] No API key for agent ${id} on resurrection — LLM calls will be skipped`);
+    }
 
     const memoryStore = this.persistence
       ? new SupabaseMemoryStore(this.persistence.client)
@@ -2237,8 +2246,11 @@ Answer with ONLY one word: "support" or "oppose".`,
 
       // Recreate cognition with fresh worldView
       const keyData = this.agentApiKeys.get(agent.id);
-      const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+      const effectiveKey = keyData?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
       const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+      if (!effectiveKey) {
+        console.warn(`[Engine] No API key for agent ${agent.config.name} on fresh-start — LLM calls will be skipped`);
+      }
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
       const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts);

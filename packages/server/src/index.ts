@@ -16,11 +16,21 @@ const PORT = parseInt(process.env.PORT || '4000');
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const isProduction = process.env.NODE_ENV === 'production';
 
+// ALLOWED_ORIGINS: comma-separated list of permitted origins in production.
+// Example: ALLOWED_ORIGINS=https://aivillage.com,https://www.aivillage.com
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+  : [];
+
+if (isProduction && ALLOWED_ORIGINS.length === 0) {
+  console.warn('[Security] ALLOWED_ORIGINS is not set — all cross-origin requests will be rejected.');
+}
+
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: isProduction
-    ? {}
+    ? { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] }
     : { origin: CLIENT_URL, methods: ['GET', 'POST'] },
 });
 
@@ -55,6 +65,17 @@ if (isProduction) {
 const spectatorLastComment: Map<string, number> = new Map();
 // On-demand thought generation: one interval per watching socket
 const watchIntervals: Map<string, { interval: NodeJS.Timeout; agentId: string }> = new Map();
+
+// Dev tools: require a secret token to prevent accidental or malicious use in production.
+// Set DEV_ADMIN_TOKEN in environment to enable dev commands. Leave unset to disable entirely.
+const DEV_ADMIN_TOKEN = process.env.DEV_ADMIN_TOKEN;
+function isDevAuthorized(token: unknown): boolean {
+  return (
+    typeof DEV_ADMIN_TOKEN === 'string' &&
+    DEV_ADMIN_TOKEN.length > 0 &&
+    token === DEV_ADMIN_TOKEN
+  );
+}
 
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
@@ -103,7 +124,14 @@ io.on('connection', (socket) => {
   // Spectator chat — relay to all clients
   socket.on('spectator:comment', (data: { message: string }) => {
     if (!data.message || typeof data.message !== 'string') return;
-    const msg = data.message.trim().slice(0, 200);
+    const msg = data.message
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .trim()
+      .slice(0, 200);
     if (!msg) return;
 
     // Rate limit: 1 per 10 seconds
@@ -119,23 +147,27 @@ io.on('connection', (socket) => {
     });
   });
 
-  // --- Dev tools ---
-  socket.on('dev:pause', () => {
+  // --- Dev tools (token-gated) ---
+  socket.on('dev:pause', (token: unknown) => {
+    if (!isDevAuthorized(token)) return;
     engine.pause();
     io.emit('dev:status', { paused: !engine.isRunning });
   });
 
-  socket.on('dev:resume', () => {
+  socket.on('dev:resume', (token: unknown) => {
+    if (!isDevAuthorized(token)) return;
     engine.start();
     io.emit('dev:status', { paused: !engine.isRunning });
   });
 
-  socket.on('dev:step', () => {
+  socket.on('dev:step', (token: unknown) => {
+    if (!isDevAuthorized(token)) return;
     engine.singleTick();
     io.emit('world:snapshot', engine.getSnapshot());
   });
 
-  socket.on('dev:reset-vitals', () => {
+  socket.on('dev:reset-vitals', (token: unknown) => {
+    if (!isDevAuthorized(token)) return;
     const snapshot = engine.getSnapshot();
     for (const agent of snapshot.agents) {
       engine.resetAgentVitals(agent.id);
@@ -143,7 +175,8 @@ io.on('connection', (socket) => {
     io.emit('world:snapshot', engine.getSnapshot());
   });
 
-  socket.on('dev:fresh-start', async () => {
+  socket.on('dev:fresh-start', async (token: unknown) => {
+    if (!isDevAuthorized(token)) return;
     console.log('[Server] Fresh start requested');
     await engine.freshStart();
     io.emit('world:snapshot', engine.getSnapshot());
@@ -151,7 +184,8 @@ io.on('connection', (socket) => {
     console.log('[Server] Fresh start complete — snapshot broadcast');
   });
 
-  socket.on('dev:status-request', () => {
+  socket.on('dev:status-request', (token: unknown) => {
+    if (!isDevAuthorized(token)) return;
     socket.emit('dev:status', { paused: !engine.isRunning });
   });
 
