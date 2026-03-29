@@ -165,7 +165,9 @@ export class SimulationEngine {
           void cognition.think(
             `You just saw ${thiefName} steal ${e.item} from ${victimName}.`,
             `You're nearby. They might not have seen you watching.`,
-          ).catch(() => {});
+          ).catch((err: unknown) => {
+            console.warn(`[Engine] Witness think failed for ${witness.id}:`, (err as Error).message);
+          });
         }
       }
       this.broadcaster.agentAction(e.thiefId, `stole ${e.item}`, '\u{1F978}');
@@ -228,7 +230,9 @@ export class SimulationEngine {
         void cognition.think(
           `${e.agentName}, a member of ${e.institutionName}, just broke the rule: "${e.rule}". They ${e.action}.`,
           `You are a leader of ${e.institutionName}. You must decide how to respond — warn them, confront them, expel them, or let it slide.`,
-        ).catch(() => {});
+        ).catch((err: unknown) => {
+          console.warn(`[Engine] Leader think failed for ${leader.id}:`, (err as Error).message);
+        });
       }
 
       console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}"`);
@@ -1169,7 +1173,9 @@ export class SimulationEngine {
         nearby, nearbyAreas,
         nearbyWorldObjects.length > 0 ? nearbyWorldObjects : undefined,
         culturalNames.size > 0 ? culturalNames : undefined,
-      ).catch(() => {});
+      ).catch((err: unknown) => {
+        console.warn(`[Engine] perceive failed for ${agent.id}:`, (err as Error).message);
+      });
     }
   }
 
