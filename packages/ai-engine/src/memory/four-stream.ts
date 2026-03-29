@@ -280,8 +280,8 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
     );
     if (existing) return;
 
-    const MAX = 10;
-    if (this.concerns.length >= MAX && !concern.permanent) {
+    const MAX = 12;
+    if (this.concerns.length >= MAX) {
       // Weighted eviction: drop the least valuable non-permanent concern
       const W: Record<string, number> = { rule: 1, threat: .9, commitment: .7, need: .6, goal: .4, unresolved: .2 };
       const now = Date.now();

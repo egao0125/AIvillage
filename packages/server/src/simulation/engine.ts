@@ -400,6 +400,82 @@ export class SimulationEngine {
         this.controllers.set(agent.id, controller);
       }
 
+      // --- Data cleanup: fix corrupted commitments, concerns, and institution spam ---
+      const currentDay = this.world.time.day;
+      for (const agent of agents) {
+        // P1: Fix commitments with createdDay > currentDay (from world reset)
+        for (const c of (agent.commitments ?? [])) {
+          if (c.createdDay > currentDay) {
+            c.broken = true; // These are from a prior world state — mark broken
+          }
+        }
+        // Archive broken ones
+        if (agent.commitments) {
+          const broken = agent.commitments.filter(c => c.broken);
+          for (const c of broken) {
+            c.archivedAt = Date.now();
+            if (!agent.archivedCommitments) agent.archivedCommitments = [];
+            if (agent.archivedCommitments.length >= 20) agent.archivedCommitments.shift();
+            agent.archivedCommitments.push(c);
+          }
+          agent.commitments = agent.commitments.filter(c => !c.broken && !c.fulfilled);
+        }
+
+        // P3: Prune duplicate rule concerns (keep one per unique content)
+        if (agent.activeConcerns) {
+          const seen = new Set<string>();
+          agent.activeConcerns = agent.activeConcerns.filter(c => {
+            // Remove resolved
+            if ((c as any).resolved) return false;
+            // Deduplicate rules by content
+            if (c.category === 'rule') {
+              const key = c.content.toLowerCase().slice(0, 80);
+              if (seen.has(key)) return false;
+              seen.add(key);
+            }
+            // Remove commitment concerns for dissolved institutions
+            if (c.category === 'commitment' && c.content.includes('I founded ')) {
+              const instName = c.content.match(/I founded (.+?) with/)?.[1];
+              if (instName) {
+                const inst = Array.from(this.world.institutions.values()).find(
+                  i => i.name === instName
+                );
+                if (!inst || inst.dissolved) return false;
+                // Keep only if agent is still a member
+                const isMember = inst.members.some(m => m.agentId === agent.id);
+                if (!isMember) return false;
+              }
+            }
+            return true;
+          });
+          // Cap at 12 total
+          if (agent.activeConcerns.length > 12) {
+            agent.activeConcerns = agent.activeConcerns.slice(0, 12);
+          }
+        }
+
+        // P4: Enforce one institution per agent — keep only the first non-dissolved
+        if (agent.institutionIds && agent.institutionIds.length > 1) {
+          const validId = agent.institutionIds.find(id => {
+            const inst = this.world.getInstitution(id);
+            return inst && !inst.dissolved;
+          });
+          // Remove agent from all other institutions
+          for (const instId of agent.institutionIds) {
+            if (instId !== validId) {
+              const inst = this.world.getInstitution(instId);
+              if (inst) {
+                inst.members = inst.members.filter(m => m.agentId !== agent.id);
+                // Dissolve if no members left
+                if (inst.members.length === 0) inst.dissolved = true;
+              }
+            }
+          }
+          agent.institutionIds = validId ? [validId] : [];
+        }
+      }
+      console.log(`[Engine] Data cleanup complete for ${agents.length} agents (day=${currentDay})`);
+
       console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
       this.refreshNameMaps();
     } catch (err) {

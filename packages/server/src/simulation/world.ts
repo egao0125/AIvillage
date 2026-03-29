@@ -594,12 +594,27 @@ export class World {
   addInstitutionMember(instId: string, member: InstitutionMember): void {
     const inst = this.institutions.get(instId);
     if (!inst) return;
-    inst.members.push(member);
-    // Track on the agent as well
+    // Enforce one institution per agent — remove from old institution first
     const agent = this.agents.get(member.agentId);
     if (agent) {
+      const existingIds = (agent.institutionIds ?? []).filter(id => {
+        const existing = this.institutions.get(id);
+        return existing && !existing.dissolved && id !== instId;
+      });
+      for (const oldId of existingIds) {
+        this.removeInstitutionMember(oldId, member.agentId);
+      }
+    }
+    // Prevent duplicate membership in the same institution
+    if (!inst.members.some(m => m.agentId === member.agentId)) {
+      inst.members.push(member);
+    }
+    // Track on the agent
+    if (agent) {
       if (!agent.institutionIds) agent.institutionIds = [];
-      agent.institutionIds.push(instId);
+      if (!agent.institutionIds.includes(instId)) {
+        agent.institutionIds = [instId]; // Replace, not push — one institution only
+      }
     }
     console.log(`[World] ${member.agentId} joined ${inst.name} as ${member.role}`);
   }
