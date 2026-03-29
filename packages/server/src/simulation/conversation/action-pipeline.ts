@@ -535,7 +535,9 @@ export class ActionPipeline {
             id: crypto.randomUUID(), agentId: toAgent.id, type: 'observation',
             content: `${fromAgent.config.name} ${what === 'gold' ? `gave me ${op.amount} gold` : `gave me ${op.item}`}`,
             importance: 7, timestamp: Date.now(), relatedAgentIds: [fromAgent.id],
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+            console.warn(`[Pipeline] addMemory failed for recipient ${toAgent.id}:`, (err as Error).message);
+          });
         }
         break;
       }
@@ -816,7 +818,9 @@ export class ActionPipeline {
             id: crypto.randomUUID(), agentId: trade.fromAgentId, type: 'observation',
             content: `${actorName} accepted my trade. I gave ${trade.offering.map(i => `${i.qty} ${i.resource}`).join(', ')} and received ${trade.requesting.map(i => `${i.qty} ${i.resource}`).join(', ')}.`,
             importance: 7, timestamp: Date.now(), relatedAgentIds: [actorId],
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+            console.warn(`[Pipeline] addMemory failed for proposer ${trade.fromAgentId}:`, (err as Error).message);
+          });
         }
       } else if (outcome.type === 'trade_reject' && outcome.tradeProposal) {
         this.world.pendingTrades.delete(outcome.tradeProposal.id);
@@ -1060,7 +1064,9 @@ export class ActionPipeline {
           void witnessCognition.think(
             `${actorName} just said: "${rawText}"`,
             `You are at ${this.world.getAreaAt(witness.position)?.id ?? 'somewhere'}. ${actorName} is nearby.`,
-          ).catch(() => {});
+          ).catch((err: unknown) => {
+            console.warn(`[Pipeline] witness think failed for ${witness.id}:`, (err as Error).message);
+          });
         }
       }
 
