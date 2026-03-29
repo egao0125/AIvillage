@@ -48,20 +48,21 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
     return m;
   }, [nodes]);
 
-  // Determine which nodes/edges are connected to hovered node
-  const connectedToHovered = useMemo(() => {
-    if (!hoveredNodeId) return null;
-    const nodeIds = new Set<string>([hoveredNodeId]);
+  // Determine which nodes/edges are connected to hovered or selected node
+  const focusedNodeId = hoveredNodeId || selectedNodeId;
+  const connectedToFocused = useMemo(() => {
+    if (!focusedNodeId) return null;
+    const nodeIds = new Set<string>([focusedNodeId]);
     const edgeIds = new Set<string>();
     for (const e of edges) {
-      if (e.source === hoveredNodeId || e.target === hoveredNodeId) {
+      if (e.source === focusedNodeId || e.target === focusedNodeId) {
         edgeIds.add(e.id);
         nodeIds.add(e.source);
         nodeIds.add(e.target);
       }
     }
     return { nodeIds, edgeIds };
-  }, [hoveredNodeId, edges]);
+  }, [focusedNodeId, edges]);
 
   return (
     <svg
@@ -97,8 +98,8 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
             const tNode = nodeMap.get(edge.target);
             if (!sNode || !tNode) return null;
 
-            const dimmed = connectedToHovered
-              ? !connectedToHovered.edgeIds.has(edge.id)
+            const dimmed = connectedToFocused
+              ? !connectedToFocused.edgeIds.has(edge.id)
               : false;
 
             return (
@@ -128,8 +129,8 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
         {/* Nodes layer */}
         <g>
           {nodes.map(node => {
-            const dimmed = connectedToHovered
-              ? !connectedToHovered.nodeIds.has(node.id)
+            const dimmed = connectedToFocused
+              ? !connectedToFocused.nodeIds.has(node.id)
               : false;
 
             return (
