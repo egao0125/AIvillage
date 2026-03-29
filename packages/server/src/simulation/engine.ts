@@ -385,6 +385,8 @@ export class SimulationEngine {
           sleepHour,
           homeArea,
           this.createActionExecutor(),
+          this.cognitions,
+          this.controllers,
         );
         controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
         controller.bus = this.bus;
@@ -575,6 +577,8 @@ export class SimulationEngine {
       sleepHour,
       'plaza',
       this.createActionExecutor(),
+      this.cognitions,
+      this.controllers,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
@@ -748,6 +752,8 @@ export class SimulationEngine {
       23,
       'plaza',
       this.createActionExecutor(),
+      this.cognitions,
+      this.controllers,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
@@ -864,6 +870,8 @@ export class SimulationEngine {
       23,
       'plaza',
       this.createActionExecutor(),
+      this.cognitions,
+      this.controllers,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
@@ -2284,6 +2292,8 @@ Answer with ONLY one word: "support" or "oppose".`,
       const controller = new AgentController(
         agent, cognition, this.world, this.broadcaster, 7, 23, 'plaza',
         this.createActionExecutor(),
+        this.cognitions,
+        this.controllers,
       );
       controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
       controller.bus = this.bus;
