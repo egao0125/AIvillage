@@ -337,6 +337,13 @@ export class SimulationEngine {
           this.world.villageMemory = worldData.villageMemory as typeof this.world.villageMemory;
         }
 
+        // Restore in-progress building projects
+        if (worldData.activeBuildProjects && typeof worldData.activeBuildProjects === 'object') {
+          for (const [key, val] of Object.entries(worldData.activeBuildProjects)) {
+            this.world.activeBuildProjects.set(key, val as typeof this.world.activeBuildProjects extends Map<string, infer V> ? V : never);
+          }
+        }
+
         console.log(`[Engine] World state restored (day ${this.world.time.day}, hour ${this.world.time.hour})`);
       }
 
