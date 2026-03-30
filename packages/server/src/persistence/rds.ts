@@ -234,9 +234,7 @@ export class RdsPersistence {
 
   async deleteAllMemories(): Promise<void> {
     try {
-      await this.pool.query(
-        `DELETE FROM memories WHERE id != '00000000-0000-0000-0000-000000000000'`,
-      );
+      await this.pool.query(`DELETE FROM memories`);
     } catch (err) {
       console.error('[RDS] deleteAllMemories failed:', (err as Error).message);
       throw err;
@@ -267,9 +265,7 @@ export class RdsPersistence {
 
   async deleteAllControllers(): Promise<void> {
     try {
-      await this.pool.query(
-        `DELETE FROM agent_controllers WHERE agent_id != '00000000-0000-0000-0000-000000000000'`,
-      );
+      await this.pool.query(`DELETE FROM agent_controllers`);
     } catch (err) {
       console.error('[RDS] deleteAllControllers failed:', (err as Error).message);
       throw err;

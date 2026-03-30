@@ -68,14 +68,11 @@ app.use(express.json({ limit: '16kb' }));
 
 const engine = new SimulationEngine(io);
 
-// Auth: mount auth routes + optionalAuth middleware on all /api routes
-const cognitoUserPoolId = process.env.COGNITO_USER_POOL_ID;
-const cognitoClientId = process.env.COGNITO_CLIENT_ID;
-if (!cognitoUserPoolId || !cognitoClientId) {
-  console.warn(
-    '[Auth] WARNING: COGNITO_USER_POOL_ID and/or COGNITO_CLIENT_ID are not set.' +
-    ' Authentication endpoints will not function correctly.',
-  );
+// Auth: Cognito is required in all environments — without these, JWT verification
+// produces invalid JWKS URLs and signup/login fail with cryptic errors at runtime.
+if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
+  console.error('[Security] FATAL: COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID must be set.');
+  process.exit(1);
 }
 app.use(createAuthRouter());
 app.use('/api', optionalAuth());

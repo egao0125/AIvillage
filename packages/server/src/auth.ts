@@ -248,7 +248,10 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
     }
 
     try {
-      const { payload } = await jwtVerify(token, JWKS);
+      const { payload } = await jwtVerify(token, JWKS, {
+        algorithms: ['RS256'],
+        issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
+      });
       const sub = payload.sub as string;
       const email = (payload['email'] as string | undefined) ??
         (payload['cognito:username'] as string | undefined) ?? '';
