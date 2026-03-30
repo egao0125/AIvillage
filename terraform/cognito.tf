@@ -53,7 +53,7 @@ resource "aws_cognito_user_pool_client" "this" {
   name         = "${var.cluster_name}-server"
   user_pool_id = aws_cognito_user_pool.this.id
 
-  generate_secret = false
+  generate_secret = true
 
   # ALLOW_ADMIN_USER_PASSWORD_AUTH: required for server-side AdminInitiateAuth (auth.ts login/signup).
   # ALLOW_USER_SRP_AUTH: enables SRP-based client auth (recommended by AWS, avoids password on wire).

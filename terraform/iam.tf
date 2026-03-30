@@ -55,6 +55,32 @@ module "lb_controller_irsa" {
 # ---------------------------------------------------------------------------
 # IRSA: External Secrets Operator — Secrets Manager read
 # ---------------------------------------------------------------------------
+
+# Supplemental KMS policy for ESO: attach_external_secrets_policy doesn't cover KMS.
+# Required so ESO can decrypt CMK-encrypted Secrets Manager values.
+resource "aws_iam_policy" "eso_kms" {
+  name        = "${var.cluster_name}-eso-kms"
+  description = "Allow ESO IRSA role to decrypt Secrets Manager CMK-encrypted secrets"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SecretsManagerKMSDecrypt"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey",
+        ]
+        Resource = aws_kms_key.secrets_manager.arn
+      },
+    ]
+  })
+
+  tags = var.tags
+}
+
 module "eso_irsa" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.39"
@@ -70,6 +96,10 @@ module "eso_irsa" {
       provider_arn               = module.eks.oidc_provider_arn
       namespace_service_accounts = ["external-secrets:external-secrets"]
     }
+  }
+
+  role_policy_arns = {
+    eso_kms = aws_iam_policy.eso_kms.arn
   }
 
   tags = var.tags
@@ -122,8 +152,23 @@ resource "aws_iam_policy" "app_secrets" {
           "cognito-idp:AdminSetUserPassword",
           "cognito-idp:AdminInitiateAuth",
           "cognito-idp:AdminGetUser",
+          "cognito-idp:AdminUserGlobalSignOut",
         ]
         Resource = aws_cognito_user_pool.this.arn
+      },
+      {
+        # KMS: allow app pod to decrypt secrets encrypted with the Secrets Manager CMK.
+        # EnableIAMUserPermissions pattern: key policy grants root kms:*,
+        # so this IAM policy controls actual data-plane access.
+        # (AWS Well-Architected SEC 8 / NIST SP 800-53 SC-28)
+        Sid    = "SecretsManagerKMSDecrypt"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey",
+        ]
+        Resource = aws_kms_key.secrets_manager.arn
       },
     ]
   })

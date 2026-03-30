@@ -90,3 +90,16 @@ output "eso_irsa_role_arn" {
   description = "IRSA role ARN for External Secrets Operator"
   value       = module.eso_irsa.iam_role_arn
 }
+
+output "kms_secrets_manager_key_arn" {
+  description = "ARN of the KMS CMK used to encrypt Secrets Manager secrets"
+  value       = aws_kms_key.secrets_manager.arn
+  # Contains account ID — suppress from CI/CD terminal output.
+  sensitive   = true
+}
+
+output "kms_ecr_key_arn" {
+  description = "ARN of the KMS CMK used to encrypt ECR image layers"
+  value       = aws_kms_key.ecr.arn
+  sensitive   = true
+}

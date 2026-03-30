@@ -39,6 +39,7 @@ resource "aws_secretsmanager_secret" "encryption_key" {
   name                    = "ai-village/encryption-key"
   description             = "AES-256 encryption key for AI Village"
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
   tags                    = var.tags
 }
 
@@ -55,6 +56,7 @@ resource "aws_secretsmanager_secret" "dev_admin_token" {
   name                    = "ai-village/dev-admin-token"
   description             = "Dev admin bypass token for AI Village"
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
   tags                    = var.tags
 }
 
@@ -71,6 +73,7 @@ resource "aws_secretsmanager_secret" "db_app_user" {
   name                    = "ai-village/db-app-user"
   description             = "PostgreSQL app user credentials for AI Village"
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
   tags                    = var.tags
 }
 
@@ -110,6 +113,7 @@ resource "aws_secretsmanager_secret" "redis_auth_token" {
   name                    = "ai-village/redis-auth-token"
   description             = "ElastiCache Redis AUTH token for AI Village"
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
   tags                    = var.tags
 }
 
@@ -126,6 +130,7 @@ resource "aws_secretsmanager_secret" "redis_url" {
   name                    = "ai-village/redis-url"
   description             = "ElastiCache Redis URL (with AUTH token) for AI Village"
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
   tags                    = var.tags
 }
 
@@ -138,4 +143,26 @@ resource "aws_secretsmanager_secret_version" "redis_url" {
   lifecycle {
     ignore_changes = [secret_string]
   }
+}
+
+# ---------------------------------------------------------------------------
+# Cognito app client secret — auto-populated by Terraform (no REPLACE_AFTER_APPLY).
+# Terraform reads aws_cognito_user_pool_client.this.client_secret directly.
+# No lifecycle.ignore_changes — Terraform owns this value.
+# ---------------------------------------------------------------------------
+resource "aws_secretsmanager_secret" "cognito_client_secret" {
+  name                    = "ai-village/cognito-client-secret"
+  description             = "Cognito app client secret for SecretHash computation (generate_secret=true)"
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
+  tags                    = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "cognito_client_secret" {
+  secret_id = aws_secretsmanager_secret.cognito_client_secret.id
+  secret_string = jsonencode({
+    COGNITO_CLIENT_SECRET = aws_cognito_user_pool_client.this.client_secret
+  })
+  # No lifecycle.ignore_changes: Terraform writes and owns this value automatically.
+  # If the Cognito client is recreated, Terraform updates this secret automatically.
 }
