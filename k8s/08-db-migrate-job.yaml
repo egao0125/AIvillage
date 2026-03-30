@@ -97,7 +97,7 @@ spec:
             - /bin/sh
             - -c
             - |
-              set -e
+              set -euo pipefail
               # Connect as RDS master user (has DDL/GRANT privileges) to run schema migration.
               # DB_ADMIN_USER / DB_ADMIN_PASSWORD come from rds-master-secret (ESO-managed,
               # sourced from the RDS-managed master password in Secrets Manager).

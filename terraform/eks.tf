@@ -42,10 +42,19 @@ module "eks" {
     }
     vpc-cni = {
       most_recent = true
+      # CRITICAL: ENABLE_NETWORK_POLICY must be true or all NetworkPolicy objects are silently ignored.
+      # (AWS VPC CNI docs / CIS Kubernetes Benchmark 5.3.2)
+      configuration_values = jsonencode({
+        enableNetworkPolicy = "true"
+      })
     }
     # aws-ebs-csi-driver omitted: this app uses ElastiCache, not EBS volumes.
     # Add back with service_account_role_arn (IRSA) if PersistentVolumes are needed.
   }
+
+  # EKS control plane logging — required for security audit trail and incident response.
+  # (CIS EKS Benchmark 5.4.2 / AWS Well-Architected SEC 4 / NIST SP 800-53 AU-2)
+  cluster_enabled_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
 
   # Managed node group — nodes run in private subnets.
   eks_managed_node_groups = {

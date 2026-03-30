@@ -66,11 +66,14 @@ output "rds_host" {
 output "cognito_user_pool_id" {
   description = "Cognito User Pool ID"
   value       = aws_cognito_user_pool.this.id
+  # Suppress from CI/CD logs — combined with client_id, sufficient to enumerate users / attempt auth flows
+  sensitive   = true
 }
 
 output "cognito_client_id" {
   description = "Cognito User Pool Client ID"
   value       = aws_cognito_user_pool_client.this.id
+  sensitive   = true
 }
 
 output "cognito_jwks_uri" {

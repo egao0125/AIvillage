@@ -155,10 +155,16 @@ io.on('connection', (socket) => {
   });
 
   // On-demand thought generation — only when a viewer is watching
+  // Global cap: max 50 concurrent watch streams to prevent LLM cost amplification
+  // (OWASP API4: Unrestricted Resource Consumption)
   socket.on('agent:watch-thoughts', (agentId: string) => {
     if (typeof agentId !== 'string' || !UUID_REGEX.test(agentId)) return;
     const existing = watchIntervals.get(socket.id);
     if (existing) clearInterval(existing.interval);
+    if (!existing && watchIntervals.size >= 50) {
+      socket.emit('agent:thought', { agentId, thought: null, error: 'Server at capacity' });
+      return;
+    }
 
     const emit = (thought: string | null) => {
       const current = watchIntervals.get(socket.id);
@@ -200,9 +206,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Recap request — generate a catch-up recap for returning viewers
+  // Recap request — generate a catch-up recap for returning viewers.
+  // Rate limit: 1 request per 60s per socket to prevent unbounded LLM cost.
+  // (OWASP API4: Unrestricted Resource Consumption; NIST SP 800-53 SC-5)
+  const recapLastRequest = new Map<string, number>();
   socket.on('recap:request', async (data: { sinceDay: number }) => {
     if (typeof data?.sinceDay !== 'number') return;
+    const now = Date.now();
+    const last = recapLastRequest.get(socket.id) ?? 0;
+    if (now - last < 60_000) {
+      socket.emit('recap:error', { error: 'Rate limited. Try again in a moment.' });
+      return;
+    }
+    recapLastRequest.set(socket.id, now);
     try {
       const recap = await engine.recapGenerator?.generateRecap(data.sinceDay);
       if (recap) socket.emit('recap:ready', recap);
@@ -288,11 +304,13 @@ io.on('connection', (socket) => {
   // --- Infra 6: Viewport-aware streaming ---
   socket.on('viewport:update', (data: { x: number; y: number; width: number; height: number }) => {
     if (typeof data?.x !== 'number' || typeof data?.y !== 'number') return;
+    // Clamp width/height to prevent memory amplification via very large viewport requests
+    // (OWASP API4: Unrestricted Resource Consumption)
     engine.viewportManager.setViewport(socket.id, {
       x: data.x,
       y: data.y,
-      width: data.width ?? 40,
-      height: data.height ?? 30,
+      width: Math.min(data.width ?? 40, 200),
+      height: Math.min(data.height ?? 30, 200),
       buffer: 10,
     });
     // Send catch-up: agents currently in the new viewport

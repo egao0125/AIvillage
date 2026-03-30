@@ -93,13 +93,18 @@ function rateLimit(maxRequests: number, windowMs: number) {
 /** Strip characters that could be used for prompt injection */
 function sanitizeText(text: string, maxLength: number): string {
   return text
-    // Remove common prompt injection patterns
+    // Remove common prompt injection patterns (OWASP LLM01)
     .replace(/\[SYSTEM\]/gi, '')
     .replace(/\[INST\]/gi, '')
     .replace(/<<SYS>>/gi, '')
     .replace(/<\/?s>/gi, '')
     .replace(/\[ACTION:/gi, '[action:') // prevent fake ACTION tags from user input
     .replace(/```/g, '')
+    // Strip Claude/Anthropic conversation turn markers that could break prompt structure
+    .replace(/\n\n(Human|Assistant)\s*:/gi, ' ')
+    .replace(/<\/??\|?(im_start|im_end)\|?>/gi, '')
+    // Strip Unicode bidi override characters (visual injection / homoglyph attacks)
+    .replace(/[\u202A-\u202E\u2066-\u2069\u200B-\u200F\uFEFF]/g, '')
     // Remove control characters
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
     .trim()
@@ -149,7 +154,9 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 
 // Parsed once at startup — parseInt on every request is wasteful and doesn't
 // reflect hot env-var changes anyway (process restart is required to resize the pool).
-const MAX_AGENTS = parseInt(process.env.MAX_AGENTS || '50');
+// parseInt returns NaN for non-numeric strings; `|| 50` coalesces NaN to default.
+// Math.min caps at 500 to prevent runaway resource usage (OWASP API4).
+const MAX_AGENTS = Math.max(1, Math.min(parseInt(process.env.MAX_AGENTS || '50') || 50, 500));
 
 export function createRouter(engine: SimulationEngine): Router {
   const router = Router();
@@ -319,19 +326,24 @@ Relationships: ${mentalModels}`;
         goal: safeGoal,
         spriteId: 'default',
         fears: Array.isArray(req.body.fears)
-          ? req.body.fears.map((s: any) => sanitizeText(String(s), 100)).filter(Boolean).slice(0, 5)
+          ? req.body.fears.filter((s: unknown) => typeof s === 'string').map((s: string) => sanitizeText(s, 100)).filter(Boolean).slice(0, 5)
           : undefined,
         desires: Array.isArray(req.body.desires)
-          ? req.body.desires.map((s: any) => sanitizeText(String(s), 100)).filter(Boolean).slice(0, 5)
+          ? req.body.desires.filter((s: unknown) => typeof s === 'string').map((s: string) => sanitizeText(s, 100)).filter(Boolean).slice(0, 5)
           : undefined,
         coreValues: Array.isArray(req.body.coreValues)
-          ? req.body.coreValues.map((s: any) => sanitizeText(String(s), 100)).filter(Boolean).slice(0, 5)
+          ? req.body.coreValues.filter((s: unknown) => typeof s === 'string').map((s: string) => sanitizeText(s, 100)).filter(Boolean).slice(0, 5)
           : undefined,
         contradictions: req.body.contradictions
           ? sanitizeText(String(req.body.contradictions), 200)
           : undefined,
         speechPattern: req.body.speechPattern
           ? sanitizeText(String(req.body.speechPattern), 200)
+          : undefined,
+        // constitutionalRules injected into LLM system prompt — must be sanitized
+        // (OWASP LLM01: Prompt Injection via agent configuration fields)
+        constitutionalRules: Array.isArray(req.body.constitutionalRules)
+          ? req.body.constitutionalRules.filter((s: unknown) => typeof s === 'string').map((s: string) => sanitizeText(s, 200)).filter(Boolean).slice(0, 10)
           : undefined,
       };
 

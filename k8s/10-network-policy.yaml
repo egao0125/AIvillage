@@ -26,9 +26,9 @@ spec:
 ---
 # ---------------------------------------------------------------------------
 # 2. Allow ingress from ALB to the app Pod on port 8080.
-#    The ALB injects traffic as NodePort or IP target — allow from any source
-#    within the VPC (CIDR-based rules are not supported in all CNIs; the
-#    pragmatic approach is allow from all and rely on SG for network isolation).
+#    ALB in IP target mode sends traffic from VPC CIDR range.
+#    Restricting to VPC CIDR prevents pods in other namespaces from bypassing the ALB.
+#    (CIS Kubernetes Benchmark 5.3.2 / NIST SP 800-204A)
 # ---------------------------------------------------------------------------
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -42,7 +42,10 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    - ports:
+    - from:
+        - ipBlock:
+            cidr: 10.100.0.0/16   # VPC CIDR — ALB and node IPs only
+      ports:
         - port: 8080
           protocol: TCP
 ---
@@ -70,19 +73,22 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # RDS PostgreSQL
-    - ports:
+    # RDS PostgreSQL — scoped to VPC CIDR (NIST SP 800-53 SC-7)
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/16
+      ports:
         - port: 5432
           protocol: TCP
-    # ElastiCache Redis (TLS)
-    - ports:
+    # ElastiCache Redis (TLS) — scoped to VPC CIDR
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/16
+      ports:
         - port: 6379
           protocol: TCP
     # AWS SDK endpoints: Cognito, Secrets Manager, ECR, CloudWatch (HTTPS)
-    - ports:
-        - port: 443
-          protocol: TCP
-    # Anthropic API and other LLM providers (HTTPS)
+    # and Anthropic/OpenAI LLM APIs — allow HTTPS to internet via NAT gateway
     - ports:
         - port: 443
           protocol: TCP

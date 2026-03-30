@@ -35,6 +35,17 @@ resource "aws_cognito_user_pool" "this" {
     }
   }
 
+  # MFA — OPTIONAL allows per-user opt-in without breaking existing accounts.
+  # Change to "ON" to enforce MFA for all users (OWASP ASVS v4.0 §2.8 / NIST SP 800-63B AAL2).
+  mfa_configuration = "OPTIONAL"
+  software_token_mfa_configuration {
+    enabled = true
+  }
+
+  # Prevent accidental destruction of user accounts — irreversible in Cognito.
+  # (AWS Well-Architected REL 9 / NIST SP 800-53 CP-9)
+  deletion_protection = "ACTIVE"
+
   tags = var.tags
 }
 
@@ -55,7 +66,7 @@ resource "aws_cognito_user_pool_client" "this" {
   ]
 
   access_token_validity  = 60   # minutes
-  refresh_token_validity = 30   # days
+  refresh_token_validity = 7    # days — reduced from 30 per OWASP ASVS v4.0 §3.3.2 / NIST SP 800-63B §7.1
   id_token_validity      = 60   # minutes
 
   token_validity_units {
@@ -63,6 +74,10 @@ resource "aws_cognito_user_pool_client" "this" {
     refresh_token = "days"
     id_token      = "minutes"
   }
+
+  # Revoke refresh tokens on sign-out — ensures stolen refresh tokens can't be replayed
+  # (OWASP ASVS v4.0 §3.3.3)
+  enable_token_revocation = true
 
   prevent_user_existence_errors = "ENABLED"
 }

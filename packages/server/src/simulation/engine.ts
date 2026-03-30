@@ -70,7 +70,14 @@ export class SimulationEngine {
       this.persistence = new RdsPersistence(connStr);
       console.log('[Engine] RDS persistence enabled');
     } else {
-      console.log('[Engine] RDS persistence disabled (missing DB_HOST, DB_USER, or DB_PASSWORD)');
+      if (process.env.NODE_ENV === 'production') {
+        // In production, all memories are lost on pod restart if RDS is unavailable.
+        // This is a data durability issue — ensure DB_HOST, DB_USER, DB_PASSWORD are set.
+        // (AWS Well-Architected: stateful components must be externalized)
+        console.error('[Engine] FATAL: RDS persistence disabled in production. Set DB_HOST, DB_USER, DB_PASSWORD to prevent data loss on pod restart.');
+        process.exit(1);
+      }
+      console.log('[Engine] RDS persistence disabled — using in-memory store (dev mode only)');
     }
   }
 
@@ -1034,6 +1041,9 @@ export class SimulationEngine {
         return;
       }
       ctrl.executeQueuedDecision(decision.type, decision.context)
+        .catch((err: unknown) => {
+          console.warn('[Engine] executeQueuedDecision failed:', (err as Error).message);
+        })
         .finally(() => this.decisionQueue.complete(decision.agentId));
     }, 50);
 
@@ -2204,6 +2214,8 @@ Answer with ONLY one word: "support" or "oppose".`,
         ).then((outcomeDesc: string) => {
           const controller = this.controllers.get(actorId);
           if (controller) controller.lastOutcomeDescription = outcomeDesc;
+        }).catch((err: unknown) => {
+          console.warn('[Engine] executeSocialAction failed:', (err as Error).message);
         });
       },
       requestConversation: requestConv,

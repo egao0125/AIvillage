@@ -97,7 +97,8 @@ const JWKS = createRemoteJWKSet(
  */
 export function optionalAuth(_config?: unknown) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
+    const authHdr = req.headers.authorization;
+    const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
     if (!token) {
       req.userId = null;
       return next();
@@ -278,14 +279,26 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
   // AdminUserGlobalSignOut revokes all refresh tokens immediately.
   // Note: access tokens are JWTs (stateless) and remain valid until expiry (max 60 min).
   // The client must discard the access token locally on logout.
-  router.post('/api/auth/logout', async (req: Request, res: Response) => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
+  // Rate limited: 20 requests/hour per IP to prevent Cognito API amplification DoS.
+  router.post('/api/auth/logout', authRateLimit(20, 60 * 60 * 1_000), async (req: Request, res: Response) => {
+    const authHeader = req.headers.authorization;
+    // Case-insensitive Bearer prefix parsing (OWASP ASVS §3.5.3)
+    const token = authHeader?.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7)
+      : undefined;
     if (token) {
       try {
         const { payload } = await jwtVerify(token, JWKS, {
           algorithms: ['RS256'],
           issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
         });
+        // Validate token_use=access and client_id before trusting the token for a sign-out action
+        // (OWASP ASVS §3.5.2 — validate all claims before trust actions)
+        if (payload['token_use'] !== 'access' || payload['client_id'] !== COGNITO_CLIENT_ID) {
+          // Invalid token type — still return 200 to avoid leaking information
+          res.status(200).json({ message: 'Logged out' });
+          return;
+        }
         // Revoke all refresh tokens — prevents silent re-auth after logout
         const username = (payload['cognito:username'] as string | undefined) ?? (payload.sub as string | undefined);
         if (username) {
@@ -304,7 +317,8 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
 
   // GET /api/auth/me
   router.get('/api/auth/me', async (req: Request, res: Response) => {
-    const token = req.headers.authorization?.replace('Bearer ', '');
+    const authHdr = req.headers.authorization;
+    const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
     if (!token) {
       res.status(401).json({ error: 'Not signed in' });
       return;
