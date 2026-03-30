@@ -88,7 +88,12 @@ module "eso_irsa" {
   role_name = "${var.cluster_name}-eso"
 
   attach_external_secrets_policy                 = true
-  external_secrets_secrets_manager_arns          = ["arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:ai-village/*"]
+  external_secrets_secrets_manager_arns = [
+    # App secrets (all ai-village/* paths)
+    "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:ai-village/*",
+    # RDS-managed master password (rds!db-* path, used by db-migrate Job only)
+    "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:rds!db-*",
+  ]
   external_secrets_secrets_manager_create_permission = false
 
   oidc_providers = {
