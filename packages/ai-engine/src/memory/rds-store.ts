@@ -89,10 +89,16 @@ export class RdsMemoryStore implements MemoryStore {
 
   async retrieve(agentId: string, query: string, limit = 10): Promise<Memory[]> {
     const fetchLimit = limit * 5;
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT * FROM memories WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT $2`,
-      [agentId, fetchLimit],
-    );
+    let result: { rows: Record<string, unknown>[] };
+    try {
+      result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT $2`,
+        [agentId, fetchLimit],
+      );
+    } catch (err) {
+      console.error('[RdsMemoryStore] retrieve() failed:', (err as Error).message);
+      return [];
+    }
 
     if (result.rows.length === 0) return [];
 
@@ -147,27 +153,42 @@ export class RdsMemoryStore implements MemoryStore {
   }
 
   async getRecent(agentId: string, limit = 20): Promise<Memory[]> {
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT * FROM memories WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT $2`,
-      [agentId, limit],
-    );
-    return result.rows.map(row => this.rowToMemory(row));
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT $2`,
+        [agentId, limit],
+      );
+      return result.rows.map(row => this.rowToMemory(row));
+    } catch (err) {
+      console.error('[RdsMemoryStore] getRecent() failed:', (err as Error).message);
+      return [];
+    }
   }
 
   async getByImportance(agentId: string, minImportance: number): Promise<Memory[]> {
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT * FROM memories WHERE agent_id = $1 AND importance >= $2 ORDER BY importance DESC`,
-      [agentId, minImportance],
-    );
-    return result.rows.map(row => this.rowToMemory(row));
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 AND importance >= $2 ORDER BY importance DESC`,
+        [agentId, minImportance],
+      );
+      return result.rows.map(row => this.rowToMemory(row));
+    } catch (err) {
+      console.error('[RdsMemoryStore] getByImportance() failed:', (err as Error).message);
+      return [];
+    }
   }
 
   async getOlderThan(agentId: string, timestamp: number): Promise<Memory[]> {
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT * FROM memories WHERE agent_id = $1 AND timestamp < $2 ORDER BY timestamp DESC`,
-      [agentId, timestamp],
-    );
-    return result.rows.map(row => this.rowToMemory(row));
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 AND timestamp < $2 ORDER BY timestamp DESC`,
+        [agentId, timestamp],
+      );
+      return result.rows.map(row => this.rowToMemory(row));
+    } catch (err) {
+      console.error('[RdsMemoryStore] getOlderThan() failed:', (err as Error).message);
+      return [];
+    }
   }
 
   async removeBatch(ids: string[]): Promise<void> {
@@ -180,12 +201,17 @@ export class RdsMemoryStore implements MemoryStore {
   }
 
   async getById(agentId: string, memoryId: string): Promise<Memory | undefined> {
-    const result = await this.pool.query<Record<string, unknown>>(
-      `SELECT * FROM memories WHERE id = $1 AND agent_id = $2`,
-      [memoryId, agentId],
-    );
-    if (result.rows.length === 0) return undefined;
-    return this.rowToMemory(result.rows[0]);
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE id = $1 AND agent_id = $2`,
+        [memoryId, agentId],
+      );
+      if (result.rows.length === 0) return undefined;
+      return this.rowToMemory(result.rows[0]);
+    } catch (err) {
+      console.error('[RdsMemoryStore] getById() failed:', (err as Error).message);
+      return undefined;
+    }
   }
 
   private rowToMemory(row: Record<string, unknown>): Memory {
