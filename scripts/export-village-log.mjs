@@ -494,7 +494,8 @@ async function main() {
     console.log(`  Memories: ${data.memories.length}`);
 
     const html = buildHTML(data);
-    const outDir = '/Users/ozawaegao/Downloads';
+    // Default output directory: $EXPORT_OUT_DIR env var, or current working directory.
+    const outDir = process.env.EXPORT_OUT_DIR || process.cwd();
     const outPath = path.join(outDir, 'AI_Village_Full_Log.html');
     fs.writeFileSync(outPath, html, 'utf-8');
     console.log(`\n✅ Written to: ${outPath}`);
