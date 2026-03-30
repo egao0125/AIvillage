@@ -86,7 +86,7 @@ const SocialViewInner: React.FC = () => {
   const dimmedMap = useMemo(() => {
     const m = new Map<string, boolean>();
     for (const n of nodes) {
-      if ((n as any)._dimmed) m.set(n.id, true);
+      if (n._dimmed) m.set(n.id, true);
     }
     return m;
   }, [nodes]);
@@ -96,7 +96,7 @@ const SocialViewInner: React.FC = () => {
     return positioned.map((n, i) => {
       const x = (n.x !== 0 || n.y !== 0) ? n.x : svgWidth / 2 + Math.min(svgWidth, svgHeight) * 0.3 * Math.cos((2 * Math.PI * i) / Math.max(positioned.length, 1));
       const y = (n.x !== 0 || n.y !== 0) ? n.y : svgHeight / 2 + Math.min(svgWidth, svgHeight) * 0.3 * Math.sin((2 * Math.PI * i) / Math.max(positioned.length, 1));
-      return { ...n, x, y, _dimmed: dimmedMap.get(n.id) ?? false } as any;
+      return { ...n, x, y, _dimmed: dimmedMap.get(n.id) ?? false };
     });
   }, [rawNodes, nodes, dimmedMap, svgWidth, svgHeight]);
 

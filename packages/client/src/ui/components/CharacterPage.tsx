@@ -13,25 +13,34 @@ export const CharacterPage: React.FC = () => {
   const [timeline, setTimeline] = useState<CharacterTimelineEvent[]>([]);
   const [arcSummary, setArcSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
 
   const agent = agents.find(a => a.id === agentId);
 
   useEffect(() => {
     if (!agentId) return;
     setLoading(true);
+    setHasError(false);
     setArcSummary(null);
     setTimeline([]);
 
     // Fetch timeline and arc summary in parallel
     Promise.all([
-      fetch(`${API_BASE}/api/agents/${agentId}/timeline?limit=50`).then(r => r.json()).catch(() => []),
-      fetch(`${API_BASE}/api/agents/${agentId}/arc-summary`).then(r => r.json()).catch(() => ({ summary: '' })),
+      fetch(`${API_BASE}/api/agents/${agentId}/timeline?limit=50`).then(r => {
+        if (!r.ok) throw new Error(`Timeline fetch failed: ${r.status}`);
+        return r.json();
+      }),
+      fetch(`${API_BASE}/api/agents/${agentId}/arc-summary`).then(r => {
+        if (!r.ok) throw new Error(`Arc summary fetch failed: ${r.status}`);
+        return r.json();
+      }),
     ]).then(([timelineData, arcData]) => {
       setTimeline(timelineData);
       setArcSummary(arcData.summary || null);
       setLoading(false);
     }).catch((err: unknown) => {
       console.warn('[CharacterPage] Failed to load agent data:', (err as Error).message);
+      setHasError(true);
       setLoading(false);
     });
   }, [agentId]);
@@ -159,6 +168,10 @@ export const CharacterPage: React.FC = () => {
           </div>
           {loading ? (
             <div style={{ height: 60, background: `${COLORS.bgCard}`, borderRadius: 4, animation: 'pulse 1.5s infinite' }} />
+          ) : hasError ? (
+            <div style={{ fontFamily: FONTS.body, fontSize: '12px', color: COLORS.warning, fontStyle: 'italic' }}>
+              Failed to load character data. Check server connection.
+            </div>
           ) : (
             <div style={{ fontFamily: FONTS.body, fontSize: '13px', color: COLORS.text, lineHeight: 1.7 }}>
               {arcSummary || 'Their story is just beginning...'}

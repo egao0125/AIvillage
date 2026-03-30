@@ -47,6 +47,8 @@ export class SimulationEngine {
   private lastWeeklySummaryDay: number = 0;
   private cachedWeeklySummary: string | null = null;
   private weeklySummaryGenerating: boolean = false;
+  /** Shared RdsMemoryStore for agents loaded from persistence — held so cleanup() can be called on removeAgent() */
+  private sharedMemoryStore: RdsMemoryStore | null = null;
 
   // Circuit breaker state for isDbHealthy() readiness probe.
   // Prevents log flooding (k8s calls every 10s) while still surfacing the first failure
@@ -373,6 +375,7 @@ export class SimulationEngine {
       const globalKey2 = process.env.ANTHROPIC_API_KEY_2;
       const defaultModel = 'claude-haiku-4-5-20251001';
       const sharedMemoryStore = new RdsMemoryStore(this.persistence.pool);
+      this.sharedMemoryStore = sharedMemoryStore;
 
       for (let i = 0; i < agents.length; i++) {
         const agent = agents[i];
@@ -695,6 +698,8 @@ export class SimulationEngine {
     this.cognitions.delete(id);
     this.agentApiKeys.delete(id);
     this.decisionQueue.removeAgent(id);
+    // Free TF-IDF embedder from shared store (prevents memory leak in long-running simulations)
+    this.sharedMemoryStore?.cleanup(id);
 
     // Remove from any active conversations
     for (const conv of this.world.getActiveConversations()) {
@@ -2320,6 +2325,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     const sharedMemoryStore = this.persistence
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
+    this.sharedMemoryStore = sharedMemoryStore instanceof RdsMemoryStore ? sharedMemoryStore : null;
 
     for (const agent of this.world.agents.values()) {
       // Reset agent state

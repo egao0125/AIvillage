@@ -231,9 +231,10 @@ export class RdsPersistence {
           await new Promise<void>((resolve) => setTimeout(resolve, Math.min(delay, 10_000)));
           delay *= 2;
         } else {
-          // Non-transient error or retries exhausted — log and let next cycle retry
-          console.error('[RDS] saveAll failed (will retry next cycle):', (err as Error).message);
-          return;
+          // Non-transient or retries exhausted — throw so caller can detect data loss
+          const msg = `Persistence failed after ${MAX_RETRIES} retries: ${(err as Error).message}`;
+          console.error('[RDS] saveAll exhausted retries:', msg);
+          throw new Error(msg);
         }
       }
     }

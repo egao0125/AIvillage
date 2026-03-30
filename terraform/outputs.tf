@@ -33,6 +33,9 @@ output "ecr_push_commands" {
 output "redis_endpoint" {
   description = "ElastiCache Redis primary endpoint (TLS) — use as REDIS_URL in Secrets Manager"
   value       = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379"
+  # sensitive: connection string reveals internal hostname — suppress from terraform apply output.
+  # Access with: terraform output -raw redis_endpoint
+  sensitive   = true
 }
 
 output "vpc_id" {
@@ -43,16 +46,21 @@ output "vpc_id" {
 output "rds_endpoint" {
   description = "RDS instance endpoint (host:port)"
   value       = aws_db_instance.this.endpoint
+  sensitive   = true
 }
 
 output "rds_master_secret_arn" {
   description = "ARN of the RDS-managed master password secret in Secrets Manager (use in 02b-rds-master-external-secret.yaml)"
   value       = aws_db_instance.this.master_user_secret[0].secret_arn
+  # sensitive: ARN reveals account ID + secret path — suppress from terminal output.
+  # Access with: terraform output -raw rds_master_secret_arn
+  sensitive   = true
 }
 
 output "rds_host" {
   description = "RDS instance hostname"
   value       = aws_db_instance.this.address
+  sensitive   = true
 }
 
 output "cognito_user_pool_id" {

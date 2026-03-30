@@ -88,7 +88,9 @@ export class RdsMemoryStore implements MemoryStore {
   }
 
   async retrieve(agentId: string, query: string, limit = 10): Promise<Memory[]> {
-    const fetchLimit = limit * 5;
+    // Cap fetchLimit to prevent runaway queries on large memory tables (OOM / pool exhaustion).
+    // limit*5 gives enough candidates for TF-IDF re-ranking; 1000 is a hard safety ceiling.
+    const fetchLimit = Math.min(limit * 5, 1_000);
     let result: { rows: Record<string, unknown>[] };
     try {
       result = await this.pool.query<Record<string, unknown>>(
@@ -198,6 +200,16 @@ export class RdsMemoryStore implements MemoryStore {
     } catch (err) {
       console.error('[RdsMemoryStore] removeBatch() failed:', (err as Error).message);
     }
+  }
+
+  /**
+   * Release in-memory state for a removed agent.
+   * Call this when an agent is permanently deleted so the TF-IDF embedder
+   * and bootstrap flag for that agent are freed from memory.
+   */
+  cleanup(agentId: string): void {
+    this.embedders.delete(agentId);
+    this.bootstrapped.delete(agentId);
   }
 
   async getById(agentId: string, memoryId: string): Promise<Memory | undefined> {
