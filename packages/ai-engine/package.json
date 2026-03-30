@@ -19,7 +19,6 @@
   "dependencies": {
     "@ai-village/shared": "workspace:*",
     "@anthropic-ai/sdk": "^0.39.0",
-    "@supabase/supabase-js": "^2.99.3",
     "openai": "^4.77.0",
     "pg": "^8.11.3"
   },

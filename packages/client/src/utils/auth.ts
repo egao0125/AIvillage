@@ -1,15 +1,18 @@
-// Shared auth helpers — token + userId stored in localStorage
+// Shared auth helpers — token + userId stored in sessionStorage
+// sessionStorage is cleared when the tab is closed and is not accessible to
+// scripts in other tabs, reducing the blast radius of an XSS attack compared
+// to localStorage (OWASP: "Do not store session identifiers in localStorage").
 export function getToken(): string | null {
-  return localStorage.getItem('ai-village-token');
+  return sessionStorage.getItem('ai-village-token');
 }
 
 export function setToken(token: string): void {
-  localStorage.setItem('ai-village-token', token);
+  sessionStorage.setItem('ai-village-token', token);
 }
 
 export function clearToken(): void {
-  localStorage.removeItem('ai-village-token');
-  localStorage.removeItem('ai-village-user-id');
+  sessionStorage.removeItem('ai-village-token');
+  sessionStorage.removeItem('ai-village-user-id');
 }
 
 export function authHeaders(): Record<string, string> {
@@ -18,9 +21,9 @@ export function authHeaders(): Record<string, string> {
 }
 
 export function setUserId(id: string): void {
-  localStorage.setItem('ai-village-user-id', id);
+  sessionStorage.setItem('ai-village-user-id', id);
 }
 
 export function getUserId(): string | null {
-  return localStorage.getItem('ai-village-user-id');
+  return sessionStorage.getItem('ai-village-user-id');
 }

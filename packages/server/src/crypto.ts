@@ -29,10 +29,10 @@ const ENCRYPTED_RE = /^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/i;
 function loadKey(): Buffer | null {
   const hex = process.env.ENCRYPTION_KEY;
   if (!hex) return null;
-  if (hex.length !== 64) {
+  if (!/^[0-9a-f]{64}$/i.test(hex)) {
     console.error(
-      '[Crypto] ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ' +
-      'Current value has length ' + hex.length + '. Key ignored — storing plaintext.',
+      '[Crypto] ENCRYPTION_KEY must be exactly 64 hex characters (0-9, a-f). ' +
+      'Current value has length ' + hex.length + ' and/or contains non-hex characters. Key ignored — storing plaintext.',
     );
     return null;
   }
