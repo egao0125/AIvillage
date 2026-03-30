@@ -51,6 +51,20 @@ COPY --from=builder /app/packages/client/package.json    packages/client/
 # Install production dependencies only — excludes tsx, tsc, vite, eslint
 RUN pnpm install --frozen-lockfile --prod
 
+# Download AWS global TLS CA bundle (RDS + ElastiCache).
+# Amazon intermediate CAs are not all present in Node.js's bundled Mozilla store,
+# so we fetch the authoritative bundle from AWS Trust Services and register it via
+# NODE_EXTRA_CA_CERTS — the standard Node.js mechanism for adding trusted CAs.
+# Source: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+# (Same bundle covers RDS and ElastiCache — both use Amazon Trust Services CAs)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -sSfL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
+       -o /app/aws-ca-bundle.pem \
+    && apt-get purge -y --auto-remove curl \
+    && rm -rf /var/lib/apt/lists/*
+ENV NODE_EXTRA_CA_CERTS=/app/aws-ca-bundle.pem
+
 # Copy compiled dist artifacts from builder.
 # Must happen after pnpm install so workspace symlinks already point to these dirs.
 COPY --from=builder /app/packages/shared/dist    packages/shared/dist

@@ -30,9 +30,9 @@ export function setupRedis(): { pub: Redis; sub: Redis } | null {
     return null;
   }
 
-  // ioredis handles rediss:// (TLS) automatically; suppress cert validation for
-  // ElastiCache which uses AWS-managed CA not always present in Node.js bundles.
-  const tlsOptions = url.startsWith('rediss://') ? { tls: { rejectUnauthorized: false } } : {};
+  // Amazon Root CA は Node.js 組み込み CA ストアに含まれるため証明書検証を有効化
+  // ElastiCache in-transit encryption の証明書は Amazon Trust Services が発行 (Mozilla trust store 収録済み)
+  const tlsOptions = url.startsWith('rediss://') ? { tls: { rejectUnauthorized: true } } : {};
   _pub = new Redis(url, { ...REDIS_OPTIONS, ...tlsOptions });
   _sub = new Redis(url, { ...REDIS_OPTIONS, ...tlsOptions });
 
