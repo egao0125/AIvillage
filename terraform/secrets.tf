@@ -101,7 +101,9 @@ resource "random_password" "redis_auth" {
   length  = 64
   # ElastiCache auth_token: printable ASCII only; @, ", /, and space are not allowed.
   special          = true
-  override_special = "!#$%&*()-_=+[]{}<>?"
+  # ElastiCache AUTH token valid special chars: !&#$^<>- only.
+  # (%, *, (, ), _, =, +, [, ], {, }, ?, / are rejected by ElastiCache ModifyReplicationGroup)
+  override_special = "!&#$^<>-"
 
   # Keep the same token across plan/apply cycles.
   lifecycle {
