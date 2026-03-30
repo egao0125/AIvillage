@@ -178,14 +178,24 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         AuthParameters: { USERNAME: normalizedEmail, PASSWORD: password },
       }));
 
-      const token = authResult.AuthenticationResult!.AccessToken!;
+      const token = authResult.AuthenticationResult?.AccessToken;
+      if (!token) {
+        console.error('[Auth] signup: Cognito returned no AccessToken');
+        res.status(500).json({ error: 'Authentication failed' });
+        return;
+      }
 
       // 4. Retrieve the user's sub
       const userRecord = await cognitoClient.send(new AdminGetUserCommand({
         UserPoolId: COGNITO_USER_POOL_ID,
         Username: normalizedEmail,
       }));
-      const sub = userRecord.UserAttributes?.find((a) => a.Name === 'sub')?.Value!;
+      const sub = userRecord.UserAttributes?.find((a) => a.Name === 'sub')?.Value;
+      if (!sub) {
+        console.error('[Auth] signup: Cognito returned no sub attribute');
+        res.status(500).json({ error: 'Authentication failed' });
+        return;
+      }
 
       res.json({ token, user: { id: sub, email: normalizedEmail } });
     } catch (err) {
@@ -218,13 +228,23 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         AuthParameters: { USERNAME: normalizedEmail, PASSWORD: password },
       }));
 
-      const token = authResult.AuthenticationResult!.AccessToken!;
+      const token = authResult.AuthenticationResult?.AccessToken;
+      if (!token) {
+        console.error('[Auth] login: Cognito returned no AccessToken');
+        res.status(500).json({ error: 'Authentication failed' });
+        return;
+      }
 
       const userRecord = await cognitoClient.send(new AdminGetUserCommand({
         UserPoolId: COGNITO_USER_POOL_ID,
         Username: normalizedEmail,
       }));
-      const sub = userRecord.UserAttributes?.find((a) => a.Name === 'sub')?.Value!;
+      const sub = userRecord.UserAttributes?.find((a) => a.Name === 'sub')?.Value;
+      if (!sub) {
+        console.error('[Auth] login: Cognito returned no sub attribute');
+        res.status(500).json({ error: 'Authentication failed' });
+        return;
+      }
 
       res.json({ token, user: { id: sub, email: normalizedEmail } });
     } catch (err) {
@@ -252,7 +272,11 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         algorithms: ['RS256'],
         issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
       });
-      const sub = payload.sub as string;
+      const sub = payload.sub;
+      if (!sub) {
+        res.status(401).json({ error: 'Invalid token: missing subject' });
+        return;
+      }
       const email = (payload['email'] as string | undefined) ??
         (payload['cognito:username'] as string | undefined) ?? '';
       res.json({ user: { id: sub, email } });

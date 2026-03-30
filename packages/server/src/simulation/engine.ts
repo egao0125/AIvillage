@@ -56,7 +56,7 @@ export class SimulationEngine {
     const dbUser = process.env.DB_USER;
     const dbPassword = process.env.DB_PASSWORD;
     if (dbHost && dbUser && dbPassword) {
-      const connStr = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'aivillage'}?sslmode=no-verify`;
+      const connStr = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'aivillage'}?sslmode=verify-full`;
       this.persistence = new RdsPersistence(connStr);
       console.log('[Engine] RDS persistence enabled');
     } else {

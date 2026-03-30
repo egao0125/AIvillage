@@ -51,7 +51,9 @@ export class RdsPersistence {
       max: 20,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
-      ssl: process.env.NODE_ENV !== 'test' ? { rejectUnauthorized: false } : undefined,
+      // Amazon Root CA は Node.js 組み込み Mozilla CA ストアに含まれるため証明書検証を有効化
+      // (OWASP/AWS Security Best Practices: 本番環境での rejectUnauthorized:false は禁止)
+      ssl: process.env.NODE_ENV !== 'test' ? { rejectUnauthorized: true } : undefined,
     });
   }
 
