@@ -1,3 +1,7 @@
+# Retrieve current AWS account ID for use in IAM resource ARNs.
+# Avoids hardcoding and ensures least-privilege (specific account only).
+data "aws_caller_identity" "current" {}
+
 # ---------------------------------------------------------------------------
 # IAM role for the AWS Load Balancer Controller (IRSA).
 #
@@ -53,7 +57,7 @@ module "eso_irsa" {
   role_name = "${var.cluster_name}-eso"
 
   attach_external_secrets_policy                 = true
-  external_secrets_secrets_manager_arns          = ["arn:aws:secretsmanager:${var.aws_region}:*:secret:ai-village/*"]
+  external_secrets_secrets_manager_arns          = ["arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:ai-village/*"]
   external_secrets_secrets_manager_create_permission = false
 
   oidc_providers = {
@@ -103,7 +107,7 @@ resource "aws_iam_policy" "app_secrets" {
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret",
         ]
-        Resource = "arn:aws:secretsmanager:${var.aws_region}:*:secret:ai-village/*"
+        Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:ai-village/*"
       },
       {
         Sid    = "CognitoAdminAPI"
