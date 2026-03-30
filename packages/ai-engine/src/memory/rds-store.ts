@@ -82,7 +82,7 @@ export class RdsMemoryStore implements MemoryStore {
         ],
       );
     } catch (err) {
-      console.error('[RdsMemoryStore] add() failed:', err);
+      console.error('[RdsMemoryStore] add() failed:', (err as Error).message);
       // Don't throw — memory failure shouldn't crash the simulation
     }
   }
@@ -196,7 +196,7 @@ export class RdsMemoryStore implements MemoryStore {
     try {
       await this.pool.query(`DELETE FROM memories WHERE id = ANY($1::uuid[])`, [ids]);
     } catch (err) {
-      console.error('[RdsMemoryStore] removeBatch() failed:', err);
+      console.error('[RdsMemoryStore] removeBatch() failed:', (err as Error).message);
     }
   }
 

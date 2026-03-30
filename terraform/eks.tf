@@ -20,10 +20,14 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  # Allow kubectl from developer machines; restrict to your IP in production.
-  cluster_endpoint_public_access  = true
-  cluster_endpoint_private_access = true
-  # cluster_endpoint_public_access_cidrs = ["YOUR_IP/32"]
+  # Public endpoint enabled for developer kubectl access.
+  # SECURITY: restrict to known CIDRs — leaving this open exposes the k8s API to the internet.
+  # Add your corporate/VPN CIDR before applying (CIS EKS Benchmark 5.4.2).
+  # Example: ["203.0.113.0/24", "198.51.100.0/24"]
+  # To use private-only access (most secure): set public to false and use a bastion/VPN.
+  cluster_endpoint_public_access       = true
+  cluster_endpoint_private_access      = true
+  cluster_endpoint_public_access_cidrs = var.eks_public_access_cidrs
 
   # OIDC is required for IRSA (used by AWS Load Balancer Controller).
   enable_irsa = true
@@ -57,6 +61,16 @@ module "eks" {
 
       # Nodes live in private subnets; no public IP exposure.
       subnet_ids = module.vpc.private_subnets
+
+      # IMDSv2 enforcement — prevents SSRF-based credential theft (Capital One 2019 attack pattern).
+      # http_tokens = "required": PUT session token required before GET (blocks single-step SSRF).
+      # http_put_response_hop_limit = 1: prevents Pod-level IMDS access; IRSA is the only auth path.
+      # CIS AWS Foundations Benchmark 5.6.1 / AWS Well-Architected SEC 7.
+      metadata_options = {
+        http_endpoint               = "enabled"
+        http_tokens                 = "required"
+        http_put_response_hop_limit = 1
+      }
 
       labels = {
         role = "application"

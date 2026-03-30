@@ -1,6 +1,38 @@
 # ---------------------------------------------------------------------------
 # Secrets Manager — app secrets (ESO syncs these into k8s Secret)
-# lifecycle.ignore_changes prevents Terraform from overwriting after apply
+#
+# DESIGN: "skeleton-first" pattern
+#   1. `terraform apply` creates the secret resources with placeholder values.
+#   2. After apply, manually set real values via AWS CLI or Console (see below).
+#   3. lifecycle.ignore_changes = [secret_string] prevents subsequent applies
+#      from overwriting the real values with the placeholders.
+#
+# AFTER APPLY — replace each placeholder with real values:
+#
+#   # encryption-key  (32-byte random hex string recommended)
+#   aws secretsmanager put-secret-value \
+#     --secret-id ai-village/encryption-key \
+#     --secret-string '{"ENCRYPTION_KEY":"<your-256-bit-key>"}'
+#
+#   # dev-admin-token  (strong random token for dev bypass)
+#   aws secretsmanager put-secret-value \
+#     --secret-id ai-village/dev-admin-token \
+#     --secret-string '{"DEV_ADMIN_TOKEN":"<your-token>"}'
+#
+#   # db-app-user  (use the RDS endpoint from `terraform output rds_host`)
+#   aws secretsmanager put-secret-value \
+#     --secret-id ai-village/db-app-user \
+#     --secret-string '{"username":"aivillage_app","password":"<db-password>","host":"<rds-host>","port":"5432","dbname":"aivillage"}'
+#
+#   # redis-url  (use the endpoint from `terraform output redis_endpoint`)
+#   aws secretsmanager put-secret-value \
+#     --secret-id ai-village/redis-url \
+#     --secret-string '{"REDIS_URL":"<rediss://...>"}'
+#
+# WARNING: Do NOT run `terraform apply` again before replacing the placeholders,
+# as ignore_changes will protect the real values once set. However, if the secret
+# version resource is tainted or recreated, the placeholder will overwrite the
+# real value and must be replaced again.
 # ---------------------------------------------------------------------------
 
 resource "aws_secretsmanager_secret" "encryption_key" {
@@ -57,16 +89,51 @@ resource "aws_secretsmanager_secret_version" "db_app_user" {
   }
 }
 
+# Redis AUTH token — generated at apply time and stored in Secrets Manager.
+# ElastiCache requires transit_encryption_enabled = true when auth_token is set (already done).
+# The token is auto-generated with random_password so no manual step is needed.
+# Rotation: update auth_token in redis.tf + Secrets Manager, then set
+#   auth_token_update_strategy = "ROTATE" in aws_elasticache_replication_group.
+resource "random_password" "redis_auth" {
+  length  = 64
+  # ElastiCache auth_token: printable ASCII only; @, ", /, and space are not allowed.
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>?"
+
+  # Keep the same token across plan/apply cycles.
+  lifecycle {
+    ignore_changes = [result]
+  }
+}
+
+resource "aws_secretsmanager_secret" "redis_auth_token" {
+  name                    = "ai-village/redis-auth-token"
+  description             = "ElastiCache Redis AUTH token for AI Village"
+  recovery_window_in_days = 7
+  tags                    = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "redis_auth_token" {
+  secret_id     = aws_secretsmanager_secret.redis_auth_token.id
+  secret_string = jsonencode({ REDIS_AUTH_TOKEN = random_password.redis_auth.result })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
 resource "aws_secretsmanager_secret" "redis_url" {
   name                    = "ai-village/redis-url"
-  description             = "ElastiCache Redis URL for AI Village"
+  description             = "ElastiCache Redis URL (with AUTH token) for AI Village"
   recovery_window_in_days = 7
   tags                    = var.tags
 }
 
 resource "aws_secretsmanager_secret_version" "redis_url" {
-  secret_id     = aws_secretsmanager_secret.redis_url.id
-  secret_string = jsonencode({ REDIS_URL = "REPLACE_AFTER_APPLY" })
+  secret_id = aws_secretsmanager_secret.redis_url.id
+  secret_string = jsonencode({
+    REDIS_URL = "rediss://:${random_password.redis_auth.result}@${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379"
+  })
 
   lifecycle {
     ignore_changes = [secret_string]

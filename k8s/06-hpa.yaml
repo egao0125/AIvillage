@@ -15,7 +15,7 @@ spec:
   # Multiple replicas would each run an independent simulation — split state.
   #
   # To enable horizontal scaling, the following must be completed first:
-  #   1. fix/supabase-single-row  — world/agent state persisted per-agent row
+  #   1. Per-agent row persistence — world/agent state persisted per-agent row
   #      instead of a single id:'current' row (eliminates Last Write Wins)
   #   2. Shared agent state store  — AgentController state externalised to
   #      Redis or DB so all pods share one simulation

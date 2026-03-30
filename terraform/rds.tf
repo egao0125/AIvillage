@@ -21,11 +21,15 @@ resource "aws_security_group" "rds" {
     security_groups = [module.eks.node_security_group_id]
   }
 
+  # CIS AWS Foundations Benchmark 5.4: restrict egress to VPC CIDR only.
+  # RDS does not initiate outbound connections to the internet; this eliminates
+  # any compliance alert from SecurityHub / GuardDuty about unrestricted egress.
   egress {
+    description = "Allow outbound only within VPC"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [module.vpc.vpc_cidr_block]
   }
 
   tags = var.tags
@@ -77,7 +81,8 @@ resource "aws_db_instance" "this" {
 
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
-  performance_insights_enabled = true
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7  # days (free tier); set to 731 for 2-year retention (paid)
 
   skip_final_snapshot = false
   final_snapshot_identifier = "${var.cluster_name}-postgres-final"

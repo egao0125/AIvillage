@@ -50,6 +50,9 @@ if (isProduction && process.env.DEV_ADMIN_TOKEN) {
 const redis = setupRedis();
 
 const app = express();
+// Trust the ALB as the first proxy so Express correctly reads X-Forwarded-Proto/IP.
+// Required for HSTS to work and for req.ip to reflect the real client address.
+app.set('trust proxy', 1);
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: isProduction
@@ -66,6 +69,15 @@ if (redis) {
 
 // Security headers (OWASP / Express best practices):
 // CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, etc.
+//
+// connectSrc: include explicit wss:// origins so Safari doesn't block Socket.IO.
+// Using bare "wss:" (scheme-only) would allow ANY WebSocket endpoint — too broad.
+// In production we derive wss:// from ALLOWED_ORIGINS (e.g. https://foo.com → wss://foo.com).
+// In development we allow wss://localhost:* for hot-reload convenience.
+const wssOrigins = isProduction
+  ? ALLOWED_ORIGINS.map((o) => o.replace(/^https?:\/\//, 'wss://'))
+  : [`ws://localhost:${PORT}`, `wss://localhost:${PORT}`];
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -73,7 +85,7 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", ...wssOrigins],
       frameAncestors: ["'none'"],
     },
   },
@@ -130,13 +142,17 @@ io.on('connection', (socket) => {
   // Send initial snapshot
   socket.emit('world:snapshot', engine.getSnapshot());
 
+  // UUID v4 format validation for agentId inputs (OWASP WebSocket Security Cheat Sheet)
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
   socket.on('agent:select', (agentId: string) => {
+    if (typeof agentId !== 'string' || !UUID_REGEX.test(agentId)) return;
     console.log(`Client selected agent: ${agentId}`);
   });
 
   // On-demand thought generation — only when a viewer is watching
   socket.on('agent:watch-thoughts', (agentId: string) => {
-    if (typeof agentId !== 'string' || !agentId) return;
+    if (typeof agentId !== 'string' || !UUID_REGEX.test(agentId)) return;
     const existing = watchIntervals.get(socket.id);
     if (existing) clearInterval(existing.interval);
 
@@ -147,8 +163,19 @@ io.on('connection', (socket) => {
       }
     };
 
-    // Generate one immediately
-    engine.generateThoughtFor(agentId).then(emit).catch((err: unknown) => {
+    // Generate one immediately; if agent doesn't exist, cancel the interval
+    engine.generateThoughtFor(agentId).then((thought) => {
+      if (thought === null) {
+        // Agent not found — clear interval to avoid wasting LLM calls every 10s
+        const toCancel = watchIntervals.get(socket.id);
+        if (toCancel && toCancel.agentId === agentId) {
+          clearInterval(toCancel.interval);
+          watchIntervals.delete(socket.id);
+        }
+        return;
+      }
+      emit(thought);
+    }).catch((err: unknown) => {
       console.warn('[Socket] generateThoughtFor failed:', (err as Error).message);
     });
 
@@ -183,14 +210,16 @@ io.on('connection', (socket) => {
   // Spectator chat — relay to all clients
   socket.on('spectator:comment', (data: { message: string }) => {
     if (!data.message || typeof data.message !== 'string') return;
+    // Slice first so the 200-char limit applies to raw input, not HTML entities
+    // (otherwise &amp; would count as 5 chars and reduce effective limit)
     const msg = data.message
+      .trim()
+      .slice(0, 200)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#x27;')
-      .trim()
-      .slice(0, 200);
+      .replace(/'/g, '&#x27;');
     if (!msg) return;
 
     // Rate limit: 1 per 10 seconds
@@ -289,17 +318,70 @@ engine.initialize().then(() => {
   process.exit(1);
 });
 
-// Graceful shutdown — critical for Fly.io which sends SIGTERM before stopping
-process.on('SIGTERM', async () => {
-  console.log('[Server] SIGTERM — saving state...');
-  await engine.stop();
-  await closeRedis();
+// ---------------------------------------------------------------------------
+// Graceful shutdown — stop accepting connections, save state, then exit.
+// 25s hard-timeout ensures we exit before k8s terminationGracePeriodSeconds
+// (120s) kills us forcibly, even if save hangs.
+// ---------------------------------------------------------------------------
+let shuttingDown = false;
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Server] ${signal} — initiating graceful shutdown...`);
+
+  // Hard-kill fallback: exit after 25s regardless of what hangs
+  const killer = setTimeout(() => {
+    console.error('[Server] Shutdown timeout — forcing exit');
+    process.exit(1);
+  }, 25_000);
+  killer.unref(); // Don't prevent natural exit if everything completes faster
+
+  // Stop accepting new connections; close existing keep-alive connections immediately
+  // closeAllConnections() is Node.js 18.2+ — terminates idle keep-alive sockets
+  // that httpServer.close() alone would leave open indefinitely (k8s SIGTERM issue)
+  httpServer.close(() => console.log('[Server] HTTP server closed'));
+  httpServer.closeAllConnections();
+
+  try {
+    await engine.stop(); // saves state + closes DB pool
+  } catch (err) {
+    console.error('[Server] Engine stop error:', (err as Error).message);
+  }
+
+  try {
+    await closeRedis();
+  } catch (err) {
+    console.error('[Server] Redis close error:', (err as Error).message);
+  }
+
+  console.log('[Server] Shutdown complete');
   process.exit(0);
+}
+
+process.on('SIGTERM', () => {
+  gracefulShutdown('SIGTERM').catch((err) => {
+    console.error('[Server] gracefulShutdown threw unexpectedly:', err);
+    process.exit(1);
+  });
+});
+process.on('SIGINT', () => {
+  gracefulShutdown('SIGINT').catch((err) => {
+    console.error('[Server] gracefulShutdown threw unexpectedly:', err);
+    process.exit(1);
+  });
 });
 
-process.on('SIGINT', async () => {
-  console.log('[Server] SIGINT — saving state...');
-  await engine.stop();
-  await closeRedis();
-  process.exit(0);
+// ---------------------------------------------------------------------------
+// Process stability — prevent silent crashes from unhandled rejections/exceptions
+// ---------------------------------------------------------------------------
+process.on('uncaughtException', (err) => {
+  console.error('[Server] uncaughtException — initiating shutdown:', err);
+  gracefulShutdown('uncaughtException').catch(() => process.exit(1));
+});
+
+process.on('unhandledRejection', (reason) => {
+  // Node.js v15+ treats unhandledRejection the same as uncaughtException (process crash).
+  // Initiate graceful shutdown to save state before exit.
+  console.error('[Server] unhandledRejection — initiating shutdown:', reason);
+  gracefulShutdown('unhandledRejection').catch(() => process.exit(1));
 });

@@ -45,6 +45,11 @@ output "rds_endpoint" {
   value       = aws_db_instance.this.endpoint
 }
 
+output "rds_master_secret_arn" {
+  description = "ARN of the RDS-managed master password secret in Secrets Manager (use in 02b-rds-master-external-secret.yaml)"
+  value       = aws_db_instance.this.master_user_secret[0].secret_arn
+}
+
 output "rds_host" {
   description = "RDS instance hostname"
   value       = aws_db_instance.this.address

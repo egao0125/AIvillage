@@ -17,6 +17,9 @@ interface RateLimitEntry {
   resetAt: number;
 }
 
+// UUID v4 format validation for agent ID path parameters (OWASP WebSocket/API Cheat Sheet)
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 // In-memory fallback store — only used when Redis is unavailable
 const rateLimitStore: Map<string, RateLimitEntry> = new Map();
 
@@ -32,14 +35,10 @@ function rateLimit(maxRequests: number, windowMs: number) {
   const windowSec = Math.ceil(windowMs / 1_000);
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    // Prefer the leftmost (client) IP from X-Forwarded-For when behind Fly.io / a proxy.
-    // We take only the first entry to avoid spoofing via appended IPs.
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip =
-      (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
-      req.ip ||
-      req.socket.remoteAddress ||
-      'unknown';
+    // Use req.ip which Express resolves safely using trust proxy setting.
+    // Directly reading X-Forwarded-For headers allows attackers to spoof IPs
+    // and bypass rate limiting (OWASP API6 / XFF spoofing attack).
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
 
     const redis = getRedis();
 
@@ -141,7 +140,7 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 // =============================================================================
 // Security: BYOK (Bring Your Own Key)
 // Each agent carries its own API key — no global server key required.
-// Keys are stored per-agent in Supabase, never exposed to clients.
+// Keys are stored per-agent in RDS, never exposed to clients.
 // =============================================================================
 
 // =============================================================================
@@ -180,8 +179,20 @@ export function createRouter(engine: SimulationEngine): Router {
     res.json(engine.getSnapshot());
   });
 
+  // Liveness: is the Node.js process alive? Never checks DB — DB outage must not restart the Pod.
   router.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', uptime: process.uptime() });
+  });
+
+  // Readiness: can this Pod accept traffic? Returns 503 when DB is unreachable so k8s
+  // removes it from Service endpoints without triggering a Pod restart.
+  router.get('/api/ready', async (_req, res) => {
+    const healthy = await engine.isDbHealthy();
+    if (healthy) {
+      res.json({ status: 'ready' });
+    } else {
+      res.status(503).json({ status: 'not_ready', reason: 'db_unreachable' });
+    }
   });
 
   // GET /api/config/status — public summary for UI health display.
@@ -206,6 +217,7 @@ export function createRouter(engine: SimulationEngine): Router {
 
   router.get('/api/agents/:id/timeline', (req, res) => {
     const id = req.params.id as string;
+    if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
     const limit = clampNumber(parseInt(req.query.limit as string), 1, 500, 50);
     const timeline = engine.getCharacterTimeline(id, limit);
     res.json(timeline);
@@ -213,6 +225,7 @@ export function createRouter(engine: SimulationEngine): Router {
 
   router.get('/api/agents/:id/arc-summary', async (req, res) => {
     const id = req.params.id as string;
+    if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
     const snapshot = engine.getSnapshot();
     const agent = snapshot.agents.find(a => a.id === id);
     if (!agent) {
@@ -341,9 +354,9 @@ Relationships: ${mentalModels}`;
     rateLimit(5, 60_000),
     requireAuth,
     (req, res) => {
-      const { id } = req.params;
-      if (!id || typeof id !== 'string') {
-        res.status(400).json({ error: 'Agent ID is required' });
+      const id = req.params.id as string;
+      if (!id || !UUID_REGEX.test(id)) {
+        res.status(400).json({ error: 'Invalid agent ID' });
         return;
       }
 
@@ -376,6 +389,7 @@ Relationships: ${mentalModels}`;
     requireAuth,
     (req, res) => {
       const id = req.params.id as string;
+      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
       const snapshot = engine.getSnapshot();
       const agent = snapshot.agents.find(a => a.id === id);
       if (!agent) {
@@ -402,6 +416,7 @@ Relationships: ${mentalModels}`;
     requireAuth,
     (req, res) => {
       const id = req.params.id as string;
+      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
       const { apiKey, model } = req.body;
 
       if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
@@ -441,6 +456,7 @@ Relationships: ${mentalModels}`;
     requireAuth,
     (req, res) => {
       const id = req.params.id as string;
+      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
       const snapshot = engine.getSnapshot();
       const agent = snapshot.agents.find(a => a.id === id);
       if (!agent) {
@@ -467,6 +483,7 @@ Relationships: ${mentalModels}`;
     requireAuth,
     (req, res) => {
       const id = req.params.id as string;
+      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
       const snapshot = engine.getSnapshot();
       const agent = snapshot.agents.find(a => a.id === id);
       if (!agent) {
@@ -493,6 +510,7 @@ Relationships: ${mentalModels}`;
     requireAuth,
     async (req, res) => {
       const id = req.params.id as string;
+      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
       const snapshot = engine.getSnapshot();
       const agent = snapshot.agents.find(a => a.id === id);
       if (!agent) {

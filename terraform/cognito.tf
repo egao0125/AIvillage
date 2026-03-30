@@ -9,10 +9,11 @@ resource "aws_cognito_user_pool" "this" {
   auto_verified_attributes = ["email"]
 
   password_policy {
-    minimum_length                   = 8
+    # OWASP ASVS v4.0 / NIST SP 800-63B: minimum 12 characters recommended
+    minimum_length                   = 12
     require_lowercase                = true
     require_numbers                  = true
-    require_symbols                  = false
+    require_symbols                  = true
     require_uppercase                = true
     temporary_password_validity_days = 7
   }

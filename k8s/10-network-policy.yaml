@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# NetworkPolicy — ai-village namespace
+#
+# Default-deny all ingress/egress, then explicitly allow only required flows.
+# NIST SP 800-204A / CIS Kubernetes Benchmark 5.3.2 / AWS Well-Architected SEC 9.
+#
+# Required VPC CNI network policy support (EKS 1.25+):
+#   kubectl set env daemonset aws-node -n kube-system ENABLE_NETWORK_POLICY=true
+#   # or set via EKS add-on configuration in Terraform
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 1. Default deny: block all ingress and egress for every Pod in the namespace.
+#    Subsequent policies add explicit allow rules — whitelist model.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: ai-village
+spec:
+  podSelector: {}   # applies to ALL pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# ---------------------------------------------------------------------------
+# 2. Allow ingress from ALB to the app Pod on port 8080.
+#    The ALB injects traffic as NodePort or IP target — allow from any source
+#    within the VPC (CIDR-based rules are not supported in all CNIs; the
+#    pragmatic approach is allow from all and rely on SG for network isolation).
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-alb
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-village
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 3. Allow egress to AWS service endpoints: RDS, ElastiCache, Cognito, Secrets Manager.
+#    All are accessed over HTTPS (443) or PostgreSQL (5432) / Redis (6379).
+#    AWS SDK endpoints (Cognito, Secrets Manager, ECR) use port 443.
+#    DNS (kube-dns) is required for hostname resolution.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-aws-services
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-village
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns (CoreDNS) — required for all DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # RDS PostgreSQL
+    - ports:
+        - port: 5432
+          protocol: TCP
+    # ElastiCache Redis (TLS)
+    - ports:
+        - port: 6379
+          protocol: TCP
+    # AWS SDK endpoints: Cognito, Secrets Manager, ECR, CloudWatch (HTTPS)
+    - ports:
+        - port: 443
+          protocol: TCP
+    # Anthropic API and other LLM providers (HTTPS)
+    - ports:
+        - port: 443
+          protocol: TCP

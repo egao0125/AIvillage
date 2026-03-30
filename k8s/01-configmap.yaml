@@ -7,10 +7,13 @@ data:
   PORT: "8080"
   NODE_ENV: "production"
   # Comma-separated list of allowed CORS origins.
+  # REPLACE with your actual domain before applying (also update 05-ingress.yaml).
   # Example: https://aivillage.example.com,https://www.aivillage.example.com
-  ALLOWED_ORIGINS: "https://aivillage.example.com"
+  ALLOWED_ORIGINS: "https://REPLACE_WITH_YOUR_DOMAIN"
   # Maximum number of agents allowed per simulation instance.
   MAX_AGENTS: "20"
   COGNITO_REGION: "ap-northeast-1"
-  COGNITO_USER_POOL_ID: "ap-northeast-1_9SlumyaUE"
-  COGNITO_CLIENT_ID: "6ap94a8dvl9s01vtvrv58aai7q"
+  # Replace with: terraform output cognito_user_pool_id
+  COGNITO_USER_POOL_ID: "REPLACE_WITH_TERRAFORM_OUTPUT"
+  # Replace with: terraform output cognito_client_id
+  COGNITO_CLIENT_ID: "REPLACE_WITH_TERRAFORM_OUTPUT"

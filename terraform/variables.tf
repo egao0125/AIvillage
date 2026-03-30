@@ -44,9 +44,12 @@ variable "node_instance_type" {
 }
 
 variable "node_min_size" {
-  description = "Minimum number of nodes in the managed node group."
+  # AWS Well-Architected REL 6: deploy across multiple AZs. min=1 risks complete data-plane
+  # outage if the single node fails or is drained during a cluster upgrade.
+  # Production: set to 2 (one per AZ minimum). Only use 1 for cost-sensitive dev environments.
+  description = "Minimum number of nodes. Set to 2+ for production HA (prevents single-node outage)."
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "node_max_size" {
@@ -68,9 +71,13 @@ variable "redis_node_type" {
 }
 
 variable "ecr_image_tag_mutability" {
-  description = "MUTABLE allows overwriting tags (e.g. 'latest'). IMMUTABLE enforces tag uniqueness."
+  # IMMUTABLE: prevents tag overwriting — required to ensure deployed image integrity
+  # and supply chain security (CIS ECR / AWS Well-Architected Security Pillar).
+  # Use commit-SHA or semver tags (e.g. v1.2.3) instead of 'latest'.
+  # Set to "MUTABLE" only during initial development when a fixed workflow isn't yet in place.
+  description = "IMMUTABLE enforces tag uniqueness (recommended). MUTABLE allows overwriting tags."
   type        = string
-  default     = "MUTABLE"
+  default     = "IMMUTABLE"
 }
 
 variable "tags" {
@@ -81,6 +88,16 @@ variable "tags" {
     ManagedBy   = "terraform"
     Environment = "production"
   }
+}
+
+variable "eks_public_access_cidrs" {
+  # CIS EKS Benchmark 5.4.2: restrict public API endpoint access to known CIDRs.
+  # Add your corporate/VPN CIDR(s) here. Using ["0.0.0.0/0"] exposes the k8s
+  # API server to the internet — only auth protects it, no network-layer defence.
+  # To disable public access entirely: set cluster_endpoint_public_access = false.
+  description = "CIDRs allowed to reach the EKS public API endpoint. Restrict to VPN/corporate IPs."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]  # REPLACE before applying — use your VPN/corporate CIDR
 }
 
 variable "rds_instance_class" {

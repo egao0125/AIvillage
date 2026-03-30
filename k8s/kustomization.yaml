@@ -12,12 +12,16 @@
 #   kubectl apply -f k8s/07-serviceaccount.yaml
 #
 # Before applying:
-#   1. Replace REPLACE_WITH_APP_IRSA_ROLE_ARN in 07-serviceaccount.yaml
+#   1. Replace REPLACE_WITH_AWS_ACCOUNT_ID in 07-serviceaccount.yaml
 #      (run: terraform output app_irsa_role_arn)
-#   2. Replace REPLACE_WITH_TERRAFORM_OUTPUT in 01-configmap.yaml (Cognito IDs)
-#   3. Replace REPLACE_WITH_ECR_IMAGE_URI in 03-deployment.yaml
-#   4. Replace REPLACE_WITH_ACM_CERTIFICATE_ARN in 05-ingress.yaml
-#   5. Replace aivillage.example.com in 01-configmap.yaml and 05-ingress.yaml
+#   2. Replace COGNITO_USER_POOL_ID / COGNITO_CLIENT_ID in 01-configmap.yaml
+#      (run: terraform output cognito_user_pool_id / cognito_client_id)
+#   3. Replace REPLACE_WITH_YOUR_DOMAIN in 01-configmap.yaml and 05-ingress.yaml
+#   4. Replace REPLACE_WITH_ECR_IMAGE_URI in 03-deployment.yaml
+#      (run: terraform output ecr_repository_url)
+#   5. Replace REPLACE_WITH_ACM_CERTIFICATE_ARN in 05-ingress.yaml
+#   6. Replace REPLACE_WITH_RDS_MASTER_SECRET_NAME in 02b-rds-master-external-secret.yaml
+#      (run: terraform output rds_master_secret_arn)
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -27,9 +31,12 @@ resources:
   - 00-namespace.yaml
   - 01-configmap.yaml
   - 02-external-secret.yaml
+  - 02b-rds-master-external-secret.yaml
   - 03-deployment.yaml
   - 04-service.yaml
   - 05-ingress.yaml
   - 06-hpa.yaml
   - 07-serviceaccount.yaml
+  - 08-db-migrate-job.yaml
   - 09-pdb.yaml
+  - 10-network-policy.yaml

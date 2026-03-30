@@ -53,47 +53,49 @@ const pool = new Pool({
 // ── Fetch all data ──────────────────────────────────────────────
 
 async function fetchAll() {
-  console.log('Fetching world state...');
-  const worldRes = await pool.query(
-    `SELECT data, updated_at FROM world_state WHERE id = 'current'`,
-  );
-  const worldRow = worldRes.rows[0] || null;
-
-  console.log('Fetching agents...');
-  const agentRes = await pool.query(
-    `SELECT id, data, updated_at FROM agents`,
-  );
-  const agentRows = agentRes.rows;
-
-  console.log('Fetching controllers...');
-  const ctrlRes = await pool.query(
-    `SELECT agent_id, data, updated_at FROM agent_controllers`,
-  );
-  const controllerRows = ctrlRes.rows;
-
-  console.log('Fetching memories (all, paginated)...');
-  let allMemories = [];
-  const PAGE = 1000;
-  let offset = 0;
-  while (true) {
-    const batch = await pool.query(
-      `SELECT id, agent_id, timestamp, type, content, importance,
-              emotional_valence, related_agent_ids, is_core, created_at
-       FROM memories
-       ORDER BY timestamp ASC
-       LIMIT $1 OFFSET $2`,
-      [PAGE, offset],
+  try {
+    console.log('Fetching world state...');
+    const worldRes = await pool.query(
+      `SELECT data, updated_at FROM world_state WHERE id = 'current'`,
     );
-    if (batch.rows.length === 0) break;
-    allMemories.push(...batch.rows);
-    offset += PAGE;
-    console.log(`  ...fetched ${allMemories.length} memories`);
-    if (batch.rows.length < PAGE) break;
+    const worldRow = worldRes.rows[0] || null;
+
+    console.log('Fetching agents...');
+    const agentRes = await pool.query(
+      `SELECT id, data, updated_at FROM agents`,
+    );
+    const agentRows = agentRes.rows;
+
+    console.log('Fetching controllers...');
+    const ctrlRes = await pool.query(
+      `SELECT agent_id, data, updated_at FROM agent_controllers`,
+    );
+    const controllerRows = ctrlRes.rows;
+
+    console.log('Fetching memories (all, paginated)...');
+    let allMemories = [];
+    const PAGE = 1000;
+    let offset = 0;
+    while (true) {
+      const batch = await pool.query(
+        `SELECT id, agent_id, timestamp, type, content, importance,
+                emotional_valence, related_agent_ids, is_core, created_at
+         FROM memories
+         ORDER BY timestamp ASC
+         LIMIT $1 OFFSET $2`,
+        [PAGE, offset],
+      );
+      if (batch.rows.length === 0) break;
+      allMemories.push(...batch.rows);
+      offset += PAGE;
+      console.log(`  ...fetched ${allMemories.length} memories`);
+      if (batch.rows.length < PAGE) break;
+    }
+
+    return { worldRow, agentRows, controllerRows, memories: allMemories };
+  } finally {
+    await pool.end(); // Always release connections, even on error
   }
-
-  await pool.end();
-
-  return { worldRow, agentRows, controllerRows, memories: allMemories };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────

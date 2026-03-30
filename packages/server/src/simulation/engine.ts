@@ -370,7 +370,7 @@ export class SimulationEngine {
         const agent = agents[i];
         this.world.addAgent(agent);
 
-        // Restore per-agent BYOK key from Supabase; fall back to env var round-robin
+        // Restore per-agent BYOK key from RDS; fall back to env var round-robin
         const ctrlDataForKey = controllerDataMap.get(agent.id);
         const savedKey = (ctrlDataForKey as any)?.apiKey as string | undefined;
         const savedModel = (ctrlDataForKey as any)?.model as string | undefined;
@@ -526,7 +526,10 @@ export class SimulationEngine {
       console.log(`[Engine] Restored ${agents.length} agents from RDS`);
       this.refreshNameMaps();
     } catch (err) {
-      console.error('[Engine] Failed to load from RDS:', err);
+      // Re-throw so initialize() → process.exit(1) in index.ts.
+      // Starting with an empty world after a DB failure would silently wipe simulation state.
+      console.error('[Engine] Failed to load from RDS — aborting startup:', err);
+      throw err;
     }
   }
 
@@ -1060,6 +1063,12 @@ export class SimulationEngine {
       } catch (err) {
         console.error('[Engine] Final save failed:', err);
       }
+      try {
+        await this.persistence.pool.end();
+        console.log('[Engine] DB connection pool closed');
+      } catch (err) {
+        console.error('[Engine] DB pool close failed:', (err as Error).message);
+      }
     }
     console.log('[Engine] Simulation stopped');
   }
@@ -1519,6 +1528,18 @@ export class SimulationEngine {
         agent.worldView = cognition.worldView;
         cognition.fourStream?.syncAllToAgent();
       }
+      // Strip private character data — OWASP API3: Broken Object Property Level Authorization.
+      // soul/backstory/fears/desires/speechPattern are internal LLM-prompt fields only.
+      // Never sent to any client regardless of auth status (REST or Socket.IO).
+      const cfg = agent.config as Record<string, unknown>;
+      delete cfg['soul'];
+      delete cfg['backstory'];
+      delete cfg['fears'];
+      delete cfg['desires'];
+      delete cfg['speechPattern'];
+      delete cfg['coreValues'];
+      delete cfg['contradictions'];
+      delete cfg['goal'];
     }
     snapshot.narratives = this.narrator.getRecentNarratives();
     snapshot.storylines = this.storylineDetector.getStorylines();
@@ -1538,7 +1559,15 @@ export class SimulationEngine {
         state: a.state,
         currentAction: a.currentAction,
         mood: a.mood ?? 'neutral',
-        config: a.config,
+        // Cherry-pick only public fields — same policy as getSnapshot() and /api/agents.
+        // OWASP API3:2023: never expose soul/backstory/fears/desires/speechPattern via any path.
+        config: {
+          name: a.config.name,
+          age: a.config.age,
+          occupation: a.config.occupation,
+          personality: a.config.personality,
+          spriteId: a.config.spriteId,
+        },
       }));
   }
 
@@ -2406,6 +2435,21 @@ Answer with ONLY one word: "support" or "oppose".`,
 
   get isRunning(): boolean {
     return this.tickInterval !== null;
+  }
+
+  /**
+   * Readiness check: verify the DB pool can serve a query.
+   * Used by /api/ready (readinessProbe) so k8s removes the Pod from
+   * Service traffic on DB outage without restarting it (livenessProbe is separate).
+   */
+  async isDbHealthy(): Promise<boolean> {
+    if (!this.persistence) return true; // no persistence configured — always ready
+    try {
+      await this.persistence.pool.query('SELECT 1');
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

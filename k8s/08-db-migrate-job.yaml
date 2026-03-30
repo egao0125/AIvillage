@@ -73,7 +73,16 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      # Use the app SA — it has IRSA access to ai-village/* secrets in Secrets Manager.
+      # The rds-master-secret ESO sync runs under the ESO SA, not this SA.
       serviceAccountName: ai-village
+      # Pod-level security: non-root, no privilege escalation
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999   # postgres user in postgres:16-alpine
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: migrate
           image: postgres:16-alpine
@@ -82,14 +91,36 @@ spec:
             - -c
             - |
               set -e
-              PG_DSN="postgresql://${MASTER_DB_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME:-aivillage}?sslmode=verify-full"
-              echo "Running DDL migration..."
-              PGPASSWORD="$MASTER_DB_PASSWORD" psql "$PG_DSN" -f /sql/migrate.sql
+              # Connect as RDS master user (has DDL/GRANT privileges) to run schema migration.
+              # DB_ADMIN_USER / DB_ADMIN_PASSWORD come from rds-master-secret (ESO-managed,
+              # sourced from the RDS-managed master password in Secrets Manager).
+              # DB_APP_PASSWORD is the aivillage_app role password from ai-village-secret —
+              # kept separate from master credentials (principle of least privilege).
+              ADMIN_DSN="postgresql://${DB_ADMIN_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=verify-full"
+              echo "Running DDL migration as master user..."
+              PGPASSWORD="$DB_ADMIN_PASSWORD" psql "$ADMIN_DSN" -f /sql/migrate.sql
               echo "Setting aivillage_app password..."
-              PGPASSWORD="$MASTER_DB_PASSWORD" psql "$PG_DSN" \
-                -c "ALTER ROLE aivillage_app WITH LOGIN PASSWORD '${DB_PASSWORD}'"
+              # Use psql variable substitution (:'apppassword') so the password value
+              # is never interpolated into the shell command line — prevents exposure
+              # via /proc/*/cmdline inside the container (CIS PostgreSQL Benchmark).
+              PGPASSWORD="$DB_ADMIN_PASSWORD" psql "$ADMIN_DSN" \
+                -v apppassword="$DB_APP_PASSWORD" \
+                -c "ALTER ROLE aivillage_app WITH LOGIN PASSWORD :'apppassword'"
               echo "Migration completed successfully"
           env:
+            # RDS master credentials — from rds-master-secret (02b-rds-master-external-secret.yaml)
+            # The RDS-managed secret stores {"username":"...", "password":"..."} JSON
+            - name: DB_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: rds-master-secret
+                  key: username
+            - name: DB_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rds-master-secret
+                  key: password
+            # DB host/port/name from app secret (non-sensitive config)
             - name: DB_HOST
               valueFrom:
                 secretKeyRef:
@@ -105,18 +136,24 @@ spec:
                 secretKeyRef:
                   name: ai-village-secret
                   key: DB_NAME
-            - name: DB_PASSWORD
+            # App user password — set on aivillage_app role (separate from master)
+            - name: DB_APP_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: ai-village-secret
                   key: DB_PASSWORD
-            - name: MASTER_DB_USER
-              value: "aivillage_admin"
-            - name: MASTER_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: rds-master-secret
-                  key: password
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: sql
               mountPath: /sql

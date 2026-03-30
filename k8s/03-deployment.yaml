@@ -46,11 +46,9 @@ spec:
 
       containers:
         - name: ai-village
-          # Replace with your ECR image URI:
-          #   <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ai-village:<TAG>
-          # Example:
-          #   123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/ai-village:v1.0.0
-          image: 053442321898.dkr.ecr.ap-northeast-1.amazonaws.com/ai-village:latest
+          # Replace with: terraform output ecr_repository_url
+          # Format: <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ai-village:<TAG>
+          image: REPLACE_WITH_ECR_IMAGE_URI
           imagePullPolicy: Always
 
           ports:
@@ -72,7 +70,18 @@ spec:
               cpu: "1000m"
               memory: "1Gi"
 
-          # Liveness: restart pod if /api/health stops responding (dead simulation loop)
+          # Startup: protect liveness from firing during slow DB init (up to 5min).
+          # failureThreshold * periodSeconds = max startup window.
+          startupProbe:
+            httpGet:
+              path: /api/ready
+              port: 8080
+            failureThreshold: 30   # 30 × 10s = 5 min max wait (covers RDS cold start)
+            periodSeconds: 10
+            timeoutSeconds: 5
+
+          # Liveness: restart pod if the Node.js process hangs (NOT tied to DB).
+          # DB outage alone must not restart the pod — restart loops make DB recovery worse.
           livenessProbe:
             httpGet:
               path: /api/health
@@ -82,10 +91,12 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 3
 
-          # Readiness: stop sending traffic until the engine is initialized
+          # Readiness: remove pod from Service when DB is unreachable.
+          # Uses /api/ready (SELECT 1 DB check) so traffic stops on DB failover,
+          # but the pod stays alive and auto-recovers when DB comes back.
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/ready
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 10
@@ -106,3 +117,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+
+          # readOnlyRootFilesystem: true requires explicit writable mounts.
+          # Node.js and native modules need /tmp for temp file operations.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}   # tmpfs in-memory scratch space — cleared on pod restart

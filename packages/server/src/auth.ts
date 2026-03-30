@@ -5,6 +5,7 @@ import {
   AdminSetUserPasswordCommand,
   AdminInitiateAuthCommand,
   AdminGetUserCommand,
+  AdminUserGlobalSignOutCommand,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -27,12 +28,9 @@ setInterval(() => {
 function authRateLimit(maxRequests: number, windowMs: number) {
   const windowSec = Math.ceil(windowMs / 1_000);
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    const forwarded = req.headers['x-forwarded-for'];
-    const ip =
-      (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
-      req.ip ||
-      req.socket.remoteAddress ||
-      'unknown';
+    // Use req.ip (Express + trust proxy) — never read X-Forwarded-For directly
+    // to prevent XFF spoofing attacks that bypass rate limiting (OWASP API6).
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
 
     const redis = getRedis();
     if (redis) {
@@ -90,6 +88,7 @@ const JWKS = createRemoteJWKSet(
   new URL(
     `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}/.well-known/jwks.json`,
   ),
+  { cacheMaxAge: 10 * 60 * 1_000 }, // Refresh JWKS cache every 10 minutes
 );
 
 /**
@@ -108,6 +107,17 @@ export function optionalAuth(_config?: unknown) {
         algorithms: ['RS256'],
         issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
       });
+      // Cognito access tokens must carry token_use=access and client_id matching our app
+      if (payload['token_use'] !== 'access') {
+        console.warn('[Auth] Token rejected: token_use is not "access"');
+        req.userId = null;
+        return next();
+      }
+      if (payload['client_id'] !== COGNITO_CLIENT_ID) {
+        console.warn('[Auth] Token rejected: client_id mismatch');
+        req.userId = null;
+        return next();
+      }
       req.userId = (payload.sub as string) ?? null;
     } catch (err) {
       console.warn('[Auth] Token verification failed:', (err as Error).message);
@@ -138,12 +148,22 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
   router.post('/api/auth/signup', authRateLimit(5, 60 * 60 * 1_000), async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
-      res.status(400).json({ error: 'Valid email required' });
+    // RFC 5321 simplified format check (OWASP ASVS 5.1.1 / API2:2023)
+    // Ensures local@domain.tld structure before hitting Cognito.
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {
+      res.status(400).json({ error: 'Valid email address required' });
       return;
     }
-    if (!password || typeof password !== 'string' || password.length < 6) {
-      res.status(400).json({ error: 'Password must be at least 6 characters' });
+    // Mirror Cognito User Pool password policy (cognito.tf) so the client gets an
+    // accurate error message before the API call reaches Cognito:
+    //   minimum_length = 12, require_lowercase, require_uppercase,
+    //   require_numbers, require_symbols
+    const PWD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()\-_=+[\]{};:'",.<>?/\\|`~])/;
+    if (!password || typeof password !== 'string' || password.length < 12 || !PWD_REGEX.test(password)) {
+      res.status(400).json({
+        error: 'Password must be at least 12 characters and include uppercase, lowercase, number, and symbol',
+      });
       return;
     }
 
@@ -254,8 +274,31 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
     }
   });
 
-  // POST /api/auth/logout — Cognito is stateless (AccessToken is a JWT); just 200
-  router.post('/api/auth/logout', (_req: Request, res: Response) => {
+  // POST /api/auth/logout — invalidate all refresh tokens for this user (OWASP ASVS V3.3.1).
+  // AdminUserGlobalSignOut revokes all refresh tokens immediately.
+  // Note: access tokens are JWTs (stateless) and remain valid until expiry (max 60 min).
+  // The client must discard the access token locally on logout.
+  router.post('/api/auth/logout', async (req: Request, res: Response) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (token) {
+      try {
+        const { payload } = await jwtVerify(token, JWKS, {
+          algorithms: ['RS256'],
+          issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
+        });
+        // Revoke all refresh tokens — prevents silent re-auth after logout
+        const username = (payload['cognito:username'] as string | undefined) ?? (payload.sub as string | undefined);
+        if (username) {
+          await cognitoClient.send(new AdminUserGlobalSignOutCommand({
+            UserPoolId: COGNITO_USER_POOL_ID,
+            Username: username,
+          }));
+        }
+      } catch (err) {
+        // Best-effort — don't fail logout if token is already expired or invalid
+        console.warn('[Auth] logout token revocation skipped:', (err as Error).message);
+      }
+    }
     res.status(200).json({ message: 'Logged out' });
   });
 
@@ -272,6 +315,15 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         algorithms: ['RS256'],
         issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
       });
+      // Cognito access tokens must carry token_use=access and client_id matching our app
+      if (payload['token_use'] !== 'access') {
+        res.status(401).json({ error: 'Invalid token type' });
+        return;
+      }
+      if (payload['client_id'] !== COGNITO_CLIENT_ID) {
+        res.status(401).json({ error: 'Invalid token audience' });
+        return;
+      }
       const sub = payload.sub;
       if (!sub) {
         res.status(401).json({ error: 'Invalid token: missing subject' });

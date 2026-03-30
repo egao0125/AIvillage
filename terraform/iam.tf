@@ -13,16 +13,21 @@ data "aws_caller_identity" "current" {}
 # listeners, security groups, and WAF associations on behalf of Ingress objects.
 # ---------------------------------------------------------------------------
 
-# Download the official IAM policy from AWS. Pin the version to match the
-# Helm chart version used in helm.tf.
-data "http" "lb_controller_policy" {
-  url = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.2/docs/install/iam_policy.json"
-}
-
+# IAM policy for the AWS Load Balancer Controller.
+# Policy JSON is vendored locally (terraform/lb-controller-iam-policy.json) rather than
+# fetched at apply time from GitHub. This prevents supply chain attacks via repository
+# compromise or tag rewriting, and removes the runtime network dependency.
+# (AWS Well-Architected SEC 9 / NIST SP 800-161 supply chain risk management)
+#
+# To update: download the new version and replace the file:
+#   curl -fsSL https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/vX.Y.Z/docs/install/iam_policy.json \
+#     -o terraform/lb-controller-iam-policy.json
+# Then update the version comment below and in helm.tf.
+# Vendored from: v2.7.2
 resource "aws_iam_policy" "lb_controller" {
   name        = "${var.cluster_name}-lb-controller"
   description = "IAM policy for the AWS Load Balancer Controller on cluster ${var.cluster_name}"
-  policy      = data.http.lb_controller_policy.response_body
+  policy      = file("${path.module}/lb-controller-iam-policy.json")
 }
 
 # IRSA role: trusted by the EKS OIDC provider for the specific service account.
