@@ -7,6 +7,30 @@
 // ITP can throw SecurityError when sessionStorage is accessed in private
 // browsing windows. (OWASP Web Storage Security Cheat Sheet)
 
+/**
+ * Decode JWT payload and return expiry timestamp (seconds since epoch), or 0 on failure.
+ * No library needed — JWT payload is base64url encoded JSON.
+ */
+function getTokenExp(token: string): number {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return 0;
+    // base64url → base64 → JSON
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.exp === 'number' ? payload.exp : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Returns true if the stored JWT is expired (or malformed). */
+export function isTokenExpired(token: string): boolean {
+  const exp = getTokenExp(token);
+  if (exp === 0) return true;
+  // 30s clock-skew buffer (OWASP ASVS §3.5.2)
+  return Date.now() / 1000 > exp - 30;
+}
+
 function safeGet(key: string): string | null {
   try {
     return sessionStorage.getItem(key);
@@ -32,7 +56,14 @@ function safeRemove(...keys: string[]): void {
 }
 
 export function getToken(): string | null {
-  return safeGet('ai-village-token');
+  const token = safeGet('ai-village-token');
+  if (!token) return null;
+  // Auto-clear expired tokens so callers always receive a usable token or null.
+  if (isTokenExpired(token)) {
+    safeRemove('ai-village-token', 'ai-village-user-id');
+    return null;
+  }
+  return token;
 }
 
 export function setToken(token: string): void {

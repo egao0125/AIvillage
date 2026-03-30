@@ -398,12 +398,18 @@ process.on('SIGINT', () => {
 // ---------------------------------------------------------------------------
 process.on('uncaughtException', (err) => {
   console.error('[Server] uncaughtException — initiating shutdown:', err);
-  gracefulShutdown('uncaughtException').catch(() => process.exit(1));
+  gracefulShutdown('uncaughtException').catch((shutdownErr) => {
+    console.error('[Server] gracefulShutdown failed during uncaughtException:', shutdownErr);
+    process.exit(1);
+  });
 });
 
 process.on('unhandledRejection', (reason) => {
   // Node.js v15+ treats unhandledRejection the same as uncaughtException (process crash).
   // Initiate graceful shutdown to save state before exit.
   console.error('[Server] unhandledRejection — initiating shutdown:', reason);
-  gracefulShutdown('unhandledRejection').catch(() => process.exit(1));
+  gracefulShutdown('unhandledRejection').catch((shutdownErr) => {
+    console.error('[Server] gracefulShutdown failed during unhandledRejection:', shutdownErr);
+    process.exit(1);
+  });
 });

@@ -339,7 +339,7 @@ export function sendSpectatorComment(message: string): void {
 // Server requires DEV_ADMIN_TOKEN as first argument for all dev:* commands.
 // Set VITE_DEV_ADMIN_TOKEN in the client build environment (e.g. .env.local)
 // to enable the dev panel. Leave unset to disable dev commands from this client.
-const DEV_TOKEN: string = (import.meta as { env?: Record<string, string> }).env?.VITE_DEV_ADMIN_TOKEN ?? '';
+const DEV_TOKEN: string = import.meta.env.VITE_DEV_ADMIN_TOKEN ?? '';
 
 // Guard all dev commands: if DEV_TOKEN is not configured, emit nothing.
 // The server would reject empty tokens anyway, but this avoids spurious socket events.

@@ -181,16 +181,18 @@ export class FourStreamMemory {
       .map(m => m.content)
       .join('\n');
 
-    const prompt = `You are ${this.agent.config.name}. You just interacted with ${targetName}.
+    // OWASP LLM02: wrap user-controlled content (agent names, conversation text) in XML
+    // tags to structurally separate untrusted data from instructions.
+    const prompt = `You are ${this.agent.config.name}. You just interacted with <person_name>${targetName}</person_name>.
 
-What happened: ${interactionSummary}
+What happened: <event_description>${interactionSummary}</event_description>
 
-${recentWithPerson ? 'Recent history with them:\n' + recentWithPerson + '\n' : ''}
+${recentWithPerson ? 'Recent history with them:\n<history>' + recentWithPerson + '</history>\n' : ''}
 ${existingText}
 
-Update your mental model of ${targetName}. Reply with JSON ONLY:
+Update your mental model of <person_name>${targetName}</person_name>. Reply with JSON ONLY:
 {
-  "summary": "3-5 sentences: Who is ${targetName} to you? What defines your relationship? What do you expect from them?",
+  "summary": "3-5 sentences: Who is this person to you? What defines your relationship? What do you expect from them?",
   "trust": number from -100 to 100,
   "activeCommitments": ["things you owe each other, max 3"],
   "concerns": ["any unresolved issues with them, max 2"]
@@ -578,10 +580,13 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
       ? 'People involved:\n' + mentionedDossiers.map(d => `${d.targetName}: ${d.summary.slice(0, 100)}`).join('\n')
       : '';
 
+    // OWASP LLM02: wrap agent-generated content (memory text, dossier summaries) in XML tags.
     const prompt = `Based on recent experiences:
+<recent_events>
 ${recentText}
+</recent_events>
 
-${peopleContext}
+${peopleContext ? '<people_context>\n' + peopleContext + '\n</people_context>' : ''}
 
 What do you now BELIEVE? Not facts — beliefs and conclusions.
 About the people around you, about your own situation, about what you should do differently.
