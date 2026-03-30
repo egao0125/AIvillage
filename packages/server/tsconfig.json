@@ -11,5 +11,6 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src"],
+  "exclude": ["src/persistence/supabase.ts"],
   "references": [{ "path": "../shared" }, { "path": "../ai-engine" }]
 }

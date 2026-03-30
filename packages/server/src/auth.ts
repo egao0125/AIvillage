@@ -1,5 +1,13 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import {
+  CognitoIdentityProviderClient,
+  AdminCreateUserCommand,
+  AdminSetUserPasswordCommand,
+  AdminInitiateAuthCommand,
+  AdminGetUserCommand,
+  UsernameExistsException,
+} from '@aws-sdk/client-cognito-identity-provider';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { getRedis } from './redis.js';
 
 // ---------------------------------------------------------------------------
@@ -69,20 +77,26 @@ declare global {
   }
 }
 
-/**
- * Creates a Supabase client for auth operations.
- * Uses service role key — signUp auto-confirms email (no verification needed for demo).
- */
-function createAuthClient(url: string, serviceRoleKey: string): SupabaseClient {
-  return createClient(url, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
+// ---------------------------------------------------------------------------
+// Cognito configuration (injected via ESO + ConfigMap in k8s)
+// ---------------------------------------------------------------------------
+const COGNITO_REGION = process.env.COGNITO_REGION || 'ap-northeast-1';
+const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID!;
+const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID!;
+
+const cognitoClient = new CognitoIdentityProviderClient({ region: COGNITO_REGION });
+
+const JWKS = createRemoteJWKSet(
+  new URL(
+    `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}/.well-known/jwks.json`,
+  ),
+);
 
 /**
  * Middleware: extract user from Bearer token (non-blocking — sets req.userId or null).
+ * Config parameter is kept for interface compatibility but JWKS is resolved internally.
  */
-export function optionalAuth(supabase: SupabaseClient) {
+export function optionalAuth(_config?: unknown) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) {
@@ -90,9 +104,10 @@ export function optionalAuth(supabase: SupabaseClient) {
       return next();
     }
     try {
-      const { data } = await supabase.auth.getUser(token);
-      req.userId = data.user?.id ?? null;
-    } catch {
+      const { payload } = await jwtVerify(token, JWKS);
+      req.userId = (payload.sub as string) ?? null;
+    } catch (err) {
+      console.warn('[Auth] Token verification failed:', (err as Error).message);
       req.userId = null;
     }
     next();
@@ -111,10 +126,9 @@ export function requireAuth(_req: Request, res: Response, next: NextFunction): v
 }
 
 /**
- * Auth routes: signup, login, me
+ * Auth routes: signup, login, logout, me
  */
-export function createAuthRouter(url: string, serviceRoleKey: string): Router {
-  const supabase = createAuthClient(url, serviceRoleKey);
+export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Router {
   const router = Router();
 
   // POST /api/auth/signup — 5 attempts per hour per IP
@@ -130,38 +144,56 @@ export function createAuthRouter(url: string, serviceRoleKey: string): Router {
       return;
     }
 
-    // Service role auto-confirms email — no verification step
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: email.trim().toLowerCase(),
-      password,
-      email_confirm: true,
-    });
+    const normalizedEmail = email.trim().toLowerCase();
 
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
+    try {
+      // 1. AdminCreateUser (suppress welcome email, auto-confirm)
+      await cognitoClient.send(new AdminCreateUserCommand({
+        UserPoolId: COGNITO_USER_POOL_ID,
+        Username: normalizedEmail,
+        TemporaryPassword: password,
+        MessageAction: 'SUPPRESS',
+        UserAttributes: [
+          { Name: 'email', Value: normalizedEmail },
+          { Name: 'email_verified', Value: 'true' },
+        ],
+      }));
+
+      // 2. AdminSetUserPassword — make permanent, skip forced change
+      await cognitoClient.send(new AdminSetUserPasswordCommand({
+        UserPoolId: COGNITO_USER_POOL_ID,
+        Username: normalizedEmail,
+        Password: password,
+        Permanent: true,
+      }));
+
+      // 3. AdminInitiateAuth — get tokens immediately after creation
+      const authResult = await cognitoClient.send(new AdminInitiateAuthCommand({
+        UserPoolId: COGNITO_USER_POOL_ID,
+        ClientId: COGNITO_CLIENT_ID,
+        AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
+        AuthParameters: { USERNAME: normalizedEmail, PASSWORD: password },
+      }));
+
+      const token = authResult.AuthenticationResult!.AccessToken!;
+
+      // 4. Retrieve the user's sub
+      const userRecord = await cognitoClient.send(new AdminGetUserCommand({
+        UserPoolId: COGNITO_USER_POOL_ID,
+        Username: normalizedEmail,
+      }));
+      const sub = userRecord.UserAttributes?.find((a) => a.Name === 'sub')?.Value!;
+
+      res.json({ token, user: { id: sub, email: normalizedEmail } });
+    } catch (err) {
+      if (err instanceof UsernameExistsException) {
+        // Do not confirm whether the email is registered — generic message only
+        res.status(409).json({ error: 'Email already registered' });
+        return;
+      }
+      console.error('[Auth] signup error:', (err as Error).message);
+      res.status(500).json({ error: 'Authentication failed' });
     }
-
-    // Generate a session token for the new user
-    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
-    });
-
-    if (signInError || !signInData.session) {
-      // User created but login failed — they can log in manually
-      res.status(201).json({
-        user: { id: data.user?.id, email: data.user?.email },
-        token: null,
-        message: 'Account created. Please log in.',
-      });
-      return;
-    }
-
-    res.json({
-      user: { id: data.user?.id, email: data.user?.email },
-      token: signInData.session.access_token,
-    });
   });
 
   // POST /api/auth/login — 10 attempts per 15 minutes per IP
@@ -173,20 +205,35 @@ export function createAuthRouter(url: string, serviceRoleKey: string): Router {
       return;
     }
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
-    });
+    const normalizedEmail = email.trim().toLowerCase();
 
-    if (error) {
+    try {
+      const authResult = await cognitoClient.send(new AdminInitiateAuthCommand({
+        UserPoolId: COGNITO_USER_POOL_ID,
+        ClientId: COGNITO_CLIENT_ID,
+        AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
+        AuthParameters: { USERNAME: normalizedEmail, PASSWORD: password },
+      }));
+
+      const token = authResult.AuthenticationResult!.AccessToken!;
+
+      const userRecord = await cognitoClient.send(new AdminGetUserCommand({
+        UserPoolId: COGNITO_USER_POOL_ID,
+        Username: normalizedEmail,
+      }));
+      const sub = userRecord.UserAttributes?.find((a) => a.Name === 'sub')?.Value!;
+
+      res.json({ token, user: { id: sub, email: normalizedEmail } });
+    } catch (err) {
+      // Do not distinguish between wrong password and user-not-found
+      console.warn('[Auth] login failed:', (err as Error).message);
       res.status(401).json({ error: 'Invalid email or password' });
-      return;
     }
+  });
 
-    res.json({
-      user: { id: data.user?.id, email: data.user?.email },
-      token: data.session?.access_token,
-    });
+  // POST /api/auth/logout — Cognito is stateless (AccessToken is a JWT); just 200
+  router.post('/api/auth/logout', (_req: Request, res: Response) => {
+    res.status(200).json({ message: 'Logged out' });
   });
 
   // GET /api/auth/me
@@ -197,13 +244,16 @@ export function createAuthRouter(url: string, serviceRoleKey: string): Router {
       return;
     }
 
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) {
+    try {
+      const { payload } = await jwtVerify(token, JWKS);
+      const sub = payload.sub as string;
+      const email = (payload['email'] as string | undefined) ??
+        (payload['cognito:username'] as string | undefined) ?? '';
+      res.json({ user: { id: sub, email } });
+    } catch (err) {
+      console.warn('[Auth] /me token verification failed:', (err as Error).message);
       res.status(401).json({ error: 'Invalid or expired token' });
-      return;
     }
-
-    res.json({ user: { id: data.user.id, email: data.user.email } });
   });
 
   return router;

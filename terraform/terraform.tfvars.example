@@ -1,0 +1,22 @@
+# Copy this file: cp terraform.tfvars.example terraform.tfvars
+# Fill in values, then: terraform init && terraform plan
+#
+# terraform.tfvars is gitignored.
+
+aws_region  = "ap-northeast-1"
+aws_profile = "ai-village-sso"   # SSO profile name from ~/.aws/config
+
+cluster_name       = "ai-village"
+kubernetes_version = "1.29"
+
+# Check existing VPCs before deploying:
+#   aws ec2 describe-vpcs --query 'Vpcs[*].CidrBlock' --profile ai-village-sso
+# Change if 10.100.0.0/16 conflicts with an existing VPC.
+vpc_cidr = "10.100.0.0/16"
+
+node_instance_type = "t3.medium"
+node_min_size      = 1
+node_max_size      = 3
+node_desired_size  = 2
+
+redis_node_type = "cache.t3.micro"

@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-migrate-sql
+  namespace: ai-village
+data:
+  migrate.sql: |
+    BEGIN;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aivillage_app') THEN
+        CREATE ROLE aivillage_app WITH LOGIN;
+      END IF;
+    END
+    $$;
+
+    CREATE TABLE IF NOT EXISTS world_state (
+      id         TEXT PRIMARY KEY DEFAULT 'current',
+      data       JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS agents (
+      id         UUID PRIMARY KEY,
+      data       JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_controllers (
+      agent_id   UUID PRIMARY KEY,
+      data       JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS memories (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      agent_id          UUID NOT NULL,
+      type              TEXT NOT NULL DEFAULT 'observation',
+      content           TEXT NOT NULL,
+      importance        FLOAT NOT NULL DEFAULT 5,
+      timestamp         BIGINT NOT NULL,
+      related_agent_ids TEXT[] NOT NULL DEFAULT '{}',
+      visibility        TEXT NOT NULL DEFAULT 'private',
+      emotional_valence FLOAT NOT NULL DEFAULT 0,
+      caused_by         TEXT,
+      led_to            TEXT[],
+      is_core           BOOLEAN GENERATED ALWAYS AS (importance >= 9) STORED,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS memories_agent_id_idx ON memories (agent_id);
+    CREATE INDEX IF NOT EXISTS memories_importance_idx ON memories (importance DESC);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON world_state       TO aivillage_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON agents            TO aivillage_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON agent_controllers TO aivillage_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON memories          TO aivillage_app;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aivillage_app;
+
+    COMMIT;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: ai-village
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: ai-village
+      containers:
+        - name: migrate
+          image: postgres:16-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              PG_DSN="postgresql://${MASTER_DB_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME:-aivillage}?sslmode=require"
+              echo "Running DDL migration..."
+              PGPASSWORD="$MASTER_DB_PASSWORD" psql "$PG_DSN" -f /sql/migrate.sql
+              echo "Setting aivillage_app password..."
+              PGPASSWORD="$MASTER_DB_PASSWORD" psql "$PG_DSN" \
+                -c "ALTER ROLE aivillage_app WITH LOGIN PASSWORD '${DB_PASSWORD}'"
+              echo "Migration completed successfully"
+          env:
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_NAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PASSWORD
+            - name: MASTER_DB_USER
+              value: "aivillage_admin"
+            - name: MASTER_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rds-master-secret
+                  key: password
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+      volumes:
+        - name: sql
+          configMap:
+            name: db-migrate-sql

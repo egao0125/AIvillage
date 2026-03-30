@@ -1948,6 +1948,7 @@ Output a JSON array ONLY, no other text:
 export { AgentCognition as default };
 export { InMemoryStore } from './memory/in-memory.js';
 export { SupabaseMemoryStore } from './memory/supabase-store.js';
+export { RdsMemoryStore } from './memory/rds-store.js';
 export { TieredMemory } from './memory/tiered-store.js';
 export { FourStreamMemory } from './memory/four-stream.js';
 export { AnthropicProvider } from './providers/anthropic.js';

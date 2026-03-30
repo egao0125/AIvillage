@@ -10,3 +10,10 @@ coverage/
 package-lock.json
 docs/
 packages/server/src/test-*.ts
+
+# Terraform — state, variables, and provider cache
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars

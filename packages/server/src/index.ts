@@ -8,7 +8,6 @@ import { createRouter } from './routes.js';
 import { createAuthRouter, optionalAuth } from './auth.js';
 import { setupRedis, closeRedis } from './redis.js';
 import { isEncryptionConfigured } from './crypto.js';
-import { createClient } from '@supabase/supabase-js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -64,15 +63,16 @@ app.use(express.json({ limit: '16kb' }));
 const engine = new SimulationEngine(io);
 
 // Auth: mount auth routes + optionalAuth middleware on all /api routes
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (supabaseUrl && supabaseKey) {
-  const supabase = createClient(supabaseUrl, supabaseKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  app.use(createAuthRouter(supabaseUrl, supabaseKey));
-  app.use('/api', optionalAuth(supabase));
+const cognitoUserPoolId = process.env.COGNITO_USER_POOL_ID;
+const cognitoClientId = process.env.COGNITO_CLIENT_ID;
+if (!cognitoUserPoolId || !cognitoClientId) {
+  console.warn(
+    '[Auth] WARNING: COGNITO_USER_POOL_ID and/or COGNITO_CLIENT_ID are not set.' +
+    ' Authentication endpoints will not function correctly.',
+  );
 }
+app.use(createAuthRouter());
+app.use('/api', optionalAuth());
 
 app.use(createRouter(engine));
 
@@ -125,11 +125,15 @@ io.on('connection', (socket) => {
     };
 
     // Generate one immediately
-    engine.generateThoughtFor(agentId).then(emit);
+    engine.generateThoughtFor(agentId).then(emit).catch((err: unknown) => {
+      console.warn('[Socket] generateThoughtFor failed:', (err as Error).message);
+    });
 
     // Then every 10 seconds
     const interval = setInterval(() => {
-      engine.generateThoughtFor(agentId).then(emit);
+      engine.generateThoughtFor(agentId).then(emit).catch((err: unknown) => {
+        console.warn('[Socket] generateThoughtFor failed:', (err as Error).message);
+      });
     }, 10_000);
     watchIntervals.set(socket.id, { interval, agentId });
   });
@@ -210,10 +214,14 @@ io.on('connection', (socket) => {
   socket.on('dev:fresh-start', async (token: unknown) => {
     if (!isDevAuthorized(token)) return;
     console.log('[Server] Fresh start requested');
-    await engine.freshStart();
-    io.emit('world:snapshot', engine.getSnapshot());
-    io.emit('dev:status', { paused: !engine.isRunning });
-    console.log('[Server] Fresh start complete — snapshot broadcast');
+    try {
+      await engine.freshStart();
+      io.emit('world:snapshot', engine.getSnapshot());
+      io.emit('dev:status', { paused: !engine.isRunning });
+      console.log('[Server] Fresh start complete — snapshot broadcast');
+    } catch (err) {
+      console.error('[Server] Fresh start failed:', (err as Error).message);
+    }
   });
 
   socket.on('dev:status-request', (token: unknown) => {
@@ -253,6 +261,9 @@ engine.initialize().then(() => {
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`AI Village server running on port ${PORT}`);
   });
+}).catch((err: unknown) => {
+  console.error('[Server] Engine initialization failed — aborting:', (err as Error).message);
+  process.exit(1);
 });
 
 // Graceful shutdown — critical for Fly.io which sends SIGTERM before stopping

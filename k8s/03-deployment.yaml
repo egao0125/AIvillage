@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-village
+  namespace: ai-village
+  labels:
+    app: ai-village
+    app.kubernetes.io/name: ai-village
+spec:
+  # -----------------------------------------------------------------------
+  # IMPORTANT: Keep replicas: 1 until the following is resolved:
+  #   World state is persisted as id:'current' (single row);
+  #     two pods would overwrite each other (Last Write Wins).
+  #   Agent state lives entirely in process memory (Map<string,AgentController>);
+  #     pods cannot share simulation state.
+  # Once stateless persistence is implemented, set replicas: 2+ and
+  # enable sticky sessions in 05-ingress.yaml.
+  # -----------------------------------------------------------------------
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-village
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never kill old pod before new pod is Ready
+      maxSurge: 1         # spin up one extra pod during rollout
+  template:
+    metadata:
+      labels:
+        app: ai-village
+    spec:
+      serviceAccountName: ai-village
+
+      # Mirror the non-root user created in Dockerfile (UID/GID 1001)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # 120 s matches fly.toml kill_timeout — gives SIGTERM handler time to save state
+      terminationGracePeriodSeconds: 120
+
+      containers:
+        - name: ai-village
+          # Replace with your ECR image URI:
+          #   <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ai-village:<TAG>
+          # Example:
+          #   123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/ai-village:v1.0.0
+          image: 053442321898.dkr.ecr.ap-northeast-1.amazonaws.com/ai-village:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: ai-village-config
+            - secretRef:
+                name: ai-village-secret
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          # Liveness: restart pod if /api/health stops responding (dead simulation loop)
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 30   # matches Dockerfile HEALTHCHECK --start-period
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # Readiness: stop sending traffic until the engine is initialized
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Give ALB ~5 s to drain connections before SIGTERM reaches the process
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # app writes nothing to disk; set true if confirmed
+            capabilities:
+              drop: ["ALL"]

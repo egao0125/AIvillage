@@ -1,0 +1,48 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-village
+  namespace: ai-village
+  annotations:
+    # AWS Load Balancer Controller (must be installed in the cluster).
+    # Install guide: https://kubernetes-sigs.github.io/aws-load-balancer-controller/
+    kubernetes.io/ingress.class: alb
+
+    # internet-facing: reachable from the public internet.
+    # Use "internal" if serving only within a VPC.
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # ip mode: routes traffic directly to pod IPs (requires VPC CNI).
+    # Avoids double-hop through kube-proxy (better latency for Socket.IO).
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # Listen on both HTTP and HTTPS; redirect HTTP → HTTPS.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+    # ACM certificate for TLS. Replace with the ARN from AWS Certificate Manager.
+    # Get ARN: aws acm list-certificates --region <REGION>
+    alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERTIFICATE_ARN
+
+    # Increase idle timeout to 120 s for long-lived Socket.IO WebSocket connections.
+    # ALB default is 60 s; connections are silently dropped without this.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
+
+    # -----------------------------------------------------------------------
+    # Sticky sessions — uncomment when replicas > 1.
+    # Socket.IO HTTP long-polling requires all requests from the same client
+    # to reach the same pod. WebSocket does not need stickiness once upgraded.
+    # -----------------------------------------------------------------------
+    # alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=86400
+spec:
+  rules:
+    - host: aivillage.example.com   # replace with actual domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-village
+                port:
+                  number: 80
