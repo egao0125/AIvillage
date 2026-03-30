@@ -78,7 +78,8 @@ export class PostConversationProcessor {
           learned: Array.isArray(parsed.learned) ? parsed.learned.filter((f: any) => typeof f === 'string').slice(0, 2) : [],
           tension: typeof parsed.tension === 'string' ? parsed.tension : null,
         };
-      } catch {
+      } catch (err) {
+        console.warn('[PostConversation] LLM response parse failed:', (err as Error).message);
         result = { summary: `I talked with ${othersLabel}.`, agreements: [], learned: [], tension: null };
       }
 
@@ -286,7 +287,9 @@ export class PostConversationProcessor {
           const otherName = this.world.getAgent(otherId)?.config.name || 'someone';
           void cognition.fourStream.updateDossier(
             otherId, otherName, result.summary, cognition.llmProvider
-          );
+          ).catch((err: unknown) => {
+            console.warn('[PostConversation] updateDossier failed:', (err as Error).message);
+          });
         }
 
         // Commitments are now tracked in agent.commitments[], not as concerns.

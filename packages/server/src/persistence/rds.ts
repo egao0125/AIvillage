@@ -48,7 +48,9 @@ export class RdsPersistence {
   constructor(connectionString: string) {
     this.pool = new PgPool({
       connectionString,
-      max: 10,
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
       ssl: process.env.NODE_ENV !== 'test' ? { rejectUnauthorized: false } : undefined,
     });
   }
@@ -76,12 +78,17 @@ export class RdsPersistence {
       activeBuildProjects: mapToRecord(world.activeBuildProjects),
     };
 
-    await this.pool.query(
-      `INSERT INTO world_state (id, data, updated_at)
-       VALUES ('current', $1, NOW())
-       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(data)],
-    );
+    try {
+      await this.pool.query(
+        `INSERT INTO world_state (id, data, updated_at)
+         VALUES ('current', $1, NOW())
+         ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+        [JSON.stringify(data)],
+      );
+    } catch (err) {
+      console.error('[RDS] saveWorldState failed:', (err as Error).message);
+      throw err;
+    }
   }
 
   async saveAgents(agents: Map<string, Agent>): Promise<void> {
@@ -95,12 +102,17 @@ export class RdsPersistence {
       datas.push(JSON.stringify(agent));
     }
 
-    await this.pool.query(
-      `INSERT INTO agents (id, data, updated_at)
-       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
-       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-      [ids, datas],
-    );
+    try {
+      await this.pool.query(
+        `INSERT INTO agents (id, data, updated_at)
+         SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
+         ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+        [ids, datas],
+      );
+    } catch (err) {
+      console.error('[RDS] saveAgents failed:', (err as Error).message);
+      throw err;
+    }
   }
 
   async saveAgentControllers(
@@ -131,16 +143,26 @@ export class RdsPersistence {
       datas.push(JSON.stringify(ctrlData));
     }
 
-    await this.pool.query(
-      `INSERT INTO agent_controllers (agent_id, data, updated_at)
-       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
-       ON CONFLICT (agent_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-      [agentIds, datas],
-    );
+    try {
+      await this.pool.query(
+        `INSERT INTO agent_controllers (agent_id, data, updated_at)
+         SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
+         ON CONFLICT (agent_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+        [agentIds, datas],
+      );
+    } catch (err) {
+      console.error('[RDS] saveAgentControllers failed:', (err as Error).message);
+      throw err;
+    }
   }
 
   async deleteAgent(agentId: string): Promise<void> {
-    await this.pool.query(`DELETE FROM agents WHERE id = $1`, [agentId]);
+    try {
+      await this.pool.query(`DELETE FROM agents WHERE id = $1`, [agentId]);
+    } catch (err) {
+      console.error('[RDS] deleteAgent failed:', (err as Error).message);
+      throw err;
+    }
   }
 
   async saveAll(
@@ -148,42 +170,62 @@ export class RdsPersistence {
     controllers: Map<string, AgentController>,
     apiKeys?: Map<string, { apiKey: string; model: string }>,
   ): Promise<void> {
-    await Promise.all([
-      this.saveWorldState(world),
-      this.saveAgents(world.agents),
-    ]);
-    await this.saveAgentControllers(controllers, apiKeys);
-    console.log(`[Persistence] Saved: ${world.agents.size} agents, ${controllers.size} controllers`);
+    try {
+      await Promise.all([
+        this.saveWorldState(world),
+        this.saveAgents(world.agents),
+      ]);
+      await this.saveAgentControllers(controllers, apiKeys);
+      console.log(`[Persistence] Saved: ${world.agents.size} agents, ${controllers.size} controllers`);
+    } catch (err) {
+      // Log but don't crash the simulation — next periodic save will retry
+      console.error('[RDS] saveAll failed (will retry next cycle):', (err as Error).message);
+    }
   }
 
   async loadWorldState(): Promise<WorldStateData | null> {
-    const result = await this.pool.query<{ data: WorldStateData }>(
-      `SELECT data FROM world_state WHERE id = 'current'`,
-    );
-    if (result.rows.length === 0) return null;
-    const worldData = result.rows[0].data;
-    if (!worldData || !worldData.time) return null;
-    return worldData;
+    try {
+      const result = await this.pool.query<{ data: WorldStateData }>(
+        `SELECT data FROM world_state WHERE id = 'current'`,
+      );
+      if (result.rows.length === 0) return null;
+      const worldData = result.rows[0].data;
+      if (!worldData || !worldData.time) return null;
+      return worldData;
+    } catch (err) {
+      console.error('[RDS] loadWorldState failed:', (err as Error).message);
+      return null;
+    }
   }
 
   async loadAgents(): Promise<Agent[]> {
-    const result = await this.pool.query<{ data: Agent }>(`SELECT data FROM agents`);
-    return result.rows.map(row => row.data);
+    try {
+      const result = await this.pool.query<{ data: Agent }>(`SELECT data FROM agents`);
+      return result.rows.map(row => row.data);
+    } catch (err) {
+      console.error('[RDS] loadAgents failed:', (err as Error).message);
+      return [];
+    }
   }
 
   async loadAgentControllers(): Promise<Map<string, ControllerData>> {
-    const result = await this.pool.query<{ agent_id: string; data: ControllerData }>(
-      `SELECT agent_id, data FROM agent_controllers`,
-    );
-    const map = new Map<string, ControllerData>();
-    for (const row of result.rows) {
-      const ctrl = row.data;
-      if (ctrl.apiKey) {
-        ctrl.apiKey = decryptApiKey(ctrl.apiKey);
+    try {
+      const result = await this.pool.query<{ agent_id: string; data: ControllerData }>(
+        `SELECT agent_id, data FROM agent_controllers`,
+      );
+      const map = new Map<string, ControllerData>();
+      for (const row of result.rows) {
+        const ctrl = row.data;
+        if (ctrl.apiKey) {
+          ctrl.apiKey = decryptApiKey(ctrl.apiKey);
+        }
+        map.set(row.agent_id, ctrl);
       }
-      map.set(row.agent_id, ctrl);
+      return map;
+    } catch (err) {
+      console.error('[RDS] loadAgentControllers failed:', (err as Error).message);
+      return new Map();
     }
-    return map;
   }
 
   // ---------------------------------------------------------------------------
@@ -191,27 +233,47 @@ export class RdsPersistence {
   // ---------------------------------------------------------------------------
 
   async deleteAllMemories(): Promise<void> {
-    await this.pool.query(
-      `DELETE FROM memories WHERE id != '00000000-0000-0000-0000-000000000000'`,
-    );
+    try {
+      await this.pool.query(
+        `DELETE FROM memories WHERE id != '00000000-0000-0000-0000-000000000000'`,
+      );
+    } catch (err) {
+      console.error('[RDS] deleteAllMemories failed:', (err as Error).message);
+      throw err;
+    }
   }
 
   async deleteMemoriesForAgent(agentId: string): Promise<void> {
-    await this.pool.query(`DELETE FROM memories WHERE agent_id = $1`, [agentId]);
+    try {
+      await this.pool.query(`DELETE FROM memories WHERE agent_id = $1`, [agentId]);
+    } catch (err) {
+      console.error('[RDS] deleteMemoriesForAgent failed:', (err as Error).message);
+      throw err;
+    }
   }
 
   async resetWorldState(): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO world_state (id, data, updated_at)
-       VALUES ('current', '{}', NOW())
-       ON CONFLICT (id) DO UPDATE SET data = '{}', updated_at = EXCLUDED.updated_at`,
-    );
+    try {
+      await this.pool.query(
+        `INSERT INTO world_state (id, data, updated_at)
+         VALUES ('current', '{}', NOW())
+         ON CONFLICT (id) DO UPDATE SET data = '{}', updated_at = EXCLUDED.updated_at`,
+      );
+    } catch (err) {
+      console.error('[RDS] resetWorldState failed:', (err as Error).message);
+      throw err;
+    }
   }
 
   async deleteAllControllers(): Promise<void> {
-    await this.pool.query(
-      `DELETE FROM agent_controllers WHERE agent_id != '00000000-0000-0000-0000-000000000000'`,
-    );
+    try {
+      await this.pool.query(
+        `DELETE FROM agent_controllers WHERE agent_id != '00000000-0000-0000-0000-000000000000'`,
+      );
+    } catch (err) {
+      console.error('[RDS] deleteAllControllers failed:', (err as Error).message);
+      throw err;
+    }
   }
 }
 

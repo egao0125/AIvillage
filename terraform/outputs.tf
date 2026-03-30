@@ -31,8 +31,8 @@ output "ecr_push_commands" {
 }
 
 output "redis_endpoint" {
-  description = "ElastiCache Redis endpoint — use as REDIS_URL in k8s/02-secret.yaml"
-  value       = "redis://${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379"
+  description = "ElastiCache Redis primary endpoint (TLS) — use as REDIS_URL in Secrets Manager"
+  value       = "rediss://${aws_elasticache_replication_group.redis.primary_endpoint_address}:6379"
 }
 
 output "vpc_id" {

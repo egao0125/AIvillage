@@ -30,8 +30,11 @@ export function setupRedis(): { pub: Redis; sub: Redis } | null {
     return null;
   }
 
-  _pub = new Redis(url, REDIS_OPTIONS);
-  _sub = new Redis(url, REDIS_OPTIONS);
+  // ioredis handles rediss:// (TLS) automatically; suppress cert validation for
+  // ElastiCache which uses AWS-managed CA not always present in Node.js bundles.
+  const tlsOptions = url.startsWith('rediss://') ? { tls: { rejectUnauthorized: false } } : {};
+  _pub = new Redis(url, { ...REDIS_OPTIONS, ...tlsOptions });
+  _sub = new Redis(url, { ...REDIS_OPTIONS, ...tlsOptions });
 
   _pub.on('error', (err: Error) => console.error('[Redis pub] Error:', err.message || String(err)));
   _sub.on('error', (err: Error) => console.error('[Redis sub] Error:', err.message || String(err)));

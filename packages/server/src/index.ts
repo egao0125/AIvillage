@@ -25,17 +25,23 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   : [];
 
 if (isProduction && ALLOWED_ORIGINS.length === 0) {
-  console.warn('[Security] ALLOWED_ORIGINS is not set — all cross-origin requests will be rejected.');
+  console.error('[Security] FATAL: ALLOWED_ORIGINS is not set in production.');
+  process.exit(1);
 }
 
-// Encryption: warn loudly if API key encryption is not configured in production.
+// Encryption: ENCRYPTION_KEY is required in production (protects stored API keys).
 if (isProduction && !isEncryptionConfigured()) {
-  console.warn(
-    '\n[Security] WARNING: ENCRYPTION_KEY is not set.' +
-    '\n           User API keys will be stored as plaintext in the database.' +
-    '\n           Generate a key: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"' +
-    '\n           Then set ENCRYPTION_KEY=<64-hex-chars> in your environment.\n',
+  console.error(
+    '[Security] FATAL: ENCRYPTION_KEY is not set in production.' +
+    ' User API keys would be stored as plaintext. Set ENCRYPTION_KEY=<64-hex-chars>.',
   );
+  process.exit(1);
+}
+
+// DEV_ADMIN_TOKEN must never be set in production — it grants unrestricted simulation control.
+if (isProduction && process.env.DEV_ADMIN_TOKEN) {
+  console.error('[Security] FATAL: DEV_ADMIN_TOKEN must not be set in production.');
+  process.exit(1);
 }
 
 // Redis: setup pub/sub clients before Socket.IO so the adapter is ready at startup.
