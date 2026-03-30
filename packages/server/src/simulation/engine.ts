@@ -1554,7 +1554,7 @@ export class SimulationEngine {
       // Strip private character data — OWASP API3: Broken Object Property Level Authorization.
       // soul/backstory/fears/desires/speechPattern are internal LLM-prompt fields only.
       // Never sent to any client regardless of auth status (REST or Socket.IO).
-      const cfg = agent.config as Record<string, unknown>;
+      const cfg = agent.config as unknown as Record<string, unknown>;
       delete cfg['soul'];
       delete cfg['backstory'];
       delete cfg['fears'];
