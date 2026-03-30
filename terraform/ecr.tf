@@ -13,6 +13,9 @@
 resource "aws_ecr_repository" "ai_village" {
   name                 = var.cluster_name
   image_tag_mutability = var.ecr_image_tag_mutability
+  # Required to switch encryption from AES256 to KMS: ECR can't re-encrypt in place,
+  # so the repository must be destroyed and recreated. Repush images after apply.
+  force_delete         = true
 
   # Scan each image on push for known CVEs.
   image_scanning_configuration {
