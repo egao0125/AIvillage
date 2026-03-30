@@ -48,6 +48,14 @@ export class SimulationEngine {
   private cachedWeeklySummary: string | null = null;
   private weeklySummaryGenerating: boolean = false;
 
+  // Circuit breaker state for isDbHealthy() readiness probe.
+  // Prevents log flooding (k8s calls every 10s) while still surfacing the first failure
+  // and the recovery moment — per AWS Well-Architected Operational Excellence BP.
+  private dbHealthFailureCount: number = 0;
+  private dbHealthCircuitOpenAt: number = 0;
+  private static readonly DB_HEALTH_CIRCUIT_THRESHOLD = 3;   // open after 3 consecutive failures
+  private static readonly DB_HEALTH_CIRCUIT_RESET_MS = 30_000; // re-try after 30 s
+
   constructor(private io: Server) {
     this.world = new World();
     this.decisionQueue = new DecisionQueue(SimulationEngine.MAX_CONCURRENT_LLM);
@@ -2441,13 +2449,49 @@ Answer with ONLY one word: "support" or "oppose".`,
    * Readiness check: verify the DB pool can serve a query.
    * Used by /api/ready (readinessProbe) so k8s removes the Pod from
    * Service traffic on DB outage without restarting it (livenessProbe is separate).
+   *
+   * Circuit-breaker pattern (AWS Well-Architected OE + OWASP Logging 7.1):
+   *   - Circuit opens after DB_HEALTH_CIRCUIT_THRESHOLD consecutive failures.
+   *   - While open, return false immediately without hitting DB (avoids pile-on).
+   *   - Log only the 1st failure, the circuit-open event, and recovery — not every probe.
    */
   async isDbHealthy(): Promise<boolean> {
     if (!this.persistence) return true; // no persistence configured — always ready
+
+    // Circuit open: suppress DB calls until reset timeout expires
+    if (this.dbHealthCircuitOpenAt > 0) {
+      if (Date.now() - this.dbHealthCircuitOpenAt < SimulationEngine.DB_HEALTH_CIRCUIT_RESET_MS) {
+        return false;
+      }
+      // Reset — allow one probe through to check recovery
+      this.dbHealthCircuitOpenAt = 0;
+    }
+
     try {
       await this.persistence.pool.query('SELECT 1');
+      if (this.dbHealthFailureCount > 0) {
+        console.info('[DbHealth] Database connection restored after', this.dbHealthFailureCount, 'failure(s)');
+        this.dbHealthFailureCount = 0;
+      }
       return true;
-    } catch {
+    } catch (err) {
+      this.dbHealthFailureCount++;
+
+      if (this.dbHealthFailureCount === 1) {
+        console.error('[DbHealth] Database health check failed:', (err as Error).message);
+      }
+      if (this.dbHealthFailureCount >= SimulationEngine.DB_HEALTH_CIRCUIT_THRESHOLD) {
+        this.dbHealthCircuitOpenAt = Date.now();
+        console.error(
+          '[DbHealth] Circuit breaker opened after',
+          this.dbHealthFailureCount,
+          'consecutive failures — suppressing further DB probes for',
+          SimulationEngine.DB_HEALTH_CIRCUIT_RESET_MS / 1_000,
+          's',
+        );
+        this.dbHealthFailureCount = 0; // reset so next half-open probe counts from 1 again
+      }
+
       return false;
     }
   }

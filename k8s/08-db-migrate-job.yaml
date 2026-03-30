@@ -49,8 +49,15 @@ data:
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    CREATE INDEX IF NOT EXISTS memories_agent_id_idx ON memories (agent_id);
-    CREATE INDEX IF NOT EXISTS memories_importance_idx ON memories (importance DESC);
+    -- Composite indexes to support the three primary query patterns in rds-store.ts:
+    --   (1) WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT N
+    --   (2) WHERE agent_id = $1 AND timestamp < $2 ORDER BY timestamp DESC LIMIT N
+    --   (3) WHERE agent_id = $1 [AND importance >= $3] ORDER BY importance DESC
+    -- PostgreSQL B-Tree: leftmost column (agent_id) prunes the index scan to one agent,
+    -- then the second column satisfies ORDER BY without a sort step (index-only ordering).
+    -- Reference: PostgreSQL docs §11.3 "Multicolumn Indexes".
+    CREATE INDEX IF NOT EXISTS memories_agent_timestamp_idx ON memories (agent_id, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS memories_agent_importance_idx ON memories (agent_id, importance DESC);
 
     GRANT SELECT, INSERT, UPDATE, DELETE ON world_state       TO aivillage_app;
     GRANT SELECT, INSERT, UPDATE, DELETE ON agents            TO aivillage_app;

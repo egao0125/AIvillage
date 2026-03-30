@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
+import { timingSafeEqual, createHash } from 'crypto';
 import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
 import { createAuthRouter, optionalAuth } from './auth.js';
@@ -128,12 +129,15 @@ const watchIntervals: Map<string, { interval: NodeJS.Timeout; agentId: string }>
 // Dev tools: require a secret token to prevent accidental or malicious use in production.
 // Set DEV_ADMIN_TOKEN in environment to enable dev commands. Leave unset to disable entirely.
 const DEV_ADMIN_TOKEN = process.env.DEV_ADMIN_TOKEN;
+const DEV_ADMIN_TOKEN_HASH = DEV_ADMIN_TOKEN
+  ? createHash('sha256').update(DEV_ADMIN_TOKEN).digest()
+  : null;
+// Use timingSafeEqual to prevent timing attacks on token comparison (OWASP ASVS 2.9.1).
+// Consistent with routes.ts requireAdmin() which also uses timingSafeEqual.
 function isDevAuthorized(token: unknown): boolean {
-  return (
-    typeof DEV_ADMIN_TOKEN === 'string' &&
-    DEV_ADMIN_TOKEN.length > 0 &&
-    token === DEV_ADMIN_TOKEN
-  );
+  if (!DEV_ADMIN_TOKEN_HASH || typeof token !== 'string' || token.length === 0) return false;
+  const tokenHash = createHash('sha256').update(token).digest();
+  return timingSafeEqual(DEV_ADMIN_TOKEN_HASH, tokenHash);
 }
 
 io.on('connection', (socket) => {
