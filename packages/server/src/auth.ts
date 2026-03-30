@@ -1,3 +1,4 @@
+import { createHmac } from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import {
   CognitoIdentityProviderClient,
@@ -81,8 +82,30 @@ declare global {
 const COGNITO_REGION = process.env.COGNITO_REGION || 'ap-northeast-1';
 const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID!;
 const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID!;
+// COGNITO_CLIENT_SECRET is required when the Cognito app client has generate_secret=true.
+// In production, absence means auth will fail — fatal exit.
+const COGNITO_CLIENT_SECRET = process.env.COGNITO_CLIENT_SECRET;
+const isProduction = process.env.NODE_ENV === 'production';
+if (isProduction && !COGNITO_CLIENT_SECRET) {
+  console.error('[Security] FATAL: COGNITO_CLIENT_SECRET is not set in production. ' +
+    'Required when Cognito app client has generate_secret=true.');
+  process.exit(1);
+}
 
 const cognitoClient = new CognitoIdentityProviderClient({ region: COGNITO_REGION });
+
+/**
+ * Computes the SECRET_HASH required by Cognito when generate_secret=true.
+ * Formula: Base64(HMAC-SHA256(username + clientId, clientSecret))
+ * Required in AuthParameters for AdminInitiateAuthCommand.
+ * AdminCreateUser/AdminSetUserPassword are admin user-management APIs and do NOT need this.
+ */
+function computeSecretHash(username: string): string {
+  if (!COGNITO_CLIENT_SECRET) return '';
+  return createHmac('sha256', COGNITO_CLIENT_SECRET)
+    .update(username + COGNITO_CLIENT_ID)
+    .digest('base64');
+}
 
 const JWKS = createRemoteJWKSet(
   new URL(
@@ -196,7 +219,11 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         UserPoolId: COGNITO_USER_POOL_ID,
         ClientId: COGNITO_CLIENT_ID,
         AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
-        AuthParameters: { USERNAME: normalizedEmail, PASSWORD: password },
+        AuthParameters: {
+          USERNAME: normalizedEmail,
+          PASSWORD: password,
+          ...(COGNITO_CLIENT_SECRET && { SECRET_HASH: computeSecretHash(normalizedEmail) }),
+        },
       }));
 
       const token = authResult.AuthenticationResult?.AccessToken;
@@ -246,7 +273,11 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         UserPoolId: COGNITO_USER_POOL_ID,
         ClientId: COGNITO_CLIENT_ID,
         AuthFlow: 'ADMIN_USER_PASSWORD_AUTH',
-        AuthParameters: { USERNAME: normalizedEmail, PASSWORD: password },
+        AuthParameters: {
+          USERNAME: normalizedEmail,
+          PASSWORD: password,
+          ...(COGNITO_CLIENT_SECRET && { SECRET_HASH: computeSecretHash(normalizedEmail) }),
+        },
       }));
 
       const token = authResult.AuthenticationResult?.AccessToken;
