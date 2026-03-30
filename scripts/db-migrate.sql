@@ -1,5 +1,5 @@
 -- AI Village Database Migration
--- Run as: psql "postgresql://aivillage_admin:<password>@<host>/aivillage?sslmode=require" -f scripts/db-migrate.sql
+-- Run as: psql "postgresql://aivillage_admin:<password>@<host>/aivillage?sslmode=verify-full" -f scripts/db-migrate.sql
 
 BEGIN;
 

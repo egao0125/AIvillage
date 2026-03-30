@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import helmet from 'helmet';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -62,6 +63,25 @@ if (redis) {
 } else {
   console.log('[Server] Socket.IO using in-memory adapter (single-instance only)');
 }
+
+// Security headers (OWASP / Express best practices):
+// CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, etc.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+  strictTransportSecurity: isProduction
+    ? { maxAge: 63_072_000, includeSubDomains: true, preload: true }
+    : false,
+  frameguard: { action: 'deny' },
+}));
 
 // Limit request body size to prevent abuse
 app.use(express.json({ limit: '16kb' }));

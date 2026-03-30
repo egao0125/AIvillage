@@ -92,11 +92,14 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
 
-          # Give ALB ~5 s to drain connections before SIGTERM reaches the process
+          # Wait for ALB target deregistration before SIGTERM reaches the process.
+          # ALB default deregistration delay is 300s (typically shortened to ~30s).
+          # 15s sleep ensures in-flight requests complete after pod leaves the
+          # Service endpoint — per Google SRE / AWS Well-Architected best practices.
           lifecycle:
             preStop:
               exec:
-                command: ["/bin/sh", "-c", "sleep 5"]
+                command: ["/bin/sh", "-c", "sleep 15"]
 
           securityContext:
             allowPrivilegeEscalation: false

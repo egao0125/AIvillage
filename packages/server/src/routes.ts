@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import { timingSafeEqual, createHash } from 'crypto';
 import type { SimulationEngine } from './simulation/engine.js';
 import { requireAuth } from './auth.js';
 import { getRedis } from './redis.js';
@@ -117,10 +118,20 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
  * Middleware: require DEV_ADMIN_TOKEN header for destructive admin operations.
  * Rejects with 403 when the token is missing, wrong, or DEV_ADMIN_TOKEN is unset.
  */
+// Hash both tokens before comparing to ensure equal-length buffers for
+// timingSafeEqual, and to prevent length-based side-channel leakage.
 function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const adminToken = process.env.DEV_ADMIN_TOKEN;
-  const provided = req.headers['x-admin-token'];
-  if (!adminToken || !provided || provided !== adminToken) {
+  const provided = typeof req.headers['x-admin-token'] === 'string'
+    ? req.headers['x-admin-token']
+    : '';
+  if (!adminToken || !provided) {
+    res.status(403).json({ error: 'Admin access required' });
+    return;
+  }
+  const hashA = createHash('sha256').update(adminToken).digest();
+  const hashB = createHash('sha256').update(provided).digest();
+  if (!timingSafeEqual(hashA, hashB)) {
     res.status(403).json({ error: 'Admin access required' });
     return;
   }

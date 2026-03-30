@@ -82,7 +82,7 @@ spec:
             - -c
             - |
               set -e
-              PG_DSN="postgresql://${MASTER_DB_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME:-aivillage}?sslmode=require"
+              PG_DSN="postgresql://${MASTER_DB_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME:-aivillage}?sslmode=verify-full"
               echo "Running DDL migration..."
               PGPASSWORD="$MASTER_DB_PASSWORD" psql "$PG_DSN" -f /sql/migrate.sql
               echo "Setting aivillage_app password..."

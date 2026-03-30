@@ -101,7 +101,7 @@ export class SimulationEngine {
 
     // Restore from RDS if persistence is enabled
     if (this.persistence) {
-      await this.loadFromSupabase();
+      await this.loadFromRds();
     }
 
     // --- Infra 1: Wire event bus subscriptions ---
@@ -293,7 +293,7 @@ export class SimulationEngine {
     console.log(`[Engine] AI Village initialized (no starter agents — users create agents via UI)`);
   }
 
-  private async loadFromSupabase(): Promise<void> {
+  private async loadFromRds(): Promise<void> {
     if (!this.persistence) return;
 
     try {
