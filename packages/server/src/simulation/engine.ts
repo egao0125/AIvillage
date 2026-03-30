@@ -1,7 +1,7 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import { getAreaEntrance } from '../map/village.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
@@ -11,9 +11,8 @@ import { ConversationManager } from './conversation/index.js';
 import { AgentController } from './agent-controller.js';
 import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
-import { STARTER_AGENTS } from '../agents/starter.js';
 import { AREAS } from '../map/village.js';
-import { SupabasePersistence } from '../persistence/supabase.js';
+import { RdsPersistence } from '../persistence/rds.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
 import { CharacterTimeline } from './character-timeline.js';
@@ -38,7 +37,7 @@ export class SimulationEngine {
   readonly viewportManager: ViewportManager = new ViewportManager();
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
-  private persistence: SupabasePersistence | null = null;
+  private persistence: RdsPersistence | null = null;
   private weatherStableUntil: number = 0;
   private lastConversationPair: Map<string, number> = new Map();
   private narrator!: VillageNarrator;
@@ -53,13 +52,15 @@ export class SimulationEngine {
     this.world = new World();
     this.decisionQueue = new DecisionQueue(SimulationEngine.MAX_CONCURRENT_LLM);
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (supabaseUrl && supabaseKey) {
-      this.persistence = new SupabasePersistence(supabaseUrl, supabaseKey);
-      console.log('[Engine] Supabase persistence enabled');
+    const dbHost = process.env.DB_HOST;
+    const dbUser = process.env.DB_USER;
+    const dbPassword = process.env.DB_PASSWORD;
+    if (dbHost && dbUser && dbPassword) {
+      const connStr = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'aivillage'}?sslmode=no-verify`;
+      this.persistence = new RdsPersistence(connStr);
+      console.log('[Engine] RDS persistence enabled');
     } else {
-      console.log('[Engine] Supabase persistence disabled (missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY)');
+      console.log('[Engine] RDS persistence disabled (missing DB_HOST, DB_USER, or DB_PASSWORD)');
     }
   }
 
@@ -98,7 +99,7 @@ export class SimulationEngine {
     // Wire bystander notification when conversations end
     this.conversationManager.onConversationEnd = (conv) => this.notifyConversationBystanders(conv);
 
-    // Restore from Supabase if persistence is enabled
+    // Restore from RDS if persistence is enabled
     if (this.persistence) {
       await this.loadFromSupabase();
     }
@@ -266,13 +267,17 @@ export class SimulationEngine {
 
     // Board post reactions — each alive agent generates a 1-2 sentence comment
     this.bus.on('board_post_created', (e) => {
-      void this.generatePostReactions(e.post);
+      void this.generatePostReactions(e.post).catch((err: unknown) => {
+        console.warn('[Engine] generatePostReactions failed:', (err as Error).message);
+      });
     });
 
     // Nightly vote — at hour 21, vote on all pending proposals
     this.bus.on('hour_changed', (e) => {
       if (e.hour === 21) {
-        void this.resolveNightlyVotes();
+        void this.resolveNightlyVotes().catch((err: unknown) => {
+          console.warn('[Engine] resolveNightlyVotes failed:', (err as Error).message);
+        });
       }
     });
 
@@ -352,14 +357,14 @@ export class SimulationEngine {
       }
 
       if (agents.length === 0) {
-        console.log('[Engine] No agents to restore from Supabase');
+        console.log('[Engine] No agents to restore from RDS');
         return;
       }
 
       const globalKey = process.env.ANTHROPIC_API_KEY;
       const globalKey2 = process.env.ANTHROPIC_API_KEY_2;
       const defaultModel = 'claude-haiku-4-5-20251001';
-      const sharedMemoryStore = new SupabaseMemoryStore(this.persistence.client);
+      const sharedMemoryStore = new RdsMemoryStore(this.persistence.pool);
 
       for (let i = 0; i < agents.length; i++) {
         const agent = agents[i];
@@ -395,7 +400,7 @@ export class SimulationEngine {
           continue;
         }
 
-        // Create cognition with Supabase-backed memory + throttled LLM
+        // Create cognition with RDS-backed memory + throttled LLM
         const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = (ctrlDataForWorldView as any)?.worldViewParts as WorldViewParts | undefined;
@@ -518,10 +523,10 @@ export class SimulationEngine {
       }
       console.log(`[Engine] Data cleanup complete for ${agents.length} agents (day=${currentDay})`);
 
-      console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
+      console.log(`[Engine] Restored ${agents.length} agents from RDS`);
       this.refreshNameMaps();
     } catch (err) {
-      console.error('[Engine] Failed to load from Supabase:', err);
+      console.error('[Engine] Failed to load from RDS:', err);
     }
   }
 
@@ -590,7 +595,7 @@ export class SimulationEngine {
       this.agentApiKeys.set(id, { apiKey: effectiveKey, model: effectiveModel });
     }
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey ?? '', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
@@ -624,7 +629,7 @@ export class SimulationEngine {
       `[Engine] Agent created: ${config.name}${config.occupation ? ' (' + config.occupation + ')' : ''} at ${spawnArea}`,
     );
 
-    // Save agent to Supabase FIRST, then seed memories (FK: memories.agent_id → agents.id)
+    // Save agent to RDS FIRST, then seed memories (FK: memories.agent_id → agents.id)
     const seedMemories = async () => {
       // Use soul (rich character text) when backstory is empty
       const identityText = config.soul || config.backstory || '';
@@ -650,7 +655,7 @@ export class SimulationEngine {
     };
 
     if (this.persistence) {
-      // Await save + seed so memories exist in Supabase before first decide()
+      // Await save + seed so memories exist in RDS before first decide()
       void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
         .then(() => seedMemories())
         .catch(err => {
@@ -705,7 +710,7 @@ export class SimulationEngine {
     // Broadcast leave
     this.broadcaster.agentLeave(id);
 
-    // Delete from Supabase (CASCADE removes controller + memories)
+    // Delete from RDS (CASCADE removes controller + memories)
     if (this.persistence) {
       void this.persistence.deleteAgent(id).catch(err =>
         console.error('[Persistence] Delete failed:', err)
@@ -768,7 +773,7 @@ export class SimulationEngine {
     }
 
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
     // Preserve worldViewParts from old cognition if available
@@ -867,12 +872,12 @@ export class SimulationEngine {
 
     // Clear old memories BEFORE creating new store — await to prevent race condition
     if (this.persistence) {
-      const { error } = await this.persistence.client
-        .from('memories')
-        .delete()
-        .eq('agent_id', id);
-      if (error) console.error(`[Engine] Failed to clear memories for ${agent.config.name}:`, error.message);
-      else console.log(`[Engine] Cleared memories for ${agent.config.name} on resurrection`);
+      try {
+        await this.persistence.deleteMemoriesForAgent(id);
+        console.log(`[Engine] Cleared memories for ${agent.config.name} on resurrection`);
+      } catch (err) {
+        console.error(`[Engine] Failed to clear memories for ${agent.config.name}:`, err);
+      }
     }
 
     // Recreate cognition with fresh worldView — no stale knowledge from past life
@@ -884,7 +889,7 @@ export class SimulationEngine {
     }
 
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
     const spawnArea = SimulationEngine.SPAWN_AREAS[
@@ -913,7 +918,7 @@ export class SimulationEngine {
     controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
-    // Seed fresh-start memories — MUST await so first decide() has grounding in Supabase
+    // Seed fresh-start memories — MUST await so first decide() has grounding in RDS
     const identityText = agent.config.soul || agent.config.backstory || '';
     await cognition.addMemory({
       id: crypto.randomUUID(), agentId: id, type: 'reflection',
@@ -1051,7 +1056,7 @@ export class SimulationEngine {
     if (this.persistence) {
       try {
         await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
-        console.log('[Engine] Final state saved to Supabase');
+        console.log('[Engine] Final state saved to RDS');
       } catch (err) {
         console.error('[Engine] Final save failed:', err);
       }
@@ -2173,7 +2178,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     // Create new provider and cognition — preserve worldViewParts
     const llmProvider = this.getThrottledProvider(newApiKey, newModel);
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
@@ -2216,32 +2221,28 @@ Answer with ONLY one word: "support" or "oppose".`,
     this.cognitions.clear();
     if (this.decisionQueue) this.decisionQueue.clear();
 
-    // Let any in-flight Supabase writes from the old life settle
+    // Let any in-flight RDS writes from the old life settle
     await new Promise(resolve => setTimeout(resolve, 2000));
     console.log('[FreshStart] Old controllers cleared, in-flight writes settled');
 
-    // 1. Wipe Supabase data (memories, world_state, agent_controllers) but keep agent rows
+    // 1. Wipe RDS data (memories, world_state, agent_controllers) but keep agent rows
     if (this.persistence) {
-      // Delete all memories
-      const { error: memErr } = await this.persistence.client
-        .from('memories')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000'); // delete all rows
-      if (memErr) console.error('[FreshStart] Failed to delete memories:', memErr.message);
-      else console.log('[FreshStart] All memories deleted');
-
-      // Reset world state to empty
-      const { error: wsErr } = await this.persistence.client
-        .from('world_state')
-        .upsert({ id: 'current', data: {}, updated_at: new Date().toISOString() });
-      if (wsErr) console.error('[FreshStart] Failed to reset world_state:', wsErr.message);
-
-      // Delete agent controllers (will be recreated)
-      const { error: ctrlErr } = await this.persistence.client
-        .from('agent_controllers')
-        .delete()
-        .neq('agent_id', '00000000-0000-0000-0000-000000000000');
-      if (ctrlErr) console.error('[FreshStart] Failed to delete controllers:', ctrlErr.message);
+      try {
+        await this.persistence.deleteAllMemories();
+        console.log('[FreshStart] All memories deleted');
+      } catch (err) {
+        console.error('[FreshStart] Failed to delete memories:', err);
+      }
+      try {
+        await this.persistence.resetWorldState();
+      } catch (err) {
+        console.error('[FreshStart] Failed to reset world_state:', err);
+      }
+      try {
+        await this.persistence.deleteAllControllers();
+      } catch (err) {
+        console.error('[FreshStart] Failed to delete controllers:', err);
+      }
     }
 
     // 2. Reset world to day 1
@@ -2280,7 +2281,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     this.weeklySummaryGenerating = false;
 
     const sharedMemoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
 
     for (const agent of this.world.agents.values()) {
@@ -2319,7 +2320,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
-      // Seed identity memories — await so they exist in Supabase before first decide()
+      // Seed identity memories — await so they exist in RDS before first decide()
       const identityText = agent.config.soul || agent.config.backstory || '';
       await cognition.addMemory({
         id: crypto.randomUUID(), agentId: agent.id, type: 'reflection',
@@ -2357,11 +2358,11 @@ Answer with ONLY one word: "support" or "oppose".`,
 
     this.refreshNameMaps();
 
-    // 4. Save fresh state to Supabase
+    // 4. Save fresh state to RDS
     if (this.persistence) {
       try {
         await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
-        console.log('[FreshStart] Fresh state saved to Supabase');
+        console.log('[FreshStart] Fresh state saved to RDS');
       } catch (err) {
         console.error('[FreshStart] Save failed:', err);
       }
@@ -2370,10 +2371,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     // 5. Final cleanup — delete any stale memories that landed after first wipe, then re-seed
     if (this.persistence) {
       // Nuke everything
-      await this.persistence.client
-        .from('memories')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000');
+      await this.persistence.deleteAllMemories();
       // Re-seed identity memories for all agents
       for (const [agentId, cognition] of this.cognitions.entries()) {
         const agent = this.world.getAgent(agentId);
