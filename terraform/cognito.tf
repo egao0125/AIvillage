@@ -44,11 +44,14 @@ resource "aws_cognito_user_pool_client" "this" {
 
   generate_secret = false
 
+  # ALLOW_ADMIN_USER_PASSWORD_AUTH: required for server-side AdminInitiateAuth (auth.ts login/signup).
+  # ALLOW_USER_SRP_AUTH: enables SRP-based client auth (recommended by AWS, avoids password on wire).
+  # ALLOW_USER_PASSWORD_AUTH intentionally omitted: it allows clients to send plaintext passwords
+  # directly to Cognito, bypassing SRP — violates OWASP ASVS v4.0 §2.1 and AWS Security Pillar.
   explicit_auth_flows = [
-    "ALLOW_USER_PASSWORD_AUTH",
+    "ALLOW_ADMIN_USER_PASSWORD_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
     "ALLOW_USER_SRP_AUTH",
-    "ALLOW_ADMIN_USER_PASSWORD_AUTH",
   ]
 
   access_token_validity  = 60   # minutes

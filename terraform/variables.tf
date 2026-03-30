@@ -94,10 +94,16 @@ variable "eks_public_access_cidrs" {
   # CIS EKS Benchmark 5.4.2: restrict public API endpoint access to known CIDRs.
   # Add your corporate/VPN CIDR(s) here. Using ["0.0.0.0/0"] exposes the k8s
   # API server to the internet — only auth protects it, no network-layer defence.
-  # To disable public access entirely: set cluster_endpoint_public_access = false.
-  description = "CIDRs allowed to reach the EKS public API endpoint. Restrict to VPN/corporate IPs."
+  # To disable public access entirely: set cluster_endpoint_public_access = false in eks.tf.
+  # Example terraform.tfvars: eks_public_access_cidrs = ["203.0.113.0/24"]
+  description = "CIDRs allowed to reach the EKS public API endpoint. Restrict to VPN/corporate IPs. Must not be empty."
   type        = list(string)
-  default     = ["0.0.0.0/0"]  # REPLACE before applying — use your VPN/corporate CIDR
+  default     = []
+
+  validation {
+    condition     = length(var.eks_public_access_cidrs) > 0 && !contains(var.eks_public_access_cidrs, "0.0.0.0/0")
+    error_message = "eks_public_access_cidrs must be set to specific CIDRs (e.g. VPN range). '0.0.0.0/0' and empty list are not allowed (CIS EKS 5.4.2)."
+  }
 }
 
 variable "rds_instance_class" {

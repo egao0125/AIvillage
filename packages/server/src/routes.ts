@@ -147,6 +147,10 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 // Routes
 // =============================================================================
 
+// Parsed once at startup — parseInt on every request is wasteful and doesn't
+// reflect hot env-var changes anyway (process restart is required to resize the pool).
+const MAX_AGENTS = parseInt(process.env.MAX_AGENTS || '50');
+
 export function createRouter(engine: SimulationEngine): Router {
   const router = Router();
 
@@ -277,11 +281,10 @@ Relationships: ${mentalModels}`;
         return;
       }
       // Enforce max agent limit
-      const maxAgents = parseInt(process.env.MAX_AGENTS || '50');
       const snapshot = engine.getSnapshot();
-      if (snapshot.agents.length >= maxAgents) {
+      if (snapshot.agents.length >= MAX_AGENTS) {
         res.status(429).json({
-          error: `Village is full (max ${maxAgents} agents). Try again later.`,
+          error: `Village is full (max ${MAX_AGENTS} agents). Try again later.`,
         });
         return;
       }

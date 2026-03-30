@@ -49,7 +49,11 @@ spec:
           # Replace with: terraform output ecr_repository_url
           # Format: <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ai-village:<TAG>
           image: REPLACE_WITH_ECR_IMAGE_URI
-          imagePullPolicy: Always
+          # IfNotPresent: safe with immutable ECR tags (commit SHA / semver).
+          # "Always" re-pulls on every Pod restart — triggers ECR rate limits at scale
+          # and blocks startup if ECR is unreachable. ECR IMMUTABLE tag policy already
+          # enforces that a given tag can never point to a different image.
+          imagePullPolicy: IfNotPresent
 
           ports:
             - name: http

@@ -57,12 +57,17 @@ export function connectSocket(): Socket {
     if (snapshot.weeklySummary) gameStore.setWeeklySummary(snapshot.weeklySummary);
     if (snapshot.villageMemory) gameStore.setVillageMemory(snapshot.villageMemory);
 
-    // Check if we need a recap (returning after 2+ game days absence)
-    const lastSeenDay = parseInt(localStorage.getItem('ai-village-last-seen-day') || '0');
-    if (lastSeenDay > 0 && snapshot.time.day > lastSeenDay + 2) {
-      socket?.emit('recap:request', { sinceDay: lastSeenDay });
+    // Check if we need a recap (returning after 2+ game days absence).
+    // localStorage may throw SecurityError in private browsing mode — guard all access.
+    try {
+      const lastSeenDay = parseInt(localStorage.getItem('ai-village-last-seen-day') || '0');
+      if (lastSeenDay > 0 && snapshot.time.day > lastSeenDay + 2) {
+        socket?.emit('recap:request', { sinceDay: lastSeenDay });
+      }
+      localStorage.setItem('ai-village-last-seen-day', String(snapshot.time.day));
+    } catch {
+      // localStorage unavailable (private browsing / storage quota) — skip recap tracking
     }
-    localStorage.setItem('ai-village-last-seen-day', String(snapshot.time.day));
 
     eventBus.emit('world:snapshot', snapshot);
   });
@@ -310,7 +315,11 @@ export function connectSocket(): Socket {
   setInterval(() => {
     const time = gameStore.getState().time;
     if (time.day > 0) {
-      localStorage.setItem('ai-village-last-seen-day', String(time.day));
+      try {
+        localStorage.setItem('ai-village-last-seen-day', String(time.day));
+      } catch {
+        // localStorage unavailable (private browsing / storage quota) — skip
+      }
     }
   }, 60_000);
 
@@ -332,12 +341,14 @@ export function sendSpectatorComment(message: string): void {
 // to enable the dev panel. Leave unset to disable dev commands from this client.
 const DEV_TOKEN: string = (import.meta as { env?: Record<string, string> }).env?.VITE_DEV_ADMIN_TOKEN ?? '';
 
-export function devPause(): void { socket?.emit('dev:pause', DEV_TOKEN); }
-export function devResume(): void { socket?.emit('dev:resume', DEV_TOKEN); }
-export function devStep(): void { socket?.emit('dev:step', DEV_TOKEN); }
-export function devResetVitals(): void { socket?.emit('dev:reset-vitals', DEV_TOKEN); }
-export function devFreshStart(): void { socket?.emit('dev:fresh-start', DEV_TOKEN); }
-export function devRequestStatus(): void { socket?.emit('dev:status-request', DEV_TOKEN); }
+// Guard all dev commands: if DEV_TOKEN is not configured, emit nothing.
+// The server would reject empty tokens anyway, but this avoids spurious socket events.
+export function devPause(): void { if (DEV_TOKEN) socket?.emit('dev:pause', DEV_TOKEN); }
+export function devResume(): void { if (DEV_TOKEN) socket?.emit('dev:resume', DEV_TOKEN); }
+export function devStep(): void { if (DEV_TOKEN) socket?.emit('dev:step', DEV_TOKEN); }
+export function devResetVitals(): void { if (DEV_TOKEN) socket?.emit('dev:reset-vitals', DEV_TOKEN); }
+export function devFreshStart(): void { if (DEV_TOKEN) socket?.emit('dev:fresh-start', DEV_TOKEN); }
+export function devRequestStatus(): void { if (DEV_TOKEN) socket?.emit('dev:status-request', DEV_TOKEN); }
 export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void {
   socket?.on('dev:status', cb);
   return () => { socket?.off('dev:status', cb); };
