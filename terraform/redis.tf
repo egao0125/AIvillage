@@ -4,6 +4,8 @@
 #
 # Placement: private subnets only. The security group allows inbound 6379
 # exclusively from EKS nodes; no public access.
+#
+# HA: Replication Group with automatic_failover and multi_az for AZ redundancy.
 # ---------------------------------------------------------------------------
 
 # Security group: allow Redis traffic only from EKS nodes.
@@ -36,23 +38,34 @@ resource "aws_elasticache_subnet_group" "redis" {
   subnet_ids = module.vpc.private_subnets
 }
 
-resource "aws_elasticache_cluster" "redis" {
-  cluster_id           = "${var.cluster_name}-redis"
+# Replication Group: primary + 1 replica across AZs, automatic failover.
+resource "aws_elasticache_replication_group" "redis" {
+  replication_group_id = "${var.cluster_name}-redis"
+  description          = "AI Village Redis HA replication group"
+
   engine               = "redis"
   engine_version       = "7.1"
   node_type            = var.redis_node_type
-  num_cache_nodes      = 1
+  num_cache_clusters   = 2    # primary + 1 replica
   parameter_group_name = "default.redis7"
   port                 = 6379
 
   subnet_group_name  = aws_elasticache_subnet_group.redis.name
   security_group_ids = [aws_security_group.redis.id]
 
-  # Retain 1 day of automatic snapshots (free tier).
-  snapshot_retention_limit = 1
-  snapshot_window          = "03:00-04:00"   # UTC — adjust to off-peak for your region
+  automatic_failover_enabled = true
+  multi_az_enabled           = true
 
-  apply_immediately = true
+  # Retain 7 days of automatic snapshots
+  snapshot_retention_limit = 7
+  snapshot_window          = "02:00-03:00"   # UTC — different from RDS to spread load
+  maintenance_window       = "sun:05:00-sun:06:00"
+
+  apply_immediately = false   # apply during maintenance window in production
+
+  at_rest_encryption_enabled  = true
+  transit_encryption_enabled  = true
+  transit_encryption_mode     = "required"
 
   tags = merge(var.tags, { Name = "${var.cluster_name}-redis" })
 }

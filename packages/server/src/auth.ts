@@ -104,7 +104,10 @@ export function optionalAuth(_config?: unknown) {
       return next();
     }
     try {
-      const { payload } = await jwtVerify(token, JWKS);
+      const { payload } = await jwtVerify(token, JWKS, {
+        algorithms: ['RS256'],
+        issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
+      });
       req.userId = (payload.sub as string) ?? null;
     } catch (err) {
       console.warn('[Auth] Token verification failed:', (err as Error).message);

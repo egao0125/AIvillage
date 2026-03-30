@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-village
+  namespace: ai-village
+spec:
+  # Guarantee at least 1 pod is available during voluntary disruptions
+  # (node drain, cluster upgrade, autoscaler eviction).
+  # With replicas: 1 this prevents any voluntary disruption from taking the pod down.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ai-village

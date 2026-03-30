@@ -32,3 +32,4 @@ resources:
   - 05-ingress.yaml
   - 06-hpa.yaml
   - 07-serviceaccount.yaml
+  - 09-pdb.yaml

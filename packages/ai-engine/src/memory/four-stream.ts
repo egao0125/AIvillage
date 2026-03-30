@@ -333,6 +333,12 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
   // --- STREAM 4: BELIEFS ---
 
   addBelief(belief: Memory): void {
+    // Deduplicate by exact content — prevents belief spam from repeated LLM calls
+    const existing = this.beliefs.find(b =>
+      b.content.toLowerCase() === belief.content.toLowerCase()
+    );
+    if (existing) return;
+
     this.beliefs.push(belief);
     void this.backingStore.add(belief).catch((err: unknown) => {
       console.warn(`[FourStream] Failed to persist belief ${belief.id} for agent ${this.agent.id}:`, (err as Error).message);

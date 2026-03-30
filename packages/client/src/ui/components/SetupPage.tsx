@@ -122,6 +122,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       // Load existing agents
       try {
         const res = await fetch('/api/config/status');
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
         const data = await res.json();
         if (data.agents && data.agents.length > 0) {
           setCreatedAgents(

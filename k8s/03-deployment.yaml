@@ -100,6 +100,6 @@ spec:
 
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false   # app writes nothing to disk; set true if confirmed
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
