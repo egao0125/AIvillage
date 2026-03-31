@@ -58,29 +58,34 @@ echo ""
 put_secret "ai-village/db-app-user" \
   "{\"username\":\"aivillage_app\",\"password\":\"${DB_PASS}\",\"host\":\"${RDS_HOST}\",\"port\":\"5432\",\"dbname\":\"aivillage\"}"
 
-# ---- 4. ANTHROPIC_API_KEY (optional — BYOK mode) ----
-echo "[4/5] ANTHROPIC_API_KEY (optional)"
-echo "  This is the GLOBAL fallback key used only for:"
-echo "    - Village narrator commentary"
-echo "    - Storyline detection"
-echo "    - Recap generation"
-echo "  Each AI agent can carry its own key set via the app UI (BYOK)."
-echo "  If ALL agents will use their own keys, press Enter to skip."
+# ---- 4. Anthropic API keys (global — narrator/recap + agent fallback) ----
+echo "[4/6] Anthropic API keys"
+echo "  Global keys power village-wide AI features:"
+echo "    ANTHROPIC_API_KEY   → narrator commentary, storyline detection, weekly recap"
+echo "                          + fallback for agents without a per-agent BYOK key"
+echo "    ANTHROPIC_API_KEY_2 → optional 2nd key for rate-limit round-robin"
+echo "                          (odd-indexed agents use KEY_2 when set)"
+echo "  Each agent can also carry its own key set via the app UI (BYOK, takes priority)."
 echo ""
-echo "  Enter Anthropic API key (sk-ant-...) or press Enter to skip: "
+echo "  Enter ANTHROPIC_API_KEY (sk-ant-...) or press Enter to skip narrator/recap: "
 read -r -s ANTHROPIC_KEY
 if [ -n "$ANTHROPIC_KEY" ]; then
   put_secret "ai-village/anthropic-api-key" "{\"ANTHROPIC_API_KEY\":\"${ANTHROPIC_KEY}\"}"
 else
-  echo "  Skipped — narrator/recap features will be disabled until a key is set."
-  echo "  To set later: aws secretsmanager put-secret-value \\"
-  echo "    --secret-id ai-village/anthropic-api-key \\"
-  echo "    --secret-string '{\"ANTHROPIC_API_KEY\":\"sk-ant-...\"}'"
+  echo "  Skipped — narrator/recap/agent-fallback disabled until set."
+fi
+
+echo "  Enter ANTHROPIC_API_KEY_2 (optional, for rate-limit spreading) or press Enter to skip: "
+read -r -s ANTHROPIC_KEY_2
+if [ -n "$ANTHROPIC_KEY_2" ]; then
+  put_secret "ai-village/anthropic-api-key-2" "{\"ANTHROPIC_API_KEY_2\":\"${ANTHROPIC_KEY_2}\"}"
+else
+  echo "  Skipped (all agents share KEY_1)"
 fi
 
 # ---- 5. Summary ----
 echo ""
-echo "[5/5] GitHub Actions secrets to set:"
+echo "[6/6] GitHub Actions secrets to set:"
 echo "  (Settings → Secrets and variables → Actions)"
 echo ""
 DEPLOY_ROLE=$(cd terraform && terraform output -raw github_deploy_role_arn 2>/dev/null || echo "REPLACE_WITH_DEPLOY_ROLE_ARN")

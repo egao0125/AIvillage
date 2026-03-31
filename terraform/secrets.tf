@@ -148,21 +148,24 @@ resource "aws_secretsmanager_secret_version" "redis_url" {
 }
 
 # ---------------------------------------------------------------------------
-# Anthropic API key — OPTIONAL global fallback
+# Anthropic API keys — global keys (narrator + agent fallback)
 #
-# This key is used only for narrator commentary, storyline detection, and recap
-# generation (village-wide LLM calls). Each AI agent can carry its own BYOK
-# key set via the app UI; those per-agent keys take precedence.
+# Usage in the engine:
+#   1. Narrator / Storyline Detector / Recap Generator
+#      → Village-wide commentary and weekly summaries.
+#        Uses ANTHROPIC_API_KEY (KEY_1). Required for these features.
 #
-# Leave the placeholder value if you are running in pure-BYOK mode (every agent
-# has its own key). Set the real value via setup-secrets.sh or:
-#   aws secretsmanager put-secret-value \
-#     --secret-id ai-village/anthropic-api-key \
-#     --secret-string '{"ANTHROPIC_API_KEY":"sk-ant-..."}'
+#   2. Agent fallback (for agents without a per-agent BYOK key)
+#      → Round-robins between ANTHROPIC_API_KEY and ANTHROPIC_API_KEY_2.
+#        KEY_2 helps stay under Anthropic rate limits when many agents
+#        share the same key (odd-indexed agents use KEY_2).
+#        Leave KEY_2 empty if you have few agents or all use BYOK.
+#
+# Per-agent keys (set via app UI) always take priority over these globals.
 # ---------------------------------------------------------------------------
 resource "aws_secretsmanager_secret" "anthropic_api_key" {
   name                    = "ai-village/anthropic-api-key"
-  description             = "Anthropic API key — global narrator/recap fallback. Leave empty for pure-BYOK mode."
+  description             = "Anthropic API KEY_1 — narrator/recap + odd-agent fallback"
   recovery_window_in_days = 7
   kms_key_id              = aws_kms_key.secrets_manager.arn
   tags                    = var.tags
@@ -171,6 +174,23 @@ resource "aws_secretsmanager_secret" "anthropic_api_key" {
 resource "aws_secretsmanager_secret_version" "anthropic_api_key" {
   secret_id     = aws_secretsmanager_secret.anthropic_api_key.id
   secret_string = jsonencode({ ANTHROPIC_API_KEY = "" })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+resource "aws_secretsmanager_secret" "anthropic_api_key_2" {
+  name                    = "ai-village/anthropic-api-key-2"
+  description             = "Anthropic API KEY_2 — optional second key for even-agent round-robin (rate-limit spreading)"
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
+  tags                    = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "anthropic_api_key_2" {
+  secret_id     = aws_secretsmanager_secret.anthropic_api_key_2.id
+  secret_string = jsonencode({ ANTHROPIC_API_KEY_2 = "" })
 
   lifecycle {
     ignore_changes = [secret_string]
