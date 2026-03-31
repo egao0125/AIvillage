@@ -182,7 +182,7 @@ ${transcript}
 Summarize in JSON:
 {
   "summary": "2-3 sentences from YOUR perspective. What mattered? How did you feel? What changed?",
-  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific ('will bring wheat tomorrow'). OATH = sworn/public ('I swear I will'). Only real commitments, not pleasantries. Example: '[PROMISE] Will bring 3 wheat to mill at dawn'"],
+  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific ('will bring wheat to tavern on Day 28'). OATH = sworn/public ('I swear I will'). Only real commitments, not pleasantries. Example: '[PROMISE] Will give food next time we meet at the farm'. Use day numbers, not 'tomorrow' or 'at dawn'."],
   "learned": ["new facts you learned — about people, places, or resources (max 2, short)"],
   "tension": "any unresolved conflict, distrust, or worry (or null if none)"
 }
@@ -415,9 +415,9 @@ If nothing notable was exchanged, return []`;
     const prompts: string[] = [];
 
     if (p.neuroticism > 0.6)
-      prompts.push('What went wrong today? What COULD go wrong tomorrow? What are people not telling you?');
+      prompts.push(`What went wrong today? What could go wrong on Day ${this.currentTime.day + 1}? What are people not telling you?`);
     else if (p.neuroticism < 0.3)
-      prompts.push('What went well? What can you build on tomorrow?');
+      prompts.push(`What went well? What can you build on Day ${this.currentTime.day + 1}?`);
     else
       prompts.push('What surprised you today?');
 
@@ -429,7 +429,7 @@ If nothing notable was exchanged, return []`;
     if (p.conscientiousness > 0.6)
       prompts.push('Did you stick to your plan? What should you have done differently?');
     else if (p.conscientiousness < 0.3)
-      prompts.push('Did anything fun happen? What do you feel like doing tomorrow?');
+      prompts.push(`Did anything fun happen? What do you feel like doing on Day ${this.currentTime.day + 1}?`);
 
     if (p.openness > 0.6)
       prompts.push('Did you learn anything new? Is there something you want to try that you haven\'t?');
@@ -1167,7 +1167,7 @@ You can act during conversation:
   [ACTION: eat ITEM]
 Use your actual inventory items and the real person's name. Actions happen instantly — items leave your inventory, trades are binding, fights hurt both of you.
 
-Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm tomorrow" or "If you steal again, I'll rally others against you." Bad dialogue is vague: "We should work together."
+Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm on Day ${this.currentTime.day + 1}" or "I'll give you food when I see you at the farm." Bad commitment: "at dawn" or "tomorrow" or "by sunset" — use the day number instead. Bad dialogue is vague: "We should work together."
 
 Output ONLY spoken words in quotation marks. 1-3 sentences.
 
@@ -1437,11 +1437,11 @@ ${recentMemoriesText}
 
 Rewrite your MY EXPERIENCE. This is your personal document — write what matters to you. Be honest about what you need, what you've learned, and what you're planning.
 
-Include your social map — who matters in this village and why. Who has food? Who has skills? Who is dangerous? Who is lonely? This is your private intelligence file. Write what helps you survive and navigate tomorrow.
+Include your social map — who matters in this village and why. Who has food? Who has skills? Who is dangerous? Who is lonely? This is your private intelligence file. Write what helps you survive and navigate Day ${this.currentTime.day + 1}.
 
 Be specific. "Bread needs 2 wheat at the bakery" not "I can make food." "Mei traded fairly twice" not "some people are nice." Include names, numbers, locations, skill levels when you know them.
 
-Remove anything that's no longer true or no longer matters. Add what you learned today. This is what you'll read tomorrow morning before making decisions.
+Remove anything that's no longer true or no longer matters. Add what you learned today. This is what you'll read on Day ${this.currentTime.day + 1} morning before making decisions.
 
 Max 500 words. First person. No section headers. No lists of places — that's tracked separately.
 

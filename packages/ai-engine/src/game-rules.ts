@@ -121,6 +121,17 @@ At hunger ≥70, health drains slowly. At hunger ≥85, health drains faster. At
 • On raw wheat alone, you fall behind by ~9 hunger/day
 • Cooking is not optional — it's survival arithmetic`);
 
+  // ═══ TIME ═══
+  sections.push(`TIME:
+The day runs from hour 5 (wake) to hour 23 (sleep). There are 30 days per season. Seasons: spring, summer, autumn, winter.
+
+When referencing time, use the game's format:
+  "Day 28, hour 10" — not "tomorrow morning"
+  "Day 27, hour 18" — not "before sunset"
+  "Day 27, hour 7" — not "at dawn"
+
+You see the current day and hour on every decision. Use those numbers when making plans or promises.`);
+
   // ═══ SEASONS ═══
   let seasonSection = 'SEASONS (30 days each):';
   for (const name of SEASON_ORDER) {
