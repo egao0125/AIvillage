@@ -20,7 +20,8 @@ export interface VillageEvent {
   icon: string;
   color: string;
   headline: string;
-  detail?: string;
+  author?: { name: string; id: string };
+  status?: string;
   day: number;
   timestamp: number;
   agentIds: string[];
