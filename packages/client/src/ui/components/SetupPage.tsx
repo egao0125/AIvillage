@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { COLORS, FONTS } from '../styles';
 import { nameToColor, hexToString } from '../../utils/color';
-import { getToken, setToken, clearToken, authHeaders, setUserId } from '../../utils/auth';
+import { getToken, setToken, clearToken, authHeaders, setUserId, setEmail } from '../../utils/auth';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -168,6 +168,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
       if (data.token) {
         setToken(data.token);
         if (data.user?.id) setUserId(data.user.id);
+        if (data.user?.email) setEmail(data.user.email);
         setUser(data.user);
       } else {
         // Signup succeeded but no token — switch to login
@@ -181,7 +182,15 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+    } catch {
+      // Best-effort: clear local state even if server call fails
+    }
     clearToken();
     setUser(null);
     setAuthEmail('');

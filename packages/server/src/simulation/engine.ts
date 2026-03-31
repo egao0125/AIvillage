@@ -66,7 +66,10 @@ export class SimulationEngine {
     const dbUser = process.env.DB_USER;
     const dbPassword = process.env.DB_PASSWORD;
     if (dbHost && dbUser && dbPassword) {
-      const connStr = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'aivillage'}?sslmode=verify-full`;
+      // DB_SSLMODE: 'disable' when connecting via pgBouncer (intra-cluster, no TLS).
+      // 'verify-full' when connecting directly to RDS. Controlled by k8s/01-configmap.yaml.
+      const sslMode = process.env.DB_SSLMODE || 'verify-full';
+      const connStr = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'aivillage'}?sslmode=${sslMode}`;
       this.persistence = new RdsPersistence(connStr);
       console.log('[Engine] RDS persistence enabled');
     } else {

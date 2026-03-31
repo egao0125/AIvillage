@@ -12,6 +12,10 @@ data:
   ALLOWED_ORIGINS: "https://REPLACE_WITH_YOUR_DOMAIN"
   # Maximum number of agents allowed per simulation instance.
   MAX_AGENTS: "20"
+  # SSL mode for the app→pgBouncer connection (intra-cluster, no TLS needed).
+  # pgBouncer handles TLS for pgBouncer→RDS (PGBOUNCER_SERVER_TLS_SSLMODE=verify-full).
+  # Change to "verify-full" only if app connects directly to RDS (bypassing pgBouncer).
+  DB_SSLMODE: "disable"
   COGNITO_REGION: "ap-northeast-1"
   # Replace with: terraform output cognito_user_pool_id
   COGNITO_USER_POOL_ID: "REPLACE_WITH_TERRAFORM_OUTPUT"

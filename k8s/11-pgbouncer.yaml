@@ -1,0 +1,246 @@
+# ---------------------------------------------------------------------------
+# pgBouncer — Connection Pooler for PostgreSQL RDS
+#
+# Architecture:
+#   App Pods  ──(no TLS, intra-cluster)──▶  pgBouncer  ──(TLS verify-full)──▶  RDS
+#
+# pool_mode: transaction  — one backend connection shared across many client
+#   transactions. Maximizes connection efficiency for multiple app pods.
+#   NOTE: session-level SET commands and prepared statements are NOT persisted
+#   across transactions in transaction mode. node-postgres uses simple query
+#   protocol by default, so prepared statements are not an issue.
+#
+# max_client_conn: 200  — maximum simultaneous client connections from all app pods
+# default_pool_size: 20 — max backend connections to RDS (match pg Pool.max in rds.ts)
+#
+# Credentials are sourced from ai-village-secret (synced by ESO from Secrets Manager).
+# pgBouncer connects to the REAL RDS hostname (from DB_HOST in secret).
+# App pods connect to this Service (DB_HOST is overridden in 03-deployment.yaml).
+#
+# References:
+#   pgBouncer transaction mode: https://www.pgbouncer.org/config.html
+#   Bitnami pgBouncer image:    https://hub.docker.com/r/bitnami/pgbouncer
+#   AWS RDS SSL:                https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html
+#   CIS PostgreSQL Benchmark 1.3 — connection pooling
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: ai-village
+  labels:
+    app: pgbouncer
+    app.kubernetes.io/name: pgbouncer
+    app.kubernetes.io/component: connection-pooler
+spec:
+  # Single replica is fine for connection pooling.
+  # pgBouncer is stateless — if this pod restarts, app pods reconnect automatically.
+  # 2 replicas could be used for HA but requires a load-balancer in front;
+  # for simplicity, PDB (minAvailable:1) + fast restart suffices here.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgbouncer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: pgbouncer
+    spec:
+      serviceAccountName: ai-village   # reuse existing IRSA SA for namespace access
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: pgbouncer
+          # Pin to a specific digest in production to prevent supply chain attacks.
+          # Update periodically (monthly) for security patches.
+          image: bitnami/pgbouncer:1.23.1
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: pgbouncer
+              containerPort: 5432
+              protocol: TCP
+
+          env:
+            # --- Backend: real RDS connection (from ai-village-secret) ---
+            - name: POSTGRESQL_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_HOST
+            - name: POSTGRESQL_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PORT
+            - name: POSTGRESQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_NAME
+            - name: POSTGRESQL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_USER
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PASSWORD
+
+            # --- pgBouncer listen port (match RDS standard port for transparent proxying) ---
+            - name: PGBOUNCER_PORT
+              value: "5432"
+
+            # --- Pool configuration ---
+            # transaction mode: released after each COMMIT/ROLLBACK — optimal for
+            # short-lived HTTP request handlers. Session mode required only if using
+            # advisory locks, SET, LISTEN, or temp tables.
+            - name: PGBOUNCER_POOL_MODE
+              value: "transaction"
+            # 200 clients per pgBouncer pod; with replicas:1 this is the total
+            - name: PGBOUNCER_MAX_CLIENT_CONN
+              value: "200"
+            # 20 backend (RDS) connections; matches pg Pool.max:20 in rds.ts
+            # With 1 pgBouncer pod this is the total backend connection count
+            - name: PGBOUNCER_DEFAULT_POOL_SIZE
+              value: "20"
+            # Reserve connections for superuser/admin queries
+            - name: PGBOUNCER_RESERVE_POOL_SIZE
+              value: "5"
+            - name: PGBOUNCER_RESERVE_POOL_TIMEOUT
+              value: "5"
+
+            # --- Backend (pgBouncer → RDS) TLS: verify-full ---
+            # Amazon Root CA is in the Mozilla CA bundle included in the bitnami image.
+            # verify-full: validates cert AND hostname — prevents MITM on RDS endpoint.
+            # (AWS Security Best Practices / OWASP TLS Cheat Sheet)
+            - name: PGBOUNCER_SERVER_TLS_SSLMODE
+              value: "verify-full"
+            # Use system CA bundle (includes Amazon Root CA 1/2/3/4)
+            - name: PGBOUNCER_SERVER_TLS_CACERTFILE
+              value: "/etc/ssl/certs/ca-certificates.crt"
+
+            # --- Client (app → pgBouncer) TLS: disabled for intra-cluster ---
+            # Intra-cluster traffic travels on the VPC private network segment;
+            # encryption is provided at the VPC/node level (AWS Nitro encryption).
+            # Enabling client TLS would require cert distribution to all app pods.
+            # (AWS Well-Architected SEC 8: encrypt in transit where feasible,
+            #  recognizing that VPC internal network has transport-layer protections)
+            - name: PGBOUNCER_CLIENT_TLS_SSLMODE
+              value: "disable"
+
+            # --- Auth ---
+            # scram-sha-256: default for Amazon RDS PostgreSQL 14+ (PCI-DSS BP)
+            - name: PGBOUNCER_AUTH_TYPE
+              value: "scram-sha-256"
+
+            # --- Session defaults applied on every new backend connection ---
+            # Mirrors the SET commands in rds.ts Pool.on('connect') callback.
+            # In transaction mode, session settings don't persist across transactions,
+            # so we apply them at backend connection time via server_connect_query.
+            - name: PGBOUNCER_SERVER_CONNECT_QUERY
+              value: "SET statement_timeout='30000'; SET lock_timeout='10000'; SET idle_in_transaction_session_timeout='60000';"
+
+            # --- Timeouts ---
+            - name: PGBOUNCER_SERVER_IDLE_TIMEOUT
+              value: "600"     # close idle backend connections after 10 min
+            - name: PGBOUNCER_CLIENT_IDLE_TIMEOUT
+              value: "0"       # clients handle their own idle timeout (app level)
+            - name: PGBOUNCER_SERVER_LIFETIME
+              value: "3600"    # rotate backend connections every 1h (matches rds.ts maxLifetimeSeconds)
+            - name: PGBOUNCER_QUERY_TIMEOUT
+              value: "0"       # no pgBouncer-level query timeout (rely on statement_timeout above)
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          lifecycle:
+            preStop:
+              exec:
+                # Allow in-flight transactions to complete before shutdown.
+                # pgBouncer will reject new connections after SIGTERM.
+                command: ["/bin/sh", "-c", "sleep 5"]
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem is not set to true: bitnami init scripts
+            # write generated pgbouncer.ini and userlist.txt to /opt/bitnami at startup.
+            capabilities:
+              drop: ["ALL"]
+
+---
+# ---------------------------------------------------------------------------
+# ClusterIP Service — stable DNS name for pgBouncer within the namespace.
+# App pods connect to pgbouncer:5432 (via DB_HOST override in deployment.yaml).
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  namespace: ai-village
+  labels:
+    app: pgbouncer
+    app.kubernetes.io/name: pgbouncer
+    app.kubernetes.io/component: connection-pooler
+spec:
+  type: ClusterIP
+  selector:
+    app: pgbouncer
+  ports:
+    - name: pgbouncer
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget — ensure pgBouncer stays up during node drains/upgrades.
+# minAvailable:1 with replicas:1 means node drain will wait for pgBouncer
+# to be rescheduled before proceeding, preventing unnecessary connection drops.
+# ---------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pgbouncer-pdb
+  namespace: ai-village
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: pgbouncer

@@ -40,3 +40,4 @@ resources:
   - 08-db-migrate-job.yaml
   - 09-pdb.yaml
   - 10-network-policy.yaml
+  - 11-pgbouncer.yaml

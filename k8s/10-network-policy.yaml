@@ -73,10 +73,12 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # RDS PostgreSQL — scoped to VPC CIDR (NIST SP 800-53 SC-7)
+    # pgBouncer — intra-namespace pod selector (least privilege; replaces direct RDS access)
+    # App pods never connect directly to RDS; all DB traffic routes through pgBouncer.
     - to:
-        - ipBlock:
-            cidr: 10.100.0.0/16
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
       ports:
         - port: 5432
           protocol: TCP
@@ -118,7 +120,63 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # RDS PostgreSQL — scoped to VPC CIDR
+    # RDS PostgreSQL — scoped to VPC CIDR (db-migrate connects directly, not via pgBouncer)
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 5. Allow ingress to pgBouncer from ai-village app pods only.
+#    pgBouncer is not exposed to anything outside the app pods.
+#    (CIS Kubernetes Benchmark 5.3.2 / NIST SP 800-204A)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-pgbouncer
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ai-village
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 6. Allow egress from pgBouncer to RDS (VPC CIDR, port 5432) and DNS.
+#    pgBouncer connects to RDS with TLS verify-full.
+#    (NIST SP 800-53 SC-7 / CIS Kubernetes Benchmark 5.3.2)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-pgbouncer
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns — required for RDS endpoint hostname resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # RDS PostgreSQL — scoped to VPC CIDR (pgBouncer → RDS with TLS)
     - to:
         - ipBlock:
             cidr: 10.100.0.0/16

@@ -86,6 +86,21 @@ declare global {
 }
 
 // ---------------------------------------------------------------------------
+// Refresh-token cookie — httpOnly prevents XSS exfiltration (OWASP ASVS V3.4.2).
+// SameSite=Strict (prod) blocks CSRF across origins; Lax (dev) allows same-site nav.
+// Path=/api/auth scopes the cookie to auth endpoints only — not sent with API calls.
+// ---------------------------------------------------------------------------
+const REFRESH_COOKIE = 'rtk';
+// Express CookieOptions isn't importable until cookie-parser is installed, so inline the type.
+const refreshCookieOptions = (env: 'production' | 'development') => ({
+  httpOnly: true,
+  secure: env === 'production',
+  sameSite: (env === 'production' ? 'strict' : 'lax') as 'strict' | 'lax',
+  maxAge: 7 * 24 * 60 * 60 * 1_000, // 7 days — matches Cognito refresh token validity
+  path: '/api/auth',                  // Only sent to auth endpoints; invisible elsewhere
+});
+
+// ---------------------------------------------------------------------------
 // Cognito configuration (injected via ESO + ConfigMap in k8s)
 // ---------------------------------------------------------------------------
 const COGNITO_REGION = process.env.COGNITO_REGION || 'ap-northeast-1';
@@ -275,7 +290,10 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
       }
 
       const refreshToken = authResult.AuthenticationResult?.RefreshToken;
-      res.json({ token, refreshToken, user: { id: sub, email: normalizedEmail } });
+      if (refreshToken) {
+        res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(isProduction ? 'production' : 'development'));
+      }
+      res.json({ token, user: { id: sub, email: normalizedEmail } });
     } catch (err) {
       if (err instanceof UsernameExistsException) {
         // Do not confirm whether the email is registered — generic message only
@@ -329,7 +347,10 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
       }
 
       const refreshToken = authResult.AuthenticationResult?.RefreshToken;
-      res.json({ token, refreshToken, user: { id: sub, email: normalizedEmail } });
+      if (refreshToken) {
+        res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions(isProduction ? 'production' : 'development'));
+      }
+      res.json({ token, user: { id: sub, email: normalizedEmail } });
     } catch (err) {
       // Do not distinguish between wrong password and user-not-found
       console.warn('[Auth] login failed:', (err as Error).message);
@@ -337,17 +358,19 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
     }
   });
 
-  // POST /api/auth/refresh — exchange a Cognito refresh token for a new access token.
-  // The refresh token is long-lived (default 30 days) and should be stored in an
-  // httpOnly cookie on the client to prevent XSS exfiltration.
+  // POST /api/auth/refresh — exchange the httpOnly refresh-token cookie for a new access token.
+  // The refresh token travels only via httpOnly cookie — never exposed to JavaScript (OWASP ASVS V3.4.2).
+  // Body: { email } — needed only to compute Cognito SECRET_HASH (generate_secret=true); not sensitive.
   // Rate limited: 30 requests/hour per IP to prevent token brute-force.
   router.post('/api/auth/refresh', authRateLimit(30, 60 * 60 * 1_000), async (req: Request, res: Response) => {
-    const { refreshToken, email } = req.body;
+    // Read refresh token from httpOnly cookie (not from body — prevents XSS exfiltration)
+    const refreshToken = req.cookies?.[REFRESH_COOKIE] as string | undefined;
     if (!refreshToken || typeof refreshToken !== 'string') {
-      res.status(400).json({ error: 'refreshToken required' });
+      res.status(401).json({ error: 'No refresh token' });
       return;
     }
     // username is required to compute SECRET_HASH when generate_secret=true
+    const { email } = req.body;
     if (COGNITO_CLIENT_SECRET && (!email || typeof email !== 'string')) {
       res.status(400).json({ error: 'email required' });
       return;
@@ -420,6 +443,13 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         console.warn('[Auth] logout token revocation skipped:', (err as Error).message);
       }
     }
+    // Clear the httpOnly refresh-token cookie — removes long-lived credential from browser
+    res.clearCookie(REFRESH_COOKIE, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'strict' : 'lax',
+      path: '/api/auth',
+    });
     res.status(200).json({ message: 'Logged out' });
   });
 

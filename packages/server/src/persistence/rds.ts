@@ -58,7 +58,12 @@ export class RdsPersistence {
       maxLifetimeSeconds: 3600,
       // Amazon Root CA は Node.js 組み込み Mozilla CA ストアに含まれるため証明書検証を有効化
       // (OWASP/AWS Security Best Practices: 本番環境での rejectUnauthorized:false は禁止)
-      ssl: process.env.NODE_ENV !== 'test' ? { rejectUnauthorized: true } : undefined,
+      // DB_SSLMODE=disable: app connects to pgBouncer (intra-cluster, no TLS needed).
+      // pgBouncer itself connects to RDS with verify-full (see k8s/11-pgbouncer.yaml).
+      // Without pgBouncer (direct RDS): ssl:{rejectUnauthorized:true} enforces TLS.
+      ssl: process.env.DB_SSLMODE === 'disable'
+        ? false
+        : process.env.NODE_ENV !== 'test' ? { rejectUnauthorized: true } : undefined,
     });
 
     // Per-connection session settings (AWS Aurora PostgreSQL Fast Failover BP)

@@ -66,6 +66,13 @@ spec:
             - secretRef:
                 name: ai-village-secret
 
+          env:
+            # Override DB_HOST (from secret = real RDS hostname) to point to pgBouncer.
+            # In Kubernetes, explicit env[] entries take precedence over envFrom values.
+            # pgBouncer connects to RDS; app pods only talk to pgBouncer (see 11-pgbouncer.yaml).
+            - name: DB_HOST
+              value: "pgbouncer"
+
           resources:
             requests:
               cpu: "250m"

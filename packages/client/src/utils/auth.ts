@@ -71,7 +71,52 @@ export function setToken(token: string): void {
 }
 
 export function clearToken(): void {
-  safeRemove('ai-village-token', 'ai-village-user-id');
+  safeRemove('ai-village-token', 'ai-village-user-id', 'ai-village-email');
+}
+
+/** Store email for use in /api/auth/refresh (needed for Cognito SECRET_HASH). */
+export function setEmail(email: string): void {
+  safeSet('ai-village-email', email);
+}
+
+export function getEmail(): string | null {
+  return safeGet('ai-village-email');
+}
+
+/**
+ * Exchange the httpOnly refresh-token cookie for a new access token.
+ * The refresh token is sent automatically via cookie — not from JS.
+ * Returns the new access token on success, or null on failure.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  const email = getEmail();
+  try {
+    const res = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email ?? '' }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { token?: string };
+    if (typeof data.token === 'string') {
+      setToken(data.token);
+      return data.token;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns a valid access token, refreshing automatically if expired.
+ * Returns null if refresh also fails (user must re-login).
+ */
+export async function getValidToken(): Promise<string | null> {
+  const token = getToken();
+  if (token) return token;
+  // Token is null (expired or absent) — try silent refresh via httpOnly cookie
+  return refreshAccessToken();
 }
 
 export function authHeaders(): Record<string, string> {

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-streams-adapter';
@@ -116,6 +117,11 @@ app.use((_req, res, next) => {
   );
   next();
 });
+
+// Parse httpOnly cookies (used by refresh-token flow) — must precede auth router.
+// No signing secret: refresh tokens are validated against Cognito; cookie integrity
+// is guaranteed by Secure+HttpOnly+SameSite flags, not HMAC signing.
+app.use(cookieParser());
 
 // Limit request body size to prevent abuse
 app.use(express.json({ limit: '16kb' }));
