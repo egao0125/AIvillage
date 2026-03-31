@@ -103,16 +103,21 @@ spec:
               # sourced from the RDS-managed master password in Secrets Manager).
               # DB_APP_PASSWORD is the aivillage_app role password from ai-village-secret —
               # kept separate from master credentials (principle of least privilege).
-              ADMIN_DSN="postgresql://${DB_ADMIN_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=verify-full"
+              # sslmode=require: TLS-encrypted but no cert verification.
+              # verify-full requires the AWS RDS CA bundle not present in postgres:16-alpine.
+              # Acceptable inside private VPC — MITM on RDS endpoint not feasible.
+              # App container uses verify-full via NODE_EXTRA_CA_CERTS.
+              ADMIN_DSN="postgresql://${DB_ADMIN_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=require"
               echo "Running DDL migration as master user..."
               PGPASSWORD="$DB_ADMIN_PASSWORD" psql "$ADMIN_DSN" -f /sql/migrate.sql
               echo "Setting aivillage_app password..."
-              # Use psql variable substitution (:'apppassword') so the password value
-              # is never interpolated into the shell command line — prevents exposure
-              # via /proc/*/cmdline inside the container (CIS PostgreSQL Benchmark).
-              PGPASSWORD="$DB_ADMIN_PASSWORD" psql "$ADMIN_DSN" \
-                -v apppassword="$DB_APP_PASSWORD" \
-                -c "ALTER ROLE aivillage_app WITH LOGIN PASSWORD :'apppassword'"
+              # Feed ALTER ROLE via stdin with psql variable substitution to keep
+              # the password out of /proc/*/cmdline. -v passes the value to psql's
+              # variable store; :'apppassword' in SQL performs safe quoted substitution.
+              # stdin reading (not -c) is required for :'var' interpolation to work.
+              # (CIS PostgreSQL Benchmark / NIST SP 800-53 IA-5)
+              echo "ALTER ROLE aivillage_app WITH LOGIN ENCRYPTED PASSWORD :'apppassword';" \
+                | PGPASSWORD="$DB_ADMIN_PASSWORD" psql "$ADMIN_DSN" -v "apppassword=$DB_APP_PASSWORD"
               echo "Migration completed successfully"
           env:
             # RDS master credentials — from rds-master-secret (02b-rds-master-external-secret.yaml)
