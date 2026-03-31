@@ -69,6 +69,9 @@ export class SimulationEngine {
   // Prevents a concurrent save_requested from writing with a stale expectedVersion
   // before the reload completes and updates worldStateVersion.
   private isReloadingState: boolean = false;
+  // Deduplicates concurrent loadFromRds() calls — returns the in-flight Promise
+  // instead of starting a second parallel load that could corrupt world state.
+  private _loadFromRdsInFlight: Promise<void> | null = null;
 
   constructor(private io: Server) {
     this.world = new World();
@@ -392,7 +395,20 @@ export class SimulationEngine {
     console.log(`[Engine] AI Village initialized (no starter agents — users create agents via UI)`);
   }
 
-  private async loadFromRds(): Promise<void> {
+  /**
+   * Deduplicated wrapper: if a loadFromRds is already in flight, returns the
+   * same Promise rather than starting a second parallel load that would race
+   * writes to `this.world`, `this.controllers`, and `this.worldStateVersion`.
+   */
+  private loadFromRds(): Promise<void> {
+    if (this._loadFromRdsInFlight) return this._loadFromRdsInFlight;
+    const p = this._execLoadFromRds();
+    this._loadFromRdsInFlight = p;
+    void p.finally(() => { this._loadFromRdsInFlight = null; });
+    return p;
+  }
+
+  private async _execLoadFromRds(): Promise<void> {
     if (!this.persistence) return;
 
     try {
@@ -2351,6 +2367,14 @@ Answer with ONLY one word: "support" or "oppose".`,
    * Keeps agents (same configs, same API keys) but erases all accumulated state.
    */
   async freshStart(): Promise<void> {
+    // Only the leader Pod may wipe world state. A follower calling this would
+    // corrupt the RDS row that the leader is actively reading/writing.
+    if (!this.leaderElection.isLeader) {
+      throw new Error('[Engine] freshStart() called on a follower Pod — only the leader may reset world state');
+    }
+    // Block periodic saves for the duration of the wipe so save_requested cannot
+    // interleave with the DELETE+INSERT sequence inside freshStart.
+    this.isReloadingState = true;
     const wasRunning = this.isRunning;
     this.pause();
     console.log('[Engine] Fresh start — wiping world state and memories');
@@ -2533,6 +2557,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     }
 
     // 6. Resume if was running
+    this.isReloadingState = false; // re-enable periodic saves
     if (wasRunning) {
       this.start();
     }
@@ -2577,7 +2602,10 @@ Answer with ONLY one word: "support" or "oppose".`,
       })
       .catch((err: unknown) => {
         console.error(`[Persistence] Save after ${label} failed:`, (err as Error).message);
-        if (then) void then(); // still run continuation (e.g. seed memories in-memory)
+        // Do NOT call then() here. If persistence is enabled, `then` is typically
+        // seedMemories() which writes to RDS via memories.agent_id FK. If the
+        // agent row was not persisted due to this failure, FK constraint violation
+        // would follow immediately.
       });
   }
 

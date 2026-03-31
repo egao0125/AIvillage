@@ -161,7 +161,15 @@ export class LeaderElection {
       this.tryAcquire().then((acquired) => {
         if (acquired) {
           this.stopRetrying();
-          onAcquired();
+          try {
+            onAcquired();
+          } catch (err) {
+            // onAcquired threw synchronously — release the lock we just acquired
+            // so the Pod doesn't hold it while the engine failed to start, and
+            // restart the retry loop so recovery can be attempted on the next cycle.
+            console.error('[LeaderElection] onAcquired callback threw:', (err as Error).message);
+            void this.release().then(() => this.startRetrying(onAcquired));
+          }
         }
       }).catch((err: unknown) => {
         console.error('[LeaderElection] startRetrying poll error:', (err as Error).message);

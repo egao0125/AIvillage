@@ -9,7 +9,7 @@ import { timingSafeEqual, createHash } from 'crypto';
 import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
 import { createAuthRouter, optionalAuth, verifyToken, stopAuthRateLimitCleaner } from './auth.js';
-import { setupRedis, closeRedis } from './redis.js';
+import { setupRedis, closeRedis, getRedis } from './redis.js';
 import { isEncryptionConfigured } from './crypto.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -325,7 +325,7 @@ io.on('connection', (socket) => {
   });
 
   // Spectator chat — relay to all clients
-  socket.on('spectator:comment', (data: { message: string }) => {
+  socket.on('spectator:comment', async (data: { message: string }) => {
     if (!data.message || typeof data.message !== 'string') return;
     // Slice first so the 200-char limit applies to raw input, not HTML entities
     // (otherwise &amp; would count as 5 chars and reduce effective limit)
@@ -339,16 +339,36 @@ io.on('connection', (socket) => {
       .replace(/'/g, '&#x27;');
     if (!msg) return;
 
-    // Rate limit: 1 per 10 seconds
-    const now = Date.now();
-    const last = spectatorLastComment.get(socket.id) ?? 0;
-    if (now - last < 10_000) return;
-    spectatorLastComment.set(socket.id, now);
+    // Rate limit: 1 per 10 seconds per socket.
+    // Uses Redis when available (multi-Pod: socket.id is globally unique via
+    // the Redis Streams adapter). Falls back to in-memory for single-Pod dev mode.
+    const rlRedis = getRedis();
+    if (rlRedis) {
+      try {
+        const rlKey = `rl:spectator:comment:${socket.id}`;
+        const count = await rlRedis.incr(rlKey);
+        if (count === 1) await rlRedis.expire(rlKey, 10);
+        if (count > 1) return; // rate limited
+      } catch (rlErr) {
+        console.warn('[Spectator RateLimit] Redis error, using in-memory fallback:', (rlErr as Error).message);
+        // fall through to in-memory check below
+        const now = Date.now();
+        const last = spectatorLastComment.get(socket.id) ?? 0;
+        if (now - last < 10_000) return;
+        spectatorLastComment.set(socket.id, now);
+      }
+    } else {
+      // Single-Pod dev mode: use in-memory map
+      const now = Date.now();
+      const last = spectatorLastComment.get(socket.id) ?? 0;
+      if (now - last < 10_000) return;
+      spectatorLastComment.set(socket.id, now);
+    }
 
     io.emit('spectator:comment', {
       name: `Spectator`,
       message: msg,
-      timestamp: now,
+      timestamp: Date.now(),
     });
   });
 

@@ -38,7 +38,13 @@ function rateLimit(maxRequests: number, windowMs: number) {
     // Use req.ip which Express resolves safely using trust proxy setting.
     // Directly reading X-Forwarded-For headers allows attackers to spoof IPs
     // and bypass rate limiting (OWASP API6 / XFF spoofing attack).
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const ip = req.ip || req.socket.remoteAddress;
+    if (!ip) {
+      // Can't determine the client IP — reject rather than allow all requests
+      // to share one 'unknown' bucket, which would make rate-limiting useless.
+      res.status(400).json({ error: 'Unable to determine client address' });
+      return;
+    }
 
     const redis = getRedis();
 

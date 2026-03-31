@@ -36,7 +36,13 @@ function authRateLimit(maxRequests: number, windowMs: number) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Use req.ip (Express + trust proxy) — never read X-Forwarded-For directly
     // to prevent XFF spoofing attacks that bypass rate limiting (OWASP API6).
-    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const ip = req.ip || req.socket.remoteAddress;
+    if (!ip) {
+      // Can't determine the client IP — reject rather than allow all requests
+      // to share one 'unknown' bucket, which would make rate-limiting useless.
+      res.status(400).json({ error: 'Unable to determine client address' });
+      return;
+    }
 
     const redis = getRedis();
     if (redis) {
