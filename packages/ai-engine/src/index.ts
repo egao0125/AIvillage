@@ -150,6 +150,7 @@ export interface AgentDecision {
   reason: string;             // 1-2 sentences, first person, in character
   mood?: string;
   sayAloud?: string;          // spoken aloud, others can hear
+  thenDo?: Array<{ actionId: string; reason: string }>;  // optional follow-up actions (max 2)
 }
 
 // --- Agent Cognition ---
@@ -779,6 +780,12 @@ Inventory: ${invStr}`;
     // Attention reordering: in survival crisis, put vitals FIRST (before identity, before world rules)
     const jsonInstruction = `Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
 
+You may optionally include a "thenDo" array with 1-2 follow-up actions that should execute immediately after your primary action, without waiting. Use this for natural sequences like:
+- gather_wheat then eat_wheat (gather food then eat it)
+- go_farm then gather_wheat (walk somewhere then gather)
+- craft_bread then eat_bread (make food then eat it)
+Only include thenDo when the follow-up is the obvious next step. Don't plan more than 2 steps ahead.
+
 Reply with ONLY valid JSON:
 {"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?"}`;
 
@@ -899,6 +906,7 @@ ${jsonInstruction}`;
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned) as AgentDecision;
       if (parsed.actionId && parsed.reason) {
+        if (parsed.thenDo) parsed.thenDo = parsed.thenDo.slice(0, 2);
         return parsed;
       }
     } catch {}
@@ -909,6 +917,7 @@ ${jsonInstruction}`;
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]) as AgentDecision;
         if (parsed.actionId && parsed.reason) {
+          if (parsed.thenDo) parsed.thenDo = parsed.thenDo.slice(0, 2);
           return parsed;
         }
       }

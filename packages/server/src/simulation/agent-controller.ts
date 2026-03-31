@@ -79,6 +79,7 @@ export class AgentController {
   private postConvWaitTimer: number = 0;
   private lastObligationText: string = '';
   private obligationCooldown: number = 0;
+  private actionQueue: Array<{ actionId: string; reason: string }> = [];
 
   readonly wakeHour: number;
   readonly sleepHour: number;
@@ -345,10 +346,26 @@ export class AgentController {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
           this.currentPerformingActivity = '';
+
+          // Check action queue before going idle
+          if (this.actionQueue.length > 0) {
+            const next = this.actionQueue.shift()!;
+            if (this.canStillExecute(next.actionId)) {
+              console.log(`[ActionQueue] ${this.agent.config.name} → queued: ${next.actionId}`);
+              this.lastTrigger = next.reason;
+              const situation = this.buildSituation(next.reason, this.lastOutcome);
+              this.lastOutcome = undefined;
+              void this.executeDecision(next as AgentDecision, situation);
+              return;
+            }
+            // Queued action no longer valid — clear queue, fall through to idle
+            console.log(`[ActionQueue] ${this.agent.config.name} → queued ${next.actionId} invalid, clearing`);
+            this.actionQueue = [];
+          }
+
           this.state = 'idle';
           this.world.updateAgentState(this.agent.id, 'idle', '');
           // Action completed → decide immediately
-          // The outcome memory is already stored, trigger is set
           if (!this.decidingInProgress && !this.apiExhausted) {
             void this.decideAndAct();
           }
@@ -624,6 +641,7 @@ export class AgentController {
     this.pendingSleep = null;
     this.activityTimer = 0;
     this.currentPerformingActivity = '';
+    this.actionQueue = [];
     this.state = 'conversing';
     this.world.updateAgentState(this.agent.id, 'active', 'conversing');
   }
@@ -1066,6 +1084,7 @@ export class AgentController {
   }
 
   private enterSleepState(sleepArea: string): void {
+    this.actionQueue = [];
     this.state = 'sleeping';
     this.world.updateAgentState(this.agent.id, 'sleeping', '');
     this.broadcaster.agentAction(this.agent.id, 'sleeping', '\u{1F634}');
@@ -3604,6 +3623,12 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.handleApiSuccess();
       console.log(`[Decision] ${this.agent.config.name} → ${decision.actionId} | ${decision.reason.slice(0, 120)}`);
 
+      // Queue follow-up actions if present
+      if (decision.thenDo?.length) {
+        this.actionQueue = decision.thenDo.slice(0, 2);
+        console.log(`[ActionQueue] ${this.agent.config.name} queued ${this.actionQueue.length} follow-ups: ${this.actionQueue.map(a => a.actionId).join(' → ')}`);
+      }
+
       // Guard: agent may have entered a conversation while awaiting LLM
       if (this.state === 'conversing') return;
 
@@ -3626,6 +3651,42 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       groups[key] = (groups[key] || 0) + 1;
     }
     return Object.entries(groups).map(([resource, qty]) => ({ resource, qty }));
+  }
+
+  /** Validate whether a queued action is still executable given current world state */
+  private canStillExecute(actionId: string): boolean {
+    if (!this.agent.alive) return false;
+    // Eat: still have the food?
+    if (actionId.startsWith('eat_')) {
+      const food = actionId.replace('eat_', '');
+      return this.agent.inventory.some(
+        i => i.name.toLowerCase().replace(/\s+/g, '_') === food
+      );
+    }
+    // Give: still have items and target nearby?
+    if (actionId.startsWith('give_')) {
+      const firstName = actionId.replace('give_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      return !!target && this.agent.inventory.length > 0;
+    }
+    // Craft: still have inputs?
+    if (actionId.startsWith('craft_')) {
+      const recipeId = actionId.replace('craft_', '');
+      const recipe = RECIPES.find(r => r.id === recipeId);
+      if (!recipe) return false;
+      const inv = this.buildInventoryForResolver();
+      return recipe.inputs.every(inp => {
+        const have = inv.find(i => i.resource === inp.resource);
+        return have && have.qty >= inp.qty;
+      });
+    }
+    // Talk: target nearby?
+    if (actionId.startsWith('talk_')) {
+      const firstName = actionId.replace('talk_', '');
+      return !!this.findNearbyByFirstName(firstName);
+    }
+    // Go/gather/rest: always valid
+    return true;
   }
 
   /** Helper: build skills map for action-resolver's AgentState */
