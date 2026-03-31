@@ -7,7 +7,7 @@ import { SetupPage } from './components/SetupPage';
 import { TopNav } from './views/TopNav';
 import { SpectatorChat } from './components/SpectatorChat';
 import { FeedButton } from './components/FeedButton';
-import { EventFeedButton } from './feed/EventFeedButton';
+import { EventFeed } from './feed/EventFeed';
 import { NarrativeBar } from './components/NarrativeBar';
 import { CharacterPage } from './components/CharacterPage';
 import { RecapOverlay } from './components/RecapOverlay';
@@ -16,12 +16,15 @@ import { SocialView } from './social/SocialView';
 import { connectSocket } from '../network/socket';
 import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../core/hooks';
 
+const EVENT_FEED_WIDTH = 380;
+
 // Toggle dev tools — set to false to remove entirely
 const DEV_TOOLS_ENABLED = true;
 
 export const App: React.FC = () => {
   const [entered, setEntered] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [eventFeedOpen, setEventFeedOpen] = useState(true);
   const [spectatorChatOpen, setSpectatorChatOpen] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const gameContainerRef = useRef<HTMLDivElement>(null);
@@ -101,8 +104,78 @@ export const App: React.FC = () => {
       }}>
         <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
       </div>
+      {/* Event Feed panel — left of sidebar */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        right: sidebarCollapsed ? 0 : SIDEBAR_WIDTH,
+        bottom: 0,
+        width: eventFeedOpen ? EVENT_FEED_WIDTH : 0,
+        zIndex: 10,
+        transition: 'width 0.25s ease, right 0.25s ease',
+        overflow: 'hidden',
+        background: COLORS.bg,
+        borderLeft: eventFeedOpen ? `1px solid ${COLORS.border}` : 'none',
+      }}>
+        <div style={{
+          padding: '10px 14px',
+          borderBottom: `1px solid ${COLORS.border}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
+            EVENT FEED
+          </span>
+          <button
+            onClick={() => setEventFeedOpen(false)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: COLORS.textDim,
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontFamily: FONTS.body,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ height: 'calc(100% - 42px)', overflowY: 'auto' }}>
+          <EventFeed />
+        </div>
+      </div>
+      {/* Event Feed toggle — left of event feed panel */}
+      {!eventFeedOpen && (
+        <button
+          onClick={() => setEventFeedOpen(true)}
+          style={{
+            position: 'absolute',
+            right: sidebarCollapsed ? 0 : SIDEBAR_WIDTH,
+            top: 70,
+            width: 24,
+            height: 48,
+            background: COLORS.bg,
+            border: `1px solid ${COLORS.border}`,
+            borderRight: 'none',
+            borderRadius: '6px 0 0 6px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: COLORS.accent,
+            fontFamily: FONTS.pixel,
+            fontSize: '12px',
+            zIndex: 11,
+            padding: 0,
+            transition: 'right 0.25s ease',
+          }}
+        >
+          ◀
+        </button>
+      )}
       {/* Narrative bar — bottom overlay */}
-      <NarrativeBar sidebarWidth={sidebarCollapsed ? 0 : SIDEBAR_WIDTH} />
+      <NarrativeBar sidebarWidth={(sidebarCollapsed ? 0 : SIDEBAR_WIDTH) + (eventFeedOpen ? EVENT_FEED_WIDTH : 0)} />
       {/* Character page — slides in from right */}
       {characterPageAgentId && <CharacterPage />}
       {/* Recap overlay — full screen cinematic */}
@@ -113,7 +186,6 @@ export const App: React.FC = () => {
       <SpectatorChat onOpenChange={setSpectatorChatOpen} />
       {/* Feed — floating button next to chat */}
       <FeedButton chatOpen={spectatorChatOpen} />
-      <EventFeedButton chatOpen={spectatorChatOpen} />
       {/* Back to setup button */}
       <button
         onClick={() => setShowSetup(true)}
