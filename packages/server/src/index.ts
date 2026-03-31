@@ -322,6 +322,13 @@ io.on('connection', (socket) => {
     socket.emit('viewport:catchup', { agents });
   });
 
+  // Per-socket error handler — prevents an unhandled 'error' event from crashing the process.
+  // Without this, a malformed packet triggers an uncaught ERR_UNHANDLED_ERROR and takes down
+  // the entire server. (CVE-2024-38355 pattern / Node.js EventEmitter behavior)
+  socket.on('error', (err: Error) => {
+    console.error(`[Socket] Error on socket ${socket.id}:`, err.message);
+  });
+
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
     spectatorLastComment.delete(socket.id);

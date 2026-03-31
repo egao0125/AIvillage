@@ -32,6 +32,15 @@ module "eks" {
   # OIDC is required for IRSA (used by AWS Load Balancer Controller).
   enable_irsa = true
 
+  # Envelope encryption for Kubernetes Secrets stored in etcd.
+  # Without this, Secrets are only base64-encoded in etcd — not encrypted at rest.
+  # The EKS service wraps the per-secret DEK with this CMK before writing to etcd.
+  # (CIS EKS Benchmark 5.3.1 / AWS Security Hub EKS.3 / NIST SP 800-53 SC-28)
+  cluster_encryption_config = {
+    provider_key_arn = aws_kms_key.eks.arn
+    resources        = ["secrets"]
+  }
+
   # Cluster add-ons — kept up to date automatically.
   cluster_addons = {
     coredns = {

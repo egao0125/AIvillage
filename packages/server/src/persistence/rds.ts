@@ -216,15 +216,21 @@ export class RdsPersistence {
     const MAX_RETRIES = 3;
     let delay = 1_000;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const client = await this.pool.connect();
       try {
-        await Promise.all([
-          this.saveWorldState(world),
-          this.saveAgents(world.agents),
-        ]);
-        await this.saveAgentControllers(controllers, apiKeys);
+        // Single transaction: world_state + agents + agent_controllers must land atomically.
+        // Without a transaction, a partial failure (e.g. saveAgents succeeds but
+        // saveAgentControllers fails) leaves the DB in an inconsistent state that
+        // causes agents to lose their controller context on pod restart.
+        await client.query('BEGIN');
+        await this.saveWorldStateClient(client, world);
+        await this.saveAgentsClient(client, world.agents);
+        await this.saveAgentControllersClient(client, controllers, apiKeys);
+        await client.query('COMMIT');
         console.log(`[Persistence] Saved: ${world.agents.size} agents, ${controllers.size} controllers`);
         return;
       } catch (err) {
+        await client.query('ROLLBACK').catch(() => { /* ignore rollback error */ });
         const transient = this.isTransientError(err);
         if (transient && attempt < MAX_RETRIES) {
           console.warn(`[RDS] saveAll transient error (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delay}ms:`, (err as Error).message);
@@ -236,8 +242,93 @@ export class RdsPersistence {
           console.error('[RDS] saveAll exhausted retries:', msg);
           throw new Error(msg);
         }
+      } finally {
+        client.release();
       }
     }
+  }
+
+  // Client-scoped variants used inside the saveAll transaction.
+  // These accept an already-checked-out PoolClient so all writes share a single transaction.
+  private async saveWorldStateClient(client: pg.PoolClient, world: World): Promise<void> {
+    // Identical serialization to saveWorldState() — uses the same mapToRecord helpers.
+    const data: WorldStateData = {
+      time: world.time,
+      weather: world.weather,
+      conversations: mapToRecord(world.conversations),
+      board: world.board,
+      elections: mapToRecord(world.elections),
+      properties: mapToRecord(world.properties),
+      reputation: world.reputation,
+      secrets: world.secrets,
+      items: mapToRecord(world.items),
+      institutions: mapToRecord(world.institutions),
+      artifacts: world.artifacts,
+      buildings: mapToRecord(world.buildings),
+      technologies: world.technologies,
+      materialSpawns: world.materialSpawns,
+      worldObjects: Array.from(world.worldObjects.values()),
+      culturalNames: Object.fromEntries(world.culturalNames),
+      resourcePools: Object.fromEntries(world.resourcePools),
+      villageMemory: world.villageMemory,
+      activeBuildProjects: mapToRecord(world.activeBuildProjects),
+    };
+    await client.query(
+      `INSERT INTO world_state (id, data, updated_at)
+       VALUES ('current', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+      [JSON.stringify(data)],
+    );
+  }
+
+  private async saveAgentsClient(client: pg.PoolClient, agents: Map<string, Agent>): Promise<void> {
+    if (agents.size === 0) return;
+    const ids: string[] = [];
+    const datas: string[] = [];
+    for (const agent of agents.values()) {
+      ids.push(agent.id);
+      datas.push(JSON.stringify(agent));
+    }
+    await client.query(
+      `INSERT INTO agents (id, data, updated_at)
+       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+      [ids, datas],
+    );
+  }
+
+  private async saveAgentControllersClient(
+    client: pg.PoolClient,
+    controllers: Map<string, AgentController>,
+    apiKeys?: Map<string, { apiKey: string; model: string }>,
+  ): Promise<void> {
+    if (controllers.size === 0) return;
+    const agentIds: string[] = [];
+    const datas: string[] = [];
+    for (const [agentId, ctrl] of controllers.entries()) {
+      const keyData = apiKeys?.get(agentId);
+      const ctrlData: ControllerData = {
+        controllerState: ctrl.state,
+        currentGoals: ctrl.currentGoals,
+        activityTimer: ctrl.activityTimer,
+        conversationCooldown: ctrl.conversationCooldown,
+        wakeHour: ctrl.wakeHour,
+        sleepHour: ctrl.sleepHour,
+        homeArea: ctrl.homeArea,
+        worldView: ctrl.cognition.worldView,
+        worldViewParts: ctrl.cognition.worldViewParts,
+        apiKey: keyData?.apiKey ? encryptApiKey(keyData.apiKey) : undefined,
+        model: keyData?.model,
+      };
+      agentIds.push(agentId);
+      datas.push(JSON.stringify(ctrlData));
+    }
+    await client.query(
+      `INSERT INTO agent_controllers (agent_id, data, updated_at)
+       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
+       ON CONFLICT (agent_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+      [agentIds, datas],
+    );
   }
 
   async loadWorldState(): Promise<WorldStateData | null> {

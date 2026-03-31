@@ -85,3 +85,58 @@ resource "aws_kms_alias" "ecr" {
   name          = "alias/ai-village-ecr"
   target_key_id = aws_kms_key.ecr.key_id
 }
+
+# ---------------------------------------------------------------------------
+# CMK for EKS envelope encryption of Kubernetes Secrets (etcd at-rest)
+#
+# By default, EKS stores Kubernetes Secrets as base64 in etcd — not encrypted.
+# This CMK enables envelope encryption: the EKS service wraps the DEK (data
+# encryption key) with this CMK before writing to etcd.
+# (CIS EKS Benchmark 5.3.1 / AWS Security Hub EKS.3 / NIST SP 800-53 SC-28)
+#
+# Key policy:
+#   Root account: kms:* for break-glass administration (EnableIAMUserPermissions)
+#   EKS service principal: GenerateDataKey + Decrypt (required for envelope encryption)
+# ---------------------------------------------------------------------------
+
+resource "aws_kms_key" "eks" {
+  description             = "CMK for EKS Kubernetes Secrets envelope encryption"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAdministration"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        # EKS service must be in the key policy to perform envelope encryption.
+        # IAM policy alone is insufficient — this is an AWS requirement for EKS secrets encryption.
+        Sid    = "AllowEKSSecretsEncryption"
+        Effect = "Allow"
+        Principal = {
+          Service = "eks.amazonaws.com"
+        }
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+        ]
+        Resource = "*"
+      },
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_kms_alias" "eks" {
+  name          = "alias/ai-village-eks"
+  target_key_id = aws_kms_key.eks.key_id
+}

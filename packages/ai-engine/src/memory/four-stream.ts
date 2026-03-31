@@ -21,7 +21,10 @@ export class FourStreamMemory {
   private static readonly TIMELINE_MAX = 50;
 
   // Stream 2: Relationship Dossiers — per-person profiles
+  // Capped at MAX_DOSSIERS: LRU eviction (oldest lastUpdated) prevents unbounded growth
+  // when an agent interacts with hundreds of unique NPCs over a long simulation run.
   private dossiers: Map<string, RelationshipDossier> = new Map();
+  private static readonly MAX_DOSSIERS = 150;
 
   // Stream 3: Active Concerns — always-present short list
   private concerns: ActiveConcern[] = [];
@@ -234,6 +237,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
       };
 
       this.dossiers.set(targetId, dossier);
+      this.evictOldestDossierIfNeeded();
       this.syncDossiersToAgent();
 
       if (parsed.concerns) {
@@ -262,6 +266,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
           lastInteraction: Date.now(),
           lastUpdated: Date.now(),
         });
+        this.evictOldestDossierIfNeeded();
         this.syncDossiersToAgent();
       }
     }
@@ -289,6 +294,20 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
 
   syncDossiersToAgent(): void {
     this.agent.dossiers = Array.from(this.dossiers.values());
+  }
+
+  /** LRU eviction: remove the least-recently-updated dossier when over the cap. */
+  private evictOldestDossierIfNeeded(): void {
+    if (this.dossiers.size <= FourStreamMemory.MAX_DOSSIERS) return;
+    let oldestKey: string | undefined;
+    let oldestTime = Infinity;
+    for (const [key, d] of this.dossiers) {
+      if (d.lastUpdated < oldestTime) {
+        oldestTime = d.lastUpdated;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey !== undefined) this.dossiers.delete(oldestKey);
   }
 
   // --- STREAM 3: ACTIVE CONCERNS ---
