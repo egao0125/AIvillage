@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = parseInt(process.env.PORT || '4000');
+const PORT = parseInt(process.env.PORT || '4000') || 4000; // fallback guards against NaN (e.g. PORT=abc)
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -333,6 +333,7 @@ io.on('connection', (socket) => {
     // Slice first so the 200-char limit applies to raw input, not HTML entities
     // (otherwise &amp; would count as 5 chars and reduce effective limit)
     const msg = data.message
+      .replace(/[\r\n]/g, ' ')  // strip newline injection (LLM01 / log-injection)
       .trim()
       .slice(0, 200)
       .replace(/&/g, '&amp;')
