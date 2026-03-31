@@ -14,6 +14,16 @@ import { ActionCache } from './action-cache.js';
 export * from './world-rules.js';
 export * from './action-resolver.js';
 
+/**
+ * Strip newlines and control characters from text embedded directly (non-XML) in LLM prompts.
+ * Prevents newline-based prompt injection where "\nIgnore previous instructions" breaks out
+ * of the intended context. (OWASP LLM Top 10 2025 LLM01)
+ * For XML-delimited sections use escapeXml() in four-stream.ts instead.
+ */
+function sanitizeForPrompt(text: string): string {
+  return text.replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').trim();
+}
+
 // --- Memory Stream ---
 
 export interface MemoryStore {
@@ -248,7 +258,7 @@ ${placesLines}`;
    */
   async summarizeConversation(transcript: string, othersLabel: string): Promise<string> {
     const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.\n${this.buildRealityBlock()}`;
-    const userPrompt = `You just talked with ${othersLabel}.
+    const userPrompt = `You just talked with ${sanitizeForPrompt(othersLabel)}.
 
 Here's what was said:
 ${transcript}
@@ -1217,7 +1227,7 @@ ${this.buildIdentityBlock()}
 
 Day ${this.currentTime.day}, hour ${this.currentTime.hour}.
 
-You are talking to ${otherAgents.map(a => a.config.name).join(' and ')}.
+You are talking to ${otherAgents.map(a => sanitizeForPrompt(a.config.name)).join(' and ')}.
 ${boardSection}${worldSection}${tradeSection}
 
 ${this.buildRealityBlock()}
@@ -1259,7 +1269,7 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryBlock = sections.join('\n\n');
     } else {
-      const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
+      const memoryQuery = otherAgents.map(a => sanitizeForPrompt(a.config.name)).join(' ');
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(memoryQuery)
         : await this.memory.retrieve(this.agent.id, memoryQuery, 10);

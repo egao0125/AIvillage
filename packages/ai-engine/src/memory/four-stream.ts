@@ -227,7 +227,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
         targetId,
         targetName,
         summary: parsed.summary || `I know ${targetName}.`,
-        trust: Math.max(-100, Math.min(100, parsed.trust ?? existing?.trust ?? 0)),
+        trust: Math.max(-100, Math.min(100, typeof parsed.trust === 'number' ? parsed.trust : (existing?.trust ?? 0))),
         activeCommitments: (parsed.activeCommitments || []).slice(0, 3),
         lastInteraction: Date.now(),
         lastUpdated: Date.now(),

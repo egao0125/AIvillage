@@ -31,6 +31,8 @@ export class InMemoryStore implements MemoryStore {
   }
 
   async add(memory: Memory): Promise<void> {
+    // Clamp importance to [1,10] to prevent NaN/-Inf in scoring formula (line ~71)
+    memory.importance = Math.max(1, Math.min(10, Number(memory.importance) || 5));
     this.getAgentMemories(memory.agentId).push(memory);
 
     // Build embedding
