@@ -257,7 +257,7 @@ ${placesLines}`;
    * Single LLM call replaces the old transcript storage + separate extractFacts approach.
    */
   async summarizeConversation(transcript: string, othersLabel: string): Promise<string> {
-    const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.\n${this.buildRealityBlock()}`;
+    const systemPrompt = `You are ${sanitizeForPrompt(this.agent.config.name)}. Be honest about your feelings and judgments.\n${this.buildRealityBlock()}`;
     const userPrompt = `You just talked with ${sanitizeForPrompt(othersLabel)}.
 
 Here's what was said:
@@ -543,7 +543,7 @@ If nothing notable was exchanged, return []`;
     // Soul + backstory (800 char limit — enough for rich original characters)
     const soulRaw = config.soul || config.backstory || '';
     const soulText = soulRaw.length > 800 ? soulRaw.slice(0, 800) + '...' : soulRaw;
-    parts.push(`You are ${config.name}, age ${config.age}. ${soulText}`);
+    parts.push(`You are ${sanitizeForPrompt(config.name)}, age ${config.age}. ${soulText}`);
     // Use explicit goal, or first desire as fallback
     const effectiveGoal = config.goal || (config.desires?.length ? config.desires[0] : '');
     if (effectiveGoal) parts.push(`Your goal: ${effectiveGoal}`);
@@ -1498,7 +1498,7 @@ Max 500 words. First person. No section headers. No lists of places.`;
   async updateWorldView(recentMemoriesText: string, reflection?: string): Promise<string | undefined> {
     const placesKnown = Array.from(this.knownPlaces.values()).join('\n') || '(none yet)';
 
-    const systemPrompt = `You are ${this.agent.config.name}. It's the end of the day. Rewrite your personal field guide based on what happened today.
+    const systemPrompt = `You are ${sanitizeForPrompt(this.agent.config.name)}. It's the end of the day. Rewrite your personal field guide based on what happened today.
 
 WHAT YOU WROTE YESTERDAY:
 ${this.myExperience}
@@ -1561,7 +1561,7 @@ Return ONLY the new MY EXPERIENCE text.`;
     if (personality.extraversion < 0.3) biases.push('You observe more than you interact — your assessments are based on watching, not talking.');
     const biasSection = biases.length > 0 ? `\n${biases.join('\n')}` : '';
 
-    const systemPrompt = `You are ${config.name}.
+    const systemPrompt = `You are ${sanitizeForPrompt(config.name)}.
 
 Your personality: openness=${personality.openness}, conscientiousness=${personality.conscientiousness}, extraversion=${personality.extraversion}, agreeableness=${personality.agreeableness}, neuroticism=${personality.neuroticism}
 ${biasSection}
@@ -1636,7 +1636,7 @@ Output a JSON array ONLY, no other text:
       const memoryTexts = chain.map(m => m.content).join('\n→ ');
       try {
         const summary = await this.llm.complete(
-          `You are summarizing a chain of connected events for ${this.agent.config.name}. Preserve cause and effect. Be concise. Tell the story, don't flatten it.`,
+          `You are summarizing a chain of connected events for ${sanitizeForPrompt(this.agent.config.name)}. Preserve cause and effect. Be concise. Tell the story, don't flatten it.`,
           `Summarize this sequence of ${chain.length} connected events into 2-3 sentences that preserve what led to what:\n→ ${memoryTexts}`
         );
 
@@ -1678,7 +1678,7 @@ Output a JSON array ONLY, no other text:
       const memoryTexts = memories.map(m => m.content).join('\n- ');
       try {
         const summary = await this.llm.complete(
-          `You are summarizing old memories for ${this.agent.config.name}. Keep the names, the reasons, and the feelings. "I helped Mei when she was starving — it felt right" is better than "I helped someone." What matters is WHO you interacted with and WHY, not just what happened.`,
+          `You are summarizing old memories for ${sanitizeForPrompt(this.agent.config.name)}. Keep the names, the reasons, and the feelings. "I helped Mei when she was starving — it felt right" is better than "I helped someone." What matters is WHO you interacted with and WHY, not just what happened.`,
           `Summarize these ${memories.length} ${type} memories into 2-3 sentences:\n- ${memoryTexts}`
         );
         await this.memory.add({
