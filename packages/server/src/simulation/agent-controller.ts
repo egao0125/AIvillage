@@ -1983,6 +1983,7 @@ export class AgentController {
   /** Step 5: Execute a structured decision — dispatch to game systems */
   private async executeDecision(decision: AgentDecision, situation: AgentSituation): Promise<void> {
     const actionId = decision.actionId;
+    if (!actionId) return;
     // Truncated reason for action broadcasts — "action — reason"
     const shortReason = decision.reason?.length > 80
       ? this.truncateAtSentence(decision.reason, 80)
