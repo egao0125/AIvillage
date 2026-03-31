@@ -1002,7 +1002,11 @@ export class AgentController {
     this.agent.alive = false;
     this.agent.causeOfDeath = cause;
     this.agent.state = 'dead';
+    this.agent.currentAction = '';
     this.state = 'idle'; // Stop all controller activity
+
+    // Broadcast death state immediately to prevent stale 'resting'/'trading' on clients
+    this.world.updateAgentState(this.agent.id, 'dead', '');
 
     // Drop items — they become unclaimed
     const droppedItems = this.world.killAgent(this.agent.id, cause);
@@ -1725,9 +1729,16 @@ export class AgentController {
       propertyInfo,
       villageRules,
       allAgentLocations,
-      allReputations: (this.world.reputation ?? [])
-        .filter(r => r.fromAgentId === 'system' && r.score !== 0)
-        .map(r => ({ id: r.toAgentId, score: r.score })),
+      allReputations: (() => {
+        // Aggregate ALL reputation entries per agent (system + per-agent from conversations)
+        const repByAgent = new Map<string, number>();
+        for (const r of this.world.reputation ?? []) {
+          repByAgent.set(r.toAgentId, (repByAgent.get(r.toAgentId) ?? 0) + r.score);
+        }
+        return [...repByAgent.entries()]
+          .filter(([, score]) => score !== 0)
+          .map(([id, score]) => ({ id, score }));
+      })(),
       villageHistory: this.world.getTopVillageMemory(5) || undefined,
     };
   }
