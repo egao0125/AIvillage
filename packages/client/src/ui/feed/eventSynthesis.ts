@@ -62,7 +62,7 @@ export function synthesizeEvents(
         type = 'trade';
         break;
       case 'news':
-        type = 'announcement';
+        type = 'news';
         break;
       default:
         continue;

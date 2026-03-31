@@ -30,15 +30,17 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
 
   return (
     <div
+      onClick={() => { if (isLong) setExpanded(prev => !prev); }}
       style={{
         margin: '6px 10px',
         padding: '12px 14px',
         background: COLORS.bgCard,
         borderRadius: 8,
         border: `1px solid ${COLORS.border}`,
+        cursor: isLong ? 'pointer' : undefined,
       }}
     >
-      {/* Header: icon + type badge + status flag + author + day */}
+      {/* Header: icon + type badge + status flag + "by author" + day */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
         <span style={{ fontSize: '14px' }}>{event.icon}</span>
         <span
@@ -71,8 +73,8 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
           </span>
         )}
         {event.author && (
-          <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.text, fontWeight: 'bold' }}>
-            {event.author.name}
+          <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.textDim }}>
+            by <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{event.author.name}</span>
           </span>
         )}
         <span
@@ -88,7 +90,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         </span>
       </div>
 
-      {/* Content — truncated with show more/less */}
+      {/* Content — truncated, click card to expand */}
       <div
         style={{
           fontFamily: FONTS.body,
@@ -99,28 +101,12 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         }}
       >
         {displayText}
-        {isLong && (
-          <button
-            onClick={() => setExpanded(prev => !prev)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: COLORS.accent,
-              fontFamily: FONTS.body,
-              fontSize: '11px',
-              cursor: 'pointer',
-              padding: '0 0 0 4px',
-            }}
-          >
-            {expanded ? 'Show less' : 'Show more'}
-          </button>
-        )}
       </div>
 
       {/* Conversation expander */}
       {event.sourceConversationId && (
         <button
-          onClick={() => setShowConversation(prev => !prev)}
+          onClick={(e) => { e.stopPropagation(); setShowConversation(prev => !prev); }}
           style={{
             background: 'none',
             border: 'none',
