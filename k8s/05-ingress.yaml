@@ -21,11 +21,12 @@ metadata:
     # CI/CD injects this automatically on deploy.
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-1:053442321898:certificate/264e8087-c93c-4084-91b1-dfd0dd2af385
+    # ACM cert ARN — injected automatically by CI/CD (deploy.yml) from terraform output
+    alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_TERRAFORM_OUTPUT
 
-    # WAFv2 Web ACL: terraform output -raw waf_web_acl_arn
+    # WAFv2 Web ACL — injected automatically by CI/CD (deploy.yml) from terraform output
     # (CIS AWS 6.7 / NIST SP 800-53 SC-5, SI-3)
-    alb.ingress.kubernetes.io/wafv2-web-acl-arn: arn:aws:wafv2:ap-northeast-1:053442321898:regional/webacl/ai-village-waf/b8365e2b-f54b-4a3c-90ad-b2f286f69f68
+    alb.ingress.kubernetes.io/wafv2-web-acl-arn: REPLACE_WITH_TERRAFORM_OUTPUT
 
     # 120 s idle timeout for long-lived Socket.IO WebSocket connections.
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120

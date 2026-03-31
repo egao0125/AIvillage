@@ -32,7 +32,7 @@ provider "aws" {
 }
 
 variable "aws_region" {
-  default = "ap-northeast-1"
+  default = "us-east-1"
 }
 
 variable "aws_profile" {
@@ -41,13 +41,16 @@ variable "aws_profile" {
 
 locals {
   account_id  = "053442321898"
-  bucket_name = "ai-village-terraform-state-${local.account_id}"
+  # us-east-1 backend bucket — separate from the old ap-northeast-1 bucket
+  # Old bucket: ai-village-terraform-state-053442321898 (ap-northeast-1, keep until migration verified)
+  bucket_name = "ai-village-tfstate-us1-${local.account_id}"
+  dynamodb    = "ai-village-terraform-locks-us1"
 }
 
 # --- S3 bucket for Terraform state ---
 
 resource "aws_s3_bucket" "tf_state" {
-  bucket        = local.bucket_name
+  bucket        = local.bucket_name  # ai-village-tfstate-us1-053442321898
   force_destroy = false # never accidentally delete state
 
   tags = {
@@ -97,7 +100,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "tf_state" {
 # --- DynamoDB table for state locking ---
 
 resource "aws_dynamodb_table" "tf_locks" {
-  name         = "ai-village-terraform-locks"
+  name         = local.dynamodb  # ai-village-terraform-locks-us1
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "LockID"
 

@@ -16,7 +16,7 @@ data:
   # pgBouncer handles TLS for pgBouncer→RDS (PGBOUNCER_SERVER_TLS_SSLMODE=verify-full).
   # Change to "verify-full" only if app connects directly to RDS (bypassing pgBouncer).
   DB_SSLMODE: "disable"
-  COGNITO_REGION: "ap-northeast-1"
+  COGNITO_REGION: "us-east-1"
   # Replace with: terraform output cognito_user_pool_id
   COGNITO_USER_POOL_ID: "REPLACE_WITH_TERRAFORM_OUTPUT"
   # Replace with: terraform output cognito_client_id

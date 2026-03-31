@@ -34,11 +34,13 @@ terraform {
   # Then migrate:       cd .. && terraform init -reconfigure
   # ---------------------------------------------------------------------------
   backend "s3" {
-    bucket         = "ai-village-terraform-state-053442321898"
+    # us-east-1 backend — created by terraform/bootstrap (run once before terraform init)
+    # Old ap-northeast-1 bucket: ai-village-terraform-state-053442321898 (keep until migration verified)
+    bucket         = "ai-village-tfstate-us1-053442321898"
     key            = "infra/eks/terraform.tfstate"
-    region         = "ap-northeast-1"
+    region         = "us-east-1"
     encrypt        = true
-    dynamodb_table = "ai-village-terraform-locks"
+    dynamodb_table = "ai-village-terraform-locks-us1"
     profile        = "ai-village"
   }
 }

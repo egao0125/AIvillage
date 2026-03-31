@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_REGION: ap-northeast-1
+  AWS_REGION: us-east-1
   ECR_REPOSITORY: ai-village
   EKS_CLUSTER_NAME: ai-village
   K8S_NAMESPACE: ai-village

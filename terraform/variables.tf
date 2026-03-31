@@ -6,7 +6,7 @@
 variable "aws_region" {
   description = "AWS region to deploy into. Must NOT overlap with regions used by existing resources unless the VPC CIDR is also changed."
   type        = string
-  default     = "ap-northeast-1"
+  default     = "us-east-1"
 }
 
 variable "aws_profile" {
@@ -121,7 +121,7 @@ variable "alb_dns_name" {
 variable "alb_hosted_zone_id" {
   description = "ALB canonical hosted zone ID (from aws elbv2 describe-load-balancers .CanonicalHostedZoneId). Used for Route53 ALIAS record at apex domain."
   type        = string
-  default     = "Z14GRHDCWA56QT"  # ap-northeast-1 ALB canonical zone ID
+  default     = "Z35SXDOTRQ7X7K"  # us-east-1 ALB canonical zone ID
 }
 
 variable "rds_instance_class" {
