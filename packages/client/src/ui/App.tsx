@@ -158,6 +158,26 @@ export const App: React.FC = () => {
       {showSetup && (
         <div style={{ position: 'absolute', inset: 0, zIndex: 100, overflowY: 'auto' }}>
           <SetupPage onEnter={() => setShowSetup(false)} />
+          <button
+            onClick={() => setShowSetup(false)}
+            style={{
+              position: 'fixed',
+              top: 20,
+              left: 24,
+              padding: '6px 14px',
+              background: 'transparent',
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 4,
+              cursor: 'pointer',
+              color: COLORS.textDim,
+              fontFamily: FONTS.pixel,
+              fontSize: '7px',
+              letterSpacing: 1,
+              zIndex: 101,
+            }}
+          >
+            &larr; BACK
+          </button>
         </div>
       )}
       {/* Dev tools — toggle via DEV_TOOLS_ENABLED */}
