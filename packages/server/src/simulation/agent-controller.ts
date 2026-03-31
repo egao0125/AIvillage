@@ -3680,7 +3680,7 @@ Write ONLY the rule in the format above. Stay in character.`;
 
   /** Validate whether a queued action is still executable given current world state */
   private canStillExecute(actionId: string): boolean {
-    if (!this.agent.alive) return false;
+    if (!this.agent.alive || !actionId) return false;
     // Eat: still have the food?
     if (actionId.startsWith('eat_')) {
       const food = actionId.replace('eat_', '');
