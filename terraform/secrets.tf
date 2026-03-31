@@ -151,21 +151,13 @@ resource "aws_secretsmanager_secret_version" "redis_url" {
 # Anthropic API keys — global keys (narrator + agent fallback)
 #
 # Usage in the engine:
-#   1. Narrator / Storyline Detector / Recap Generator
-#      → Village-wide commentary and weekly summaries.
-#        Uses ANTHROPIC_API_KEY (KEY_1). Required for these features.
-#
-#   2. Agent fallback (for agents without a per-agent BYOK key)
-#      → Round-robins between ANTHROPIC_API_KEY and ANTHROPIC_API_KEY_2.
-#        KEY_2 helps stay under Anthropic rate limits when many agents
-#        share the same key (odd-indexed agents use KEY_2).
-#        Leave KEY_2 empty if you have few agents or all use BYOK.
-#
-# Per-agent keys (set via app UI) always take priority over these globals.
+#   - Narrator commentary, storyline detection, weekly recap generation.
+#   - Agents use per-agent BYOK keys only (set via app UI).
+#     Agents without a BYOK key skip LLM calls — no global fallback.
 # ---------------------------------------------------------------------------
 resource "aws_secretsmanager_secret" "anthropic_api_key" {
   name                    = "ai-village/anthropic-api-key"
-  description             = "Anthropic API KEY_1 — narrator/recap + odd-agent fallback"
+  description             = "Anthropic API key — narrator, storyline detection, weekly recap (not used for agents)"
   recovery_window_in_days = 7
   kms_key_id              = aws_kms_key.secrets_manager.arn
   tags                    = var.tags
@@ -180,22 +172,6 @@ resource "aws_secretsmanager_secret_version" "anthropic_api_key" {
   }
 }
 
-resource "aws_secretsmanager_secret" "anthropic_api_key_2" {
-  name                    = "ai-village/anthropic-api-key-2"
-  description             = "Anthropic API KEY_2 — optional second key for even-agent round-robin (rate-limit spreading)"
-  recovery_window_in_days = 7
-  kms_key_id              = aws_kms_key.secrets_manager.arn
-  tags                    = var.tags
-}
-
-resource "aws_secretsmanager_secret_version" "anthropic_api_key_2" {
-  secret_id     = aws_secretsmanager_secret.anthropic_api_key_2.id
-  secret_string = jsonencode({ ANTHROPIC_API_KEY_2 = "" })
-
-  lifecycle {
-    ignore_changes = [secret_string]
-  }
-}
 
 # ---------------------------------------------------------------------------
 # Cognito app client secret — auto-populated by Terraform (no REPLACE_AFTER_APPLY).

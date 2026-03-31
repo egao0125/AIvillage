@@ -482,8 +482,6 @@ export class SimulationEngine {
         return;
       }
 
-      const globalKey = process.env.ANTHROPIC_API_KEY;
-      const globalKey2 = process.env.ANTHROPIC_API_KEY_2;
       const defaultModel = 'claude-haiku-4-5-20251001';
       const sharedMemoryStore = new RdsMemoryStore(this.persistence.pool);
       this.sharedMemoryStore = sharedMemoryStore;
@@ -492,29 +490,18 @@ export class SimulationEngine {
         const agent = agents[i];
         this.world.addAgent(agent);
 
-        // Restore per-agent BYOK key from RDS; fall back to env var round-robin
+        // Restore per-agent BYOK key from RDS only — no global fallback.
+        // Agents without a BYOK key run with LLM calls silently skipped.
         const ctrlDataForKey = controllerDataMap.get(agent.id);
-        const savedKey = ctrlDataForKey?.apiKey;
+        const savedKey = ctrlDataForKey?.apiKey ?? '';
         const savedModel = ctrlDataForKey?.model;
 
-        let effectiveKey: string;
-        let keyLabel: string;
-        if (savedKey) {
-          // BYOK key persisted — restore it
-          effectiveKey = savedKey;
-          keyLabel = 'BYOK';
-        } else {
-          // No saved key — round-robin across env var keys
-          const useKey2 = globalKey2 && i % 2 === 1;
-          effectiveKey = (useKey2 ? globalKey2 : globalKey) ?? '';
-          keyLabel = useKey2 ? 'KEY_2' : 'KEY_1';
-          if (!effectiveKey) {
-            console.warn(`[Engine] No API key for agent ${agent.config.name} — LLM calls will be skipped`);
-          }
+        if (!savedKey) {
+          console.warn(`[Engine] Agent ${agent.config.name} has no BYOK key — LLM calls will be skipped`);
         }
         const effectiveModel = savedModel || defaultModel;
-        this.agentApiKeys.set(agent.id, { apiKey: effectiveKey, model: effectiveModel });
-        console.log(`[Engine] Agent ${agent.config.name} → ${keyLabel} / ${effectiveModel}`);
+        this.agentApiKeys.set(agent.id, { apiKey: savedKey, model: effectiveModel });
+        console.log(`[Engine] Agent ${agent.config.name} → ${savedKey ? 'BYOK' : 'no-key'} / ${effectiveModel}`);
 
         // Away agents persist but don't get controller/cognition (no LLM calls)
         if (agent.state === 'away') {
@@ -522,8 +509,8 @@ export class SimulationEngine {
           continue;
         }
 
-        // Create cognition with RDS-backed memory + throttled LLM
-        const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+        // Create cognition with RDS-backed memory + throttled LLM (BYOK key or empty)
+        const llmProvider = this.getThrottledProvider(savedKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = ctrlDataForWorldView?.worldViewParts;
         const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts);
@@ -713,12 +700,13 @@ export class SimulationEngine {
       });
     }
 
-    // Create cognition stack with per-agent API key (falls back to global env)
-    const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
+    // Create cognition stack with per-agent BYOK key only — no global fallback.
+    const effectiveKey = apiKey ?? '';
     const effectiveModel = model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-    if (effectiveKey) {
-      this.agentApiKeys.set(id, { apiKey: effectiveKey, model: effectiveModel });
+    if (!effectiveKey) {
+      console.warn(`[Engine] Agent ${config.name} added without a BYOK key — LLM calls will be skipped`);
     }
+    this.agentApiKeys.set(id, { apiKey: effectiveKey, model: effectiveModel });
     const memoryStore = this.persistence
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
@@ -880,12 +868,12 @@ export class SimulationEngine {
     const agent = this.world.getAgent(id);
     if (!agent || agent.state !== 'away') return false;
 
-    // Recreate cognition
+    // Recreate cognition with BYOK key only — no global fallback.
     const keyData = this.agentApiKeys.get(id);
-    const effectiveKey = keyData?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
+    const effectiveKey = keyData?.apiKey ?? '';
     const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
     if (!effectiveKey) {
-      console.warn(`[Engine] No API key for agent ${id} on resume — LLM calls will be skipped`);
+      console.warn(`[Engine] Agent ${id} resumed without a BYOK key — LLM calls will be skipped`);
     }
 
     const memoryStore = this.persistence
@@ -992,12 +980,12 @@ export class SimulationEngine {
       }
     }
 
-    // Recreate cognition with fresh worldView — no stale knowledge from past life
+    // Recreate cognition with fresh worldView — BYOK key only, no global fallback.
     const keyData = this.agentApiKeys.get(id);
-    const effectiveKey = keyData?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
+    const effectiveKey = keyData?.apiKey ?? '';
     const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
     if (!effectiveKey) {
-      console.warn(`[Engine] No API key for agent ${id} on resurrection — LLM calls will be skipped`);
+      console.warn(`[Engine] Agent ${id} resurrected without a BYOK key — LLM calls will be skipped`);
     }
 
     const memoryStore = this.persistence
@@ -2475,12 +2463,12 @@ Answer with ONLY one word: "support" or "oppose".`,
       agent.institutionIds = [];
       agent.joinedDay = 1;
 
-      // Recreate cognition with fresh worldView
+      // Recreate cognition with fresh worldView — BYOK key only, no global fallback.
       const keyData = this.agentApiKeys.get(agent.id);
-      const effectiveKey = keyData?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '';
+      const effectiveKey = keyData?.apiKey ?? '';
       const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
       if (!effectiveKey) {
-        console.warn(`[Engine] No API key for agent ${agent.config.name} on fresh-start — LLM calls will be skipped`);
+        console.warn(`[Engine] Agent ${agent.config.name} fresh-started without a BYOK key — LLM calls will be skipped`);
       }
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
