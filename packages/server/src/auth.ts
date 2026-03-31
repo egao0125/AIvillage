@@ -302,8 +302,10 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
       res.json({ token, user: { id: sub, email: normalizedEmail } });
     } catch (err) {
       if (err instanceof UsernameExistsException) {
-        // Do not confirm whether the email is registered — generic message only
-        res.status(409).json({ error: 'Email already registered' });
+        // Return generic 400 — do NOT expose whether this email is registered.
+        // A 409 with "Email already registered" enables account enumeration (OWASP ASVS V2.7 / CWE-204).
+        // Legitimate users who already have an account should use the login or forgot-password flow.
+        res.status(400).json({ error: 'Registration failed. Try a different email or sign in instead.' });
         return;
       }
       console.error('[Auth] signup error:', (err as Error).message);
