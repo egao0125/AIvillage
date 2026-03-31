@@ -58,23 +58,24 @@ echo ""
 put_secret "ai-village/db-app-user" \
   "{\"username\":\"aivillage_app\",\"password\":\"${DB_PASS}\",\"host\":\"${RDS_HOST}\",\"port\":\"5432\",\"dbname\":\"aivillage\"}"
 
-# ---- 4. ANTHROPIC_API_KEY ----
-echo "[4/5] ANTHROPIC_API_KEY"
-echo "  Enter your Anthropic API key (sk-ant-...): "
+# ---- 4. ANTHROPIC_API_KEY (optional — BYOK mode) ----
+echo "[4/5] ANTHROPIC_API_KEY (optional)"
+echo "  This is the GLOBAL fallback key used only for:"
+echo "    - Village narrator commentary"
+echo "    - Storyline detection"
+echo "    - Recap generation"
+echo "  Each AI agent can carry its own key set via the app UI (BYOK)."
+echo "  If ALL agents will use their own keys, press Enter to skip."
+echo ""
+echo "  Enter Anthropic API key (sk-ant-...) or press Enter to skip: "
 read -r -s ANTHROPIC_KEY
 if [ -n "$ANTHROPIC_KEY" ]; then
-  # Create secret if it doesn't exist
-  aws secretsmanager describe-secret \
-    --region "$REGION" --profile "$PROFILE" \
-    --secret-id "ai-village/anthropic-api-key" &>/dev/null || \
-  aws secretsmanager create-secret \
-    --region "$REGION" --profile "$PROFILE" \
-    --name "ai-village/anthropic-api-key" \
-    --description "Anthropic API key for AI Village LLM calls" \
-    --secret-string "{\"ANTHROPIC_API_KEY\":\"${ANTHROPIC_KEY}\"}"
   put_secret "ai-village/anthropic-api-key" "{\"ANTHROPIC_API_KEY\":\"${ANTHROPIC_KEY}\"}"
 else
-  echo "  Skipped (empty input)"
+  echo "  Skipped — narrator/recap features will be disabled until a key is set."
+  echo "  To set later: aws secretsmanager put-secret-value \\"
+  echo "    --secret-id ai-village/anthropic-api-key \\"
+  echo "    --secret-string '{\"ANTHROPIC_API_KEY\":\"sk-ant-...\"}'"
 fi
 
 # ---- 5. Summary ----
@@ -82,12 +83,12 @@ echo ""
 echo "[5/5] GitHub Actions secrets to set:"
 echo "  (Settings → Secrets and variables → Actions)"
 echo ""
-DEPLOY_ROLE=$(cd terraform && terraform output -raw app_irsa_role_arn 2>/dev/null || echo "REPLACE_WITH_IRSA_ARN")
+DEPLOY_ROLE=$(cd terraform && terraform output -raw github_deploy_role_arn 2>/dev/null || echo "REPLACE_WITH_DEPLOY_ROLE_ARN")
 CERT_ARN=$(cd terraform && terraform output -raw acm_certificate_arn 2>/dev/null || echo "")
-HOSTED_ZONE=$(grep "hosted_zone_id" terraform/terraform.tfvars 2>/dev/null | awk -F'"' '{print $2}' || echo "")
+ZONE_ID=$(cd terraform && terraform output -raw route53_zone_id 2>/dev/null || echo "")
 
 echo "  AWS_DEPLOY_ROLE_ARN = $DEPLOY_ROLE"
-[ -n "$CERT_ARN" ] && echo "  HTTPS_CERT_ARN      = $CERT_ARN"
-[ -n "$HOSTED_ZONE" ] && echo "  HOSTED_ZONE_ID      = $HOSTED_ZONE"
+[ -n "$CERT_ARN" ]  && echo "  HTTPS_CERT_ARN      = $CERT_ARN"
+[ -n "$ZONE_ID" ]   && echo "  HOSTED_ZONE_ID      = $ZONE_ID"
 echo ""
 echo "Done. Run 'git push origin main' to trigger the first deployment."

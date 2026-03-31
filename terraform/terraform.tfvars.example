@@ -22,9 +22,17 @@ node_desired_size  = 2
 redis_node_type = "cache.t3.micro"
 
 # ---- Domain & HTTPS ----
-# domain_name    = "aivillage.example.com"  # your domain
-# hosted_zone_id = "Z1234567890ABCDEF"      # Route53 Hosted Zone ID
-# alb_dns_name   = ""                       # filled after first deploy (kubectl get ingress)
+# Terraform manages the Route53 hosted zone (dns.tf).
+# Two options:
+#   A) Register domain in AWS Console (Route53 → Registered domains) FIRST,
+#      then: terraform import 'aws_route53_zone.app[0]' <ZONE_ID>
+#   B) Set domain_name → terraform apply → note route53_nameservers output
+#      → point your domain's NS records to those 4 nameservers at your registrar.
+#
+# domain_name  = "aivillage.example.com"   # your domain (Terraform creates the zone)
+# alb_dns_name = ""                        # filled after first k8s deploy:
+#                                          #   kubectl get ingress -n ai-village \
+#                                          #     -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}'
 
 # ---- EKS API access ----
 eks_public_access_cidrs = ["YOUR_VPN_OR_OFFICE_CIDR/32"]

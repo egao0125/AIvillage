@@ -148,6 +148,36 @@ resource "aws_secretsmanager_secret_version" "redis_url" {
 }
 
 # ---------------------------------------------------------------------------
+# Anthropic API key — OPTIONAL global fallback
+#
+# This key is used only for narrator commentary, storyline detection, and recap
+# generation (village-wide LLM calls). Each AI agent can carry its own BYOK
+# key set via the app UI; those per-agent keys take precedence.
+#
+# Leave the placeholder value if you are running in pure-BYOK mode (every agent
+# has its own key). Set the real value via setup-secrets.sh or:
+#   aws secretsmanager put-secret-value \
+#     --secret-id ai-village/anthropic-api-key \
+#     --secret-string '{"ANTHROPIC_API_KEY":"sk-ant-..."}'
+# ---------------------------------------------------------------------------
+resource "aws_secretsmanager_secret" "anthropic_api_key" {
+  name                    = "ai-village/anthropic-api-key"
+  description             = "Anthropic API key — global narrator/recap fallback. Leave empty for pure-BYOK mode."
+  recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.secrets_manager.arn
+  tags                    = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "anthropic_api_key" {
+  secret_id     = aws_secretsmanager_secret.anthropic_api_key.id
+  secret_string = jsonencode({ ANTHROPIC_API_KEY = "" })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Cognito app client secret — auto-populated by Terraform (no REPLACE_AFTER_APPLY).
 # Terraform reads aws_cognito_user_pool_client.this.client_secret directly.
 # No lifecycle.ignore_changes — Terraform owns this value.

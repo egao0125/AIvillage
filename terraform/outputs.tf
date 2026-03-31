@@ -106,7 +106,7 @@ output "kms_ecr_key_arn" {
 
 output "acm_certificate_arn" {
   description = "ACM certificate ARN — paste into k8s/05-ingress.yaml or set HTTPS_CERT_ARN in CI/CD secrets"
-  value       = var.domain_name != "" ? aws_acm_certificate.app.arn : "domain_name not set — skipped"
+  value       = var.domain_name != "" ? aws_acm_certificate.app[0].arn : "domain_name not set — skipped"
 }
 
 output "next_steps" {

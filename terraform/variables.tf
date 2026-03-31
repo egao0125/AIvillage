@@ -112,12 +112,6 @@ variable "domain_name" {
   default     = ""
 }
 
-variable "hosted_zone_id" {
-  description = "Route53 Hosted Zone ID for domain_name. Leave empty to skip DNS record creation."
-  type        = string
-  default     = ""
-}
-
 variable "alb_dns_name" {
   description = "ALB DNS name from kubectl get ingress (populated after first deploy, used for Route53 CNAME)."
   type        = string
