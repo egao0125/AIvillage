@@ -36,46 +36,33 @@ export function synthesizeEvents(
     if (post.revoked) continue;
 
     let type: EventType;
-    let headline: string;
+    let status: string | undefined;
 
     switch (post.type) {
-      case 'rule': {
+      case 'rule':
         type = 'rule';
-        const status = post.ruleStatus ?? 'proposed';
-        headline =
-          status === 'passed' ? 'Rule passed' :
-          status === 'rejected' ? 'Rule rejected' :
-          status === 'repealed' ? 'Rule repealed' :
-          `${post.authorName} proposed a rule`;
+        status = post.ruleStatus ?? 'proposed';
         break;
-      }
       case 'decree':
         type = 'decree';
-        headline = `${post.authorName} issued a decree`;
         break;
       case 'alliance':
         type = 'alliance';
-        headline = `${post.authorName} formed an alliance`;
         break;
       case 'announcement':
         type = 'announcement';
-        headline = `${post.authorName} made an announcement`;
         break;
       case 'bounty':
         type = 'bounty';
-        headline = `${post.authorName} posted a bounty`;
         break;
       case 'threat':
         type = 'threat';
-        headline = `${post.authorName} made a threat`;
         break;
       case 'trade':
         type = 'trade';
-        headline = `${post.authorName} posted a trade`;
         break;
       case 'news':
         type = 'announcement';
-        headline = `${post.authorName} shared news`;
         break;
       default:
         continue;
@@ -88,8 +75,9 @@ export function synthesizeEvents(
       type,
       icon: b.icon,
       color: b.color,
-      headline,
-      detail: post.content,
+      headline: post.content,
+      author: { name: post.authorName, id: post.authorId },
+      status,
       day: post.day,
       timestamp: post.timestamp,
       agentIds: [post.authorId, ...(post.targetIds ?? [])],
@@ -107,8 +95,8 @@ export function synthesizeEvents(
       type: 'artifact',
       icon: b.icon,
       color: b.color,
-      headline: `${art.creatorName} created ${art.type}: "${art.title}"`,
-      detail: art.content,
+      headline: art.content,
+      author: { name: art.creatorName, id: art.creatorId },
       day: art.day,
       timestamp: art.createdAt,
       agentIds: [art.creatorId],
@@ -126,8 +114,8 @@ export function synthesizeEvents(
       type: 'building',
       icon: b.icon,
       color: b.color,
-      headline: `${builderName} constructed ${bld.name} (${bld.type})`,
-      detail: bld.description,
+      headline: `Constructed ${bld.name} (${bld.type})${bld.description ? ': ' + bld.description : ''}`,
+      author: { name: builderName, id: bld.builtBy },
       day: Math.floor(bld.builtAt / 86400000),
       timestamp: bld.builtAt,
       agentIds: [bld.builtBy],
@@ -144,8 +132,8 @@ export function synthesizeEvents(
       type: 'technology',
       icon: b.icon,
       color: b.color,
-      headline: `${tech.inventorName} discovered ${tech.name}`,
-      detail: tech.description,
+      headline: `Discovered ${tech.name}${tech.description ? ': ' + tech.description : ''}`,
+      author: { name: tech.inventorName, id: tech.inventorId },
       day: tech.day,
       timestamp: tech.discoveredAt,
       agentIds: [tech.inventorId],
@@ -164,8 +152,7 @@ export function synthesizeEvents(
         type: 'election',
         icon: b.icon,
         color: b.color,
-        headline: `Election for ${el.position} has begun`,
-        detail: `Candidates: ${candidateNames.join(', ')}`,
+        headline: `Election for ${el.position} has begun. Candidates: ${candidateNames.join(', ')}`,
         day: el.startDay,
         timestamp: el.startDay * 86400000,
         agentIds: el.candidates,
@@ -222,8 +209,7 @@ export function synthesizeEvents(
       type: 'death',
       icon: b.icon,
       color: b.color,
-      headline: `${agent.config.name} has died`,
-      detail: agent.causeOfDeath,
+      headline: `${agent.config.name} has died${agent.causeOfDeath ? ': ' + agent.causeOfDeath : ''}`,
       day: 0, // no precise day available on the agent
       timestamp: 0,
       agentIds: [agent.id],
@@ -243,7 +229,7 @@ export function synthesizeEvents(
         icon: b.icon,
         color: b.color,
         headline: `${inst.name} was dissolved`,
-        detail: inst.description,
+        author: { name: founderName, id: inst.founderId },
         day: Math.floor(inst.createdAt / 86400000),
         timestamp: inst.createdAt + 1, // slightly after creation
         agentIds: [inst.founderId],
@@ -256,8 +242,8 @@ export function synthesizeEvents(
         type: 'institution',
         icon: b.icon,
         color: b.color,
-        headline: `${founderName} founded ${inst.name} (${inst.type})`,
-        detail: inst.description,
+        headline: `Founded ${inst.name} (${inst.type})${inst.description ? ': ' + inst.description : ''}`,
+        author: { name: founderName, id: inst.founderId },
         day: Math.floor(inst.createdAt / 86400000),
         timestamp: inst.createdAt,
         agentIds: [inst.founderId, ...inst.members.map(m => m.agentId)],

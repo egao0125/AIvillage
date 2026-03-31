@@ -7,8 +7,14 @@ import { COLORS, FONTS } from '../styles';
 
 const TRUNCATE_LENGTH = 140;
 
+const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }> = {
+  passed:   { bg: '#4ade8033', color: '#4ade80', label: 'PASSED' },
+  rejected: { bg: '#ef444433', color: '#ef4444', label: 'REJECTED' },
+  repealed: { bg: '#6b728033', color: '#9ca3af', label: 'REPEALED' },
+};
+
 // Event types that have structured data worth showing in the details expander
-const TYPES_WITH_DETAILS = new Set(['rule', 'election', 'institution']);
+const TYPES_WITH_STRUCTURED_DATA = new Set(['rule', 'election', 'institution']);
 
 interface EventCardProps {
   event: VillageEvent;
@@ -17,16 +23,15 @@ interface EventCardProps {
 
 export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
   const [showConversation, setShowConversation] = useState(false);
-  const [showDetails, setShowDetails] = useState(false);
-  const [contentExpanded, setContentExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
-  const hasDetail = !!event.detail;
-  const isLong = hasDetail && event.detail!.length > TRUNCATE_LENGTH;
-  const displayContent = hasDetail
-    ? (isLong && !contentExpanded ? event.detail!.slice(0, TRUNCATE_LENGTH) + '...' : event.detail)
-    : null;
+  const isLong = event.headline.length > TRUNCATE_LENGTH;
+  const displayText = isLong && !expanded
+    ? event.headline.slice(0, TRUNCATE_LENGTH) + '...'
+    : event.headline;
 
-  const hasStructuredDetails = TYPES_WITH_DETAILS.has(event.type) && !!event.sourceData;
+  const hasStructuredData = TYPES_WITH_STRUCTURED_DATA.has(event.type) && !!event.sourceData;
+  const statusStyle = event.status ? STATUS_STYLES[event.status] : null;
 
   return (
     <div
@@ -38,8 +43,8 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         border: `1px solid ${COLORS.border}`,
       }}
     >
-      {/* Header: icon + type badge + day */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+      {/* Header: icon + type badge + status flag + author + day */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
         <span style={{ fontSize: '14px' }}>{event.icon}</span>
         <span
           style={{
@@ -55,6 +60,26 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         >
           {event.type.replace('_', ' ')}
         </span>
+        {statusStyle && (
+          <span
+            style={{
+              fontFamily: FONTS.pixel,
+              fontSize: '7px',
+              padding: '2px 6px',
+              borderRadius: 3,
+              background: statusStyle.bg,
+              color: statusStyle.color,
+              fontWeight: 'bold',
+            }}
+          >
+            {statusStyle.label}
+          </span>
+        )}
+        {event.author && (
+          <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.text, fontWeight: 'bold' }}>
+            {event.author.name}
+          </span>
+        )}
         <span
           style={{
             fontFamily: FONTS.body,
@@ -68,100 +93,81 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         </span>
       </div>
 
-      {/* Headline */}
+      {/* Content — truncated with show more/less */}
       <div
         style={{
           fontFamily: FONTS.body,
           fontSize: '12px',
-          color: COLORS.text,
-          lineHeight: '1.5',
-          fontWeight: 'bold',
+          color: COLORS.textDim,
+          lineHeight: '1.6',
+          whiteSpace: 'pre-wrap',
         }}
       >
-        {event.headline}
+        {displayText}
+        {isLong && (
+          <button
+            onClick={() => setExpanded(prev => !prev)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: COLORS.accent,
+              fontFamily: FONTS.body,
+              fontSize: '11px',
+              cursor: 'pointer',
+              padding: '0 0 0 4px',
+            }}
+          >
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
       </div>
 
-      {/* Full content — with show more/less */}
-      {displayContent && (
-        <div
+      {/* Details toggle — for short cards, or always visible when long card is expanded */}
+      {hasStructuredData && (
+        <>
+          {!isLong && (
+            <button
+              onClick={() => setExpanded(prev => !prev)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: COLORS.accent,
+                fontFamily: FONTS.body,
+                fontSize: '11px',
+                cursor: 'pointer',
+                padding: 0,
+                marginTop: 8,
+              }}
+            >
+              {expanded ? '▾ Hide details' : '▸ Details'}
+            </button>
+          )}
+          {expanded && <ConsequencesExpander event={event} />}
+        </>
+      )}
+
+      {/* Conversation expander */}
+      {event.sourceConversationId && (
+        <button
+          onClick={() => setShowConversation(prev => !prev)}
           style={{
+            background: 'none',
+            border: 'none',
+            color: COLORS.accent,
             fontFamily: FONTS.body,
-            fontSize: '12px',
-            color: COLORS.textDim,
-            lineHeight: '1.6',
-            marginTop: 4,
-            whiteSpace: 'pre-wrap',
+            fontSize: '11px',
+            cursor: 'pointer',
+            padding: 0,
+            marginTop: 8,
+            display: 'block',
           }}
         >
-          {displayContent}
-          {isLong && (
-            <button
-              onClick={() => setContentExpanded(prev => !prev)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: COLORS.accent,
-                fontFamily: FONTS.body,
-                fontSize: '11px',
-                cursor: 'pointer',
-                padding: '2px 0 0',
-                marginLeft: 4,
-              }}
-            >
-              {contentExpanded ? 'Show less' : 'Show more'}
-            </button>
-          )}
-        </div>
+          {showConversation ? '▾ Hide conversation' : '▸ View conversation'}
+        </button>
       )}
-
-      {/* Expandable links — only show if there's something to expand */}
-      {(event.sourceConversationId || hasStructuredDetails) && (
-        <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-          {event.sourceConversationId && (
-            <button
-              onClick={() => setShowConversation(prev => !prev)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: COLORS.accent,
-                fontFamily: FONTS.body,
-                fontSize: '11px',
-                cursor: 'pointer',
-                padding: 0,
-              }}
-            >
-              {showConversation ? '▾ Hide conversation' : '▸ View conversation'}
-            </button>
-          )}
-          {hasStructuredDetails && (
-            <button
-              onClick={() => setShowDetails(prev => !prev)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: COLORS.accent,
-                fontFamily: FONTS.body,
-                fontSize: '11px',
-                cursor: 'pointer',
-                padding: 0,
-              }}
-            >
-              {showDetails ? '▾ Hide details' : '▸ Details'}
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Layer 2: Conversation */}
       {showConversation && event.sourceConversationId && (
-        <ConversationExpander
-          conversationId={event.sourceConversationId}
-          chatLog={chatLog}
-        />
+        <ConversationExpander conversationId={event.sourceConversationId} chatLog={chatLog} />
       )}
-
-      {/* Layer 3: Structured details */}
-      {showDetails && hasStructuredDetails && <ConsequencesExpander event={event} />}
     </div>
   );
 };
