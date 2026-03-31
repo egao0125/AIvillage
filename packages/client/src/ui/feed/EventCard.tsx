@@ -40,7 +40,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         cursor: isLong ? 'pointer' : undefined,
       }}
     >
-      {/* Header: icon + type badge + status flag + "by author" + day */}
+      {/* Header: icon + type badge + "by author" ... status flag (top right) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
         <span style={{ fontSize: '14px' }}>{event.icon}</span>
         <span
@@ -57,6 +57,11 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         >
           {event.type.replace('_', ' ')}
         </span>
+        {event.author && (
+          <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.textDim }}>
+            by <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{event.author.name}</span>
+          </span>
+        )}
         {statusStyle && (
           <span
             style={{
@@ -67,27 +72,12 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
               background: statusStyle.bg,
               color: statusStyle.color,
               fontWeight: 'bold',
+              marginLeft: 'auto',
             }}
           >
             {statusStyle.label}
           </span>
         )}
-        {event.author && (
-          <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.textDim }}>
-            by <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{event.author.name}</span>
-          </span>
-        )}
-        <span
-          style={{
-            fontFamily: FONTS.body,
-            fontSize: '11px',
-            color: COLORS.textDim,
-            marginLeft: 'auto',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Day {event.day}
-        </span>
       </div>
 
       {/* Content — truncated, click card to expand */}
@@ -101,6 +91,13 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         }}
       >
         {displayText}
+      </div>
+
+      {/* Footer: day count bottom-left */}
+      <div style={{ marginTop: 8 }}>
+        <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: COLORS.textDim, letterSpacing: 0.5 }}>
+          Day {event.day}
+        </span>
       </div>
 
       {/* Conversation expander */}
