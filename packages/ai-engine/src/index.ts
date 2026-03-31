@@ -13,6 +13,7 @@ import { ActionCache } from './action-cache.js';
 // --- World Rules + Action Resolver (deterministic physics) ---
 export * from './world-rules.js';
 export * from './action-resolver.js';
+import { buildGameRules } from './game-rules.js';
 
 // --- Memory Stream ---
 
@@ -33,85 +34,9 @@ export interface LLMProvider {
   model: string;
 }
 
-// --- Frozen preamble (physics + actions + behavior — never changes) ---
+// --- Game rules — auto-generated from world-rules.ts (single source of truth) ---
 
-const FROZEN_REALITY = `REALITY — VILLAGE SURVIVAL RULEBOOK
-
-=== DEATH ===
-Hunger and health are scored 0–100. Hunger rises ~1/hour while awake (+0.3/hour while sleeping outdoors; property owners sleep at no hunger cost). At hunger ≥70, health drains slowly. At hunger ≥85, health drains faster. At health 0, you die permanently — you lose everything: inventory, alliances, property, relationships. There is no resurrection. The dead are gone.
-
-=== VITALS ===
-- Hunger: 0 (full) → 100 (starving). Rises over time. Eating food reduces it by the food's nutrition value.
-- Energy: 0 (exhausted) → 100 (fresh). Actions cost energy. rest recovers +15. sleep recovers +40. Energy ≤5 drains health.
-- Health: 0 (dead) → 100 (healthy). Passive regen +2/hour when hunger <70 and energy >20. Medicine and poultices heal directly.
-
-=== SEASONS (30 days each: spring → summer → autumn → winter) ===
-- Spring: farms start producing, herbs plentiful, mild weather.
-- Summer: peak farm output (+50% crops), hot, violent storms possible.
-- Autumn: mushrooms peak, last chance to stockpile, cooling down.
-- Winter: Without stored food, you starve.
-
-=== FOOD & NUTRITION (hunger reduction when eaten) ===
-stew: -30 (best meal). fish: -25. bread: -20. wheat: -15. vegetables: -15. mushrooms: -12. dried fish: -10 (lasts long). pickled veg: -7 (lasts long). herbs: -5. herb tea: -3 (but +15 energy).
-
-=== EVERY ACTION AND ITS EXACT EFFECT ===
-
---- Gathering (must be at the correct location) ---
-gather_RESOURCE — Harvest at your location. Items appear in YOUR inventory.
-  Farm: wheat (farming), vegetables (farming lv1+). Lake: fish (fishing), clay, stone (foraging). Forest: wood (woodwork), mushrooms (foraging). Garden: herbs, flowers (foraging).
-  Success: base chance + 5%/skill level (max 95%). Costs energy. Season modifiers apply. Daily stock limits per source. Tool bonus (hoe/fishing rod/axe) doubles yield.
-
---- Eating & Healing ---
-eat_ITEM — Consume 1 food from inventory. Hunger decreases by nutrition value. Item is gone.
-
---- Crafting (must be at correct location with ingredients) ---
-craft_RECIPE — Transform raw materials. Ingredients consumed.
-  Bakery: bread (2 wheat), bricks (3 clay). Café: stew (2 veg + 1 fish, cooking lv2), dried fish (2 fish), pickled veg (3 veg), herb tea (1 herb). Workshop: planks (2 wood, needs axe), rope (2 herbs), tools. Hospital: medicine (3 herbs, needs mortar). Garden: poultice (1 herb).
-
---- Social (replace NAME with first name in lowercase) ---
-give_NAME — Transfer items from your inventory to them. Rep +3.
-trade_NAME — Propose item trade. They accept or reject. Rep +2 each on success.
-steal_NAME — 40% success. Success: random item transfers + public news + rep -10. Failure: caught.
-fight_NAME — Both take damage (5-14 dealt, 3-14 taken). Winner loots up to 2 items. Rep -8. Public news.
-talk_NAME — Start a conversation. No cost.
-confront_NAME — Public confrontation. Forces response.
-threaten_NAME — Public threat. Rep -3.
-ally_NAME — Create or invite to group. Trust +20 both ways.
-betray_NAME — Leave shared group. Trust -30 with all members. Public news.
-
---- Group/Leader Powers ---
-kick_NAME — (Leaders only) Expel member. Rep -5 for kicked.
-propose_group_rule — (Leaders only) Set group rule directly.
-
---- Community ---
-post_board — Write public message on village board.
-propose_rule — Propose village rule. All vote at end of day. Majority passes. Max 1/day.
-call_meeting — Summon nearby agents (3+ needed) to discuss.
-claim_AREA — Propose claiming unclaimed area/building. Goes to vote.
-
---- Movement ---
-go_LOCATION — Walk to a known location. Must be there to gather/craft.
-
---- Rest ---
-rest — Recover +15 energy. Hunger +1. Health +1.
-
-=== REPUTATION ===
-Public score. Adjusted by: generosity (+3), fair trade (+2), threatening (-3), theft (-10), violence (-8), rule violation (-10).
-
-=== SKILLS ===
-farming, fishing, foraging, cooking, crafting, building, medicine, woodwork. Level 0–10. Higher = better success (+5%/level) and bonus yield.
-
-=== PROPERTY ===
-Claim via propose_rule or claim_AREA. Village votes. Owner sleeps with no overnight hunger.
-
-=== GROUPS ===
-ally_NAME creates or invites. Leader can kick and set rules. betray_NAME leaves. Dissolves at ≤1 member.
-
-=== VILLAGE RULES ===
-propose_rule (1/day). All vote. Majority passes. Violating costs rep -10. New rules can repeal old.
-
-=== KEY PRINCIPLES ===
-Every action listed above is a real mechanic with real consequences. Stealing, fighting, threatening, and betrayal are valid choices for the right character. Your character is not obligated to be good — they are obligated to be REAL.`;
+const GAME_RULES = buildGameRules();
 
 // --- Structured Decision Types ---
 
@@ -182,7 +107,7 @@ export class AgentCognition {
       ? Array.from(this.knownPlaces.values()).join('\n')
       : 'You don\'t know this area yet. Look around, explore, and talk to people to learn what\'s here.';
 
-    return `${FROZEN_REALITY}
+    return `${GAME_RULES}
 
 PLACES I KNOW:
 ${placesLines}`;
