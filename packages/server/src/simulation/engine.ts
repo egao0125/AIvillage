@@ -65,6 +65,10 @@ export class SimulationEngine {
   private readonly leaderElection: LeaderElection = new LeaderElection();
   // Optimistic lock version for world_state row — incremented on each successful save.
   private worldStateVersion: number = 0;
+  // Guard: true while loadFromRds() is in flight after a VersionConflictError.
+  // Prevents a concurrent save_requested from writing with a stale expectedVersion
+  // before the reload completes and updates worldStateVersion.
+  private isReloadingState: boolean = false;
 
   constructor(private io: Server) {
     this.world = new World();
@@ -137,22 +141,30 @@ export class SimulationEngine {
     this.leaderElection.onLeadershipLost = () => {
       console.error('[Engine] Leadership lost — pausing simulation tick');
       this.pause();
+      this.isReloadingState = true; // prevent stale saves while state is being refreshed
       // Poll until we re-acquire; another Pod may already be the leader by then.
       this.leaderElection.startRetrying(() => {
         console.log('[Engine] Leadership re-acquired — restarting simulation tick');
-        this.loadFromRds().then(() => this.start()).catch((err: unknown) => {
-          console.error('[Engine] Re-acquire reload failed:', (err as Error).message);
-        });
+        this.loadFromRds()
+          .then(() => { this.isReloadingState = false; this.start(); })
+          .catch((err: unknown) => {
+            console.error('[Engine] Re-acquire reload failed:', (err as Error).message);
+            this.isReloadingState = false;
+          });
       });
     };
 
     // Non-leader follower: keep polling so it can promote if the leader dies.
     if (!leaderAcquired) {
+      this.isReloadingState = true; // follower starts in reload-pending state
       this.leaderElection.startRetrying(() => {
         console.log('[Engine] Follower promoted to leader — starting simulation tick');
-        this.loadFromRds().then(() => this.start()).catch((err: unknown) => {
-          console.error('[Engine] Follower promotion reload failed:', (err as Error).message);
-        });
+        this.loadFromRds()
+          .then(() => { this.isReloadingState = false; this.start(); })
+          .catch((err: unknown) => {
+            console.error('[Engine] Follower promotion reload failed:', (err as Error).message);
+            this.isReloadingState = false;
+          });
       });
     }
 
@@ -348,6 +360,8 @@ export class SimulationEngine {
     this.bus.on('save_requested', () => {
       if (!this.persistence) return;
       if (!this.leaderElection.isLeader) return; // followers must not write world state
+      // Skip if a reload is in flight — worldStateVersion is stale until it completes.
+      if (this.isReloadingState) return;
 
       const expectedVersion = this.worldStateVersion;
       void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, expectedVersion)
@@ -358,13 +372,17 @@ export class SimulationEngine {
         })
         .catch((err: unknown) => {
           if ((err as Error).name === 'VersionConflictError') {
-            // Another Pod wrote a newer version — reload and surrender leadership.
-            // This should not happen in practice (only one leader at a time), but
-            // guard against split-brain edge cases during leader transitions.
+            // Another Pod wrote a newer version — reload to get fresh state + current version.
+            // Guard prevents any further saves until the reload is complete.
             console.error('[Persistence] Version conflict on save — reloading world state');
-            void this.loadFromRds().catch((e: unknown) => {
-              console.error('[Persistence] Reload after version conflict failed:', (e as Error).message);
-            });
+            this.isReloadingState = true;
+            void this.loadFromRds()
+              .catch((e: unknown) => {
+                console.error('[Persistence] Reload after version conflict failed:', (e as Error).message);
+              })
+              .finally(() => {
+                this.isReloadingState = false;
+              });
           } else {
             console.error('[Persistence] Periodic save failed:', (err as Error).message);
           }

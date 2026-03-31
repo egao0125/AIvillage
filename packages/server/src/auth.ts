@@ -146,7 +146,7 @@ export async function verifyToken(token: string): Promise<string | null> {
   try {
     const { payload } = await jwtVerify(token, JWKS, {
       algorithms: ['RS256'],
-      clockTolerance: '30s',
+      clockTolerance: '5s',
       issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
     });
     if (payload['token_use'] !== 'access') return null;
@@ -172,7 +172,7 @@ export function optionalAuth(_config?: unknown) {
     try {
       const { payload } = await jwtVerify(token, JWKS, {
         algorithms: ['RS256'],
-        clockTolerance: '30s',
+        clockTolerance: '5s',
         issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
       });
       // Cognito access tokens must carry token_use=access and client_id matching our app
@@ -400,6 +400,17 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         return;
       }
 
+      // Cognito may return a new refresh token (e.g. when token rotation is enabled
+      // or on the first use after a long idle period). Rotate the cookie if present.
+      const newRefreshToken = authResult.AuthenticationResult?.RefreshToken;
+      if (newRefreshToken) {
+        res.cookie(
+          REFRESH_COOKIE,
+          newRefreshToken,
+          refreshCookieOptions(isProduction ? 'production' : 'development'),
+        );
+      }
+
       res.json({ token });
     } catch (err) {
       console.warn('[Auth] refresh failed:', (err as Error).message);
@@ -422,7 +433,7 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
       try {
         const { payload } = await jwtVerify(token, JWKS, {
           algorithms: ['RS256'],
-        clockTolerance: '30s',
+        clockTolerance: '5s',
           issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
         });
         // Validate token_use=access and client_id before trusting the token for a sign-out action
@@ -467,7 +478,7 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
     try {
       const { payload } = await jwtVerify(token, JWKS, {
         algorithms: ['RS256'],
-        clockTolerance: '30s',
+        clockTolerance: '5s',
         issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
       });
       // Cognito access tokens must carry token_use=access and client_id matching our app
