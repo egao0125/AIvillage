@@ -113,9 +113,15 @@ variable "domain_name" {
 }
 
 variable "alb_dns_name" {
-  description = "ALB DNS name from kubectl get ingress (populated after first deploy, used for Route53 CNAME)."
+  description = "ALB DNS name from kubectl get ingress (populated after first deploy, used for Route53 records)."
   type        = string
   default     = ""
+}
+
+variable "alb_hosted_zone_id" {
+  description = "ALB canonical hosted zone ID (from aws elbv2 describe-load-balancers .CanonicalHostedZoneId). Used for Route53 ALIAS record at apex domain."
+  type        = string
+  default     = "Z14GRHDCWA56QT"  # ap-northeast-1 ALB canonical zone ID
 }
 
 variable "rds_instance_class" {

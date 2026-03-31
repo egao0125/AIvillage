@@ -56,15 +56,20 @@ resource "aws_acm_certificate_validation" "app" {
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
 
-# Route 53 CNAME records pointing to the ALB
-# Populated after ingress is created (second terraform apply or CI/CD).
+# Route 53 records pointing to the ALB.
+# Apex domain (e.g. ai-village.net): CNAME not allowed at zone apex — use Route53 ALIAS (A record).
+# www subdomain: CNAME is fine.
 resource "aws_route53_record" "app" {
   count   = var.domain_name != "" && var.alb_dns_name != "" ? 1 : 0
   zone_id = aws_route53_zone.app[0].zone_id
   name    = var.domain_name
-  type    = "CNAME"
-  ttl     = 60
-  records = [var.alb_dns_name]
+  type    = "A"
+
+  alias {
+    name                   = var.alb_dns_name
+    zone_id                = var.alb_hosted_zone_id
+    evaluate_target_health = true
+  }
 }
 
 resource "aws_route53_record" "app_www" {
