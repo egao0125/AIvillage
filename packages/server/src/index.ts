@@ -344,15 +344,17 @@ io.on('connection', (socket) => {
     if (!msg) return;
 
     // Rate limit: 1 per 10 seconds per socket.
-    // Uses Redis when available (multi-Pod: socket.id is globally unique via
-    // the Redis Streams adapter). Falls back to in-memory for single-Pod dev mode.
+    // Uses Redis SET NX EX (atomic) when available — INCR+EXPIRE was non-atomic and
+    // could leave keys without TTL if EXPIRE failed after INCR.
+    // Falls back to in-memory for single-Pod dev mode.
     const rlRedis = getRedis();
     if (rlRedis) {
       try {
         const rlKey = `rl:spectator:comment:${socket.id}`;
-        const count = await rlRedis.incr(rlKey);
-        if (count === 1) await rlRedis.expire(rlKey, 10);
-        if (count > 1) return; // rate limited
+        // SET key 1 EX 10 NX — atomically sets with TTL only if key absent.
+        // Returns 'OK' on first call (allowed), null if key exists (rate limited).
+        const allowed = await rlRedis.set(rlKey, '1', 'EX', 10, 'NX');
+        if (!allowed) return; // key exists → rate limited
       } catch (rlErr) {
         console.warn('[Spectator RateLimit] Redis error, using in-memory fallback:', (rlErr as Error).message);
         // fall through to in-memory check below
@@ -379,6 +381,10 @@ io.on('connection', (socket) => {
   // --- Dev tools (token-gated) ---
   socket.on('dev:pause', (token: unknown) => {
     if (!isDevAuthorized(token)) return;
+    if (!engine.isLeader) {
+      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot pause' });
+      return;
+    }
     engine.pause();
     io.emit('dev:status', { paused: !engine.isRunning });
   });

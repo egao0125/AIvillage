@@ -570,6 +570,12 @@ Relationships: ${mentalModels}`;
     rateLimit(3, 60_000),
     requireAdmin,
     async (_req, res) => {
+      // Only the leader Pod holds authoritative world state; follower-guard middleware
+      // covers /api/agents but not /api/admin, so we guard explicitly here.
+      if (!engine.isLeader) {
+        res.status(503).json({ error: 'Leader election in progress — please retry', retryAfterMs: 5_000 });
+        return;
+      }
       const resurrected = await engine.resurrectAllAgents();
       res.json({ success: true, resurrected });
     },
