@@ -40,14 +40,6 @@ export const ConsequencesExpander: React.FC<ConsequencesExpanderProps> = ({ even
     if (data.treasury > 0) content.push(<Row key="treasury" label="Treasury" value={String(data.treasury)} />);
   }
 
-  if (content.length === 0 && event.detail) {
-    content.push(
-      <div key="detail" style={{ color: COLORS.textDim, whiteSpace: 'pre-wrap' }}>
-        {event.detail}
-      </div>
-    );
-  }
-
   if (content.length === 0) return null;
 
   return (
