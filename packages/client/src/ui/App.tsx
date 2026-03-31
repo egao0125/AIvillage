@@ -3,10 +3,11 @@ import Phaser from 'phaser';
 import { createGameConfig } from '../game/config';
 import { Sidebar, SIDEBAR_WIDTH } from './components/Sidebar';
 import { COLORS, FONTS } from './styles';
-import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
+import { TopNav } from './views/TopNav';
 import { SpectatorChat } from './components/SpectatorChat';
 import { FeedButton } from './components/FeedButton';
+import { EventFeedButton } from './feed/EventFeedButton';
 import { NarrativeBar } from './components/NarrativeBar';
 import { CharacterPage } from './components/CharacterPage';
 import { RecapOverlay } from './components/RecapOverlay';
@@ -59,9 +60,7 @@ export const App: React.FC = () => {
         ref={gameContainerRef}
         style={{ width: '100%', height: '100%' }}
       />
-      <div style={{ position: 'absolute', top: 0, left: 0, zIndex: 10 }}>
-        <TimeDisplay />
-      </div>
+      <TopNav />
       {/* Sidebar toggle button — outside sidebar so it's always visible */}
       <button
         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -114,6 +113,7 @@ export const App: React.FC = () => {
       <SpectatorChat onOpenChange={setSpectatorChatOpen} />
       {/* Feed — floating button next to chat */}
       <FeedButton chatOpen={spectatorChatOpen} />
+      <EventFeedButton chatOpen={spectatorChatOpen} />
       {/* Back to setup button */}
       <button
         onClick={() => setShowSetup(true)}

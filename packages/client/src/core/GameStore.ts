@@ -52,6 +52,7 @@ interface GameState {
   villageMemory: VillageMemoryEntry[];
   actionLog: Map<string, ActionLogEntry[]>;
   socialViewOpen: boolean;
+  activeMode: 'watch' | 'inspect' | 'analyze';
 }
 
 export interface ChatEntry {
@@ -97,6 +98,7 @@ class GameStore {
     villageMemory: [],
     actionLog: new Map(),
     socialViewOpen: false,
+    activeMode: 'watch',
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -573,6 +575,13 @@ class GameStore {
 
   closeSocialView(): void {
     this.state = { ...this.state, socialViewOpen: false };
+    this.notify();
+  }
+
+  // --- View Mode ---
+
+  setMode(mode: 'watch' | 'inspect' | 'analyze'): void {
+    this.state = { ...this.state, activeMode: mode };
     this.notify();
   }
 
