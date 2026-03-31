@@ -348,6 +348,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
     spectatorLastComment.delete(socket.id);
+    recapLastRequest.delete(socket.id);
     engine.viewportManager.removeClient(socket.id);
     const existing = watchIntervals.get(socket.id);
     if (existing) {

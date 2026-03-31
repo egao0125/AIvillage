@@ -51,6 +51,53 @@ resource "aws_iam_role" "rds_monitoring" {
   tags                = var.tags
 }
 
+# ---------------------------------------------------------------------------
+# RDS Parameter Group — hardened PostgreSQL 16 settings.
+#
+# Enables connection/disconnection logging and statement duration logging
+# for security audit trail and anomaly detection.
+# (CIS PostgreSQL Benchmark / NIST SP 800-53 AU-2, AU-12, CA-7)
+# ---------------------------------------------------------------------------
+resource "aws_db_parameter_group" "this" {
+  name        = "${var.cluster_name}-postgres16"
+  family      = "postgres16"
+  description = "Hardened PostgreSQL 16 parameters for AI Village"
+
+  # Log all connections (CIS PostgreSQL 3.1)
+  parameter {
+    name  = "log_connections"
+    value = "1"
+  }
+
+  # Log all disconnections (CIS PostgreSQL 3.2)
+  parameter {
+    name  = "log_disconnections"
+    value = "1"
+  }
+
+  # Log statements taking longer than 1000ms (detect slow queries / DoS patterns)
+  parameter {
+    name  = "log_min_duration_statement"
+    value = "1000"
+  }
+
+  # Log lock waits exceeding deadlock_timeout (detect contention)
+  parameter {
+    name  = "log_lock_waits"
+    value = "1"
+  }
+
+  # Enforce SSL — reject non-SSL client connections
+  # (NIST SP 800-53 SC-8: Transmission Confidentiality and Integrity)
+  parameter {
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
+  }
+
+  tags = var.tags
+}
+
 resource "aws_db_instance" "this" {
   identifier        = "${var.cluster_name}-postgres"
   engine            = "postgres"
@@ -67,6 +114,7 @@ resource "aws_db_instance" "this" {
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.rds.id]
+  parameter_group_name   = aws_db_parameter_group.this.name
 
   multi_az            = true
   storage_encrypted   = true

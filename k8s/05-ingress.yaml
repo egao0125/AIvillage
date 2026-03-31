@@ -27,6 +27,11 @@ metadata:
     # alb.ingress.kubernetes.io/ssl-redirect: "443"
     # alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERTIFICATE_ARN
 
+    # WAFv2 Web ACL — protects against OWASP Top 10, bad IPs, Log4Shell, SSRF.
+    # Set the ARN from: terraform output waf_web_acl_arn
+    # (CIS AWS Foundations Benchmark 6.7 / NIST SP 800-53 SC-5, SI-3)
+    alb.ingress.kubernetes.io/wafv2-web-acl-arn: REPLACE_WITH_WAF_WEB_ACL_ARN
+
     # Increase idle timeout to 120 s for long-lived Socket.IO WebSocket connections.
     # ALB default is 60 s; connections are silently dropped without this.
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120

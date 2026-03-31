@@ -13,6 +13,10 @@ interface MemoryStore {
 }
 
 export class InMemoryStore implements MemoryStore {
+  // Hard cap per agent: prevents OOM in long-running simulations.
+  // Evicts lowest-importance oldest memories when exceeded.
+  private static readonly MAX_MEMORIES_PER_AGENT = 5_000;
+
   private memories: Map<string, Memory[]> = new Map();
   private embedders: Map<string, TFIDFEmbedder> = new Map();
 
@@ -33,7 +37,19 @@ export class InMemoryStore implements MemoryStore {
   async add(memory: Memory): Promise<void> {
     // Clamp importance to [1,10] to prevent NaN/-Inf in scoring formula (line ~71)
     memory.importance = Math.max(1, Math.min(10, Number(memory.importance) || 5));
-    this.getAgentMemories(memory.agentId).push(memory);
+    const agentMems = this.getAgentMemories(memory.agentId);
+    agentMems.push(memory);
+
+    // Evict excess memories when the per-agent cap is exceeded.
+    // Removes the lowest-importance oldest entries first to retain the most
+    // significant memories (CWE-400: unbounded memory growth prevention).
+    if (agentMems.length > InMemoryStore.MAX_MEMORIES_PER_AGENT) {
+      agentMems.sort((a, b) => {
+        const imp = a.importance - b.importance;
+        return imp !== 0 ? imp : a.timestamp - b.timestamp;
+      });
+      agentMems.splice(0, agentMems.length - InMemoryStore.MAX_MEMORIES_PER_AGENT);
+    }
 
     // Build embedding
     const embedder = this.getEmbedder(memory.agentId);
