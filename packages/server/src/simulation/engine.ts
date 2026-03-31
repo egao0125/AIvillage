@@ -1,8 +1,9 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
+import type { MapConfig } from '@ai-village/shared';
 import { getAreaEntrance } from '../map/village.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
 import { World } from './world.js';
@@ -25,6 +26,7 @@ export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
 
   private world: World;
+  private mapConfig: MapConfig = getMapConfig('village');
   readonly bus: EventBus = new EventBus();
   private controllers: Map<string, AgentController> = new Map();
   private conversationManager!: ConversationManager;
@@ -62,6 +64,25 @@ export class SimulationEngine {
     } else {
       console.log('[Engine] Supabase persistence disabled (missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY)');
     }
+  }
+
+  private cachedGameRules: string | null = null;
+
+  setMapConfig(mapId: string): void {
+    this.mapConfig = getMapConfig(mapId);
+    this.cachedGameRules = null; // invalidate cache
+    console.log(`[Engine] Map set to: ${this.mapConfig.name} (${this.mapConfig.id})`);
+  }
+
+  private getGameRules(): string {
+    if (!this.cachedGameRules) {
+      this.cachedGameRules = this.mapConfig.buildGameRules();
+    }
+    return this.cachedGameRules;
+  }
+
+  getMapConfig(): MapConfig {
+    return this.mapConfig;
   }
 
   async initialize(): Promise<void> {
@@ -358,7 +379,7 @@ export class SimulationEngine {
         const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = (ctrlDataForWorldView as any)?.worldViewParts as WorldViewParts | undefined;
-        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts);
+        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts, this.getGameRules());
         // Reset MY EXPERIENCE to prevent stale worldView from previous simulation runs
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
         const freshParts = buildStartingWorldViewParts(spawnArea as any);
@@ -381,6 +402,7 @@ export class SimulationEngine {
           sleepHour,
           homeArea,
           this.createActionExecutor(),
+          this.mapConfig,
         );
         controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
         controller.bus = this.bus;
@@ -554,8 +576,8 @@ export class SimulationEngine {
     const id = crypto.randomUUID();
 
     // Pick a random spawn position from public areas
-    const spawnArea = SimulationEngine.SPAWN_AREAS[
-      Math.floor(Math.random() * SimulationEngine.SPAWN_AREAS.length)
+    const spawnArea = this.mapConfig.spawnAreas[
+      Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
     ];
     const spawnPos = getAreaEntrance(spawnArea);
 
@@ -608,7 +630,7 @@ export class SimulationEngine {
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRules());
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -626,6 +648,7 @@ export class SimulationEngine {
       sleepHour,
       'plaza',
       this.createActionExecutor(),
+      this.mapConfig,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
@@ -782,7 +805,7 @@ export class SimulationEngine {
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
     // Preserve worldViewParts from old cognition if available
     const oldCognition = this.cognitions.get(id);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRules());
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -796,6 +819,7 @@ export class SimulationEngine {
       23,
       'plaza',
       this.createActionExecutor(),
+      this.mapConfig,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
@@ -891,11 +915,11 @@ export class SimulationEngine {
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
-    const spawnArea = SimulationEngine.SPAWN_AREAS[
-      Math.floor(Math.random() * SimulationEngine.SPAWN_AREAS.length)
+    const spawnArea = this.mapConfig.spawnAreas[
+      Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
     ];
     const startingParts = buildStartingWorldViewParts(spawnArea);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRules());
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -909,6 +933,7 @@ export class SimulationEngine {
       23,
       'plaza',
       this.createActionExecutor(),
+      this.mapConfig,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
@@ -2165,7 +2190,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       ? new SupabaseMemoryStore(this.persistence.client)
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts);
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRules());
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(agentId, cognition);
 
@@ -2270,8 +2295,8 @@ Answer with ONLY one word: "support" or "oppose".`,
 
     for (const agent of this.world.agents.values()) {
       // Reset agent state
-      const spawnArea = SimulationEngine.SPAWN_AREAS[
-        Math.floor(Math.random() * SimulationEngine.SPAWN_AREAS.length)
+      const spawnArea = this.mapConfig.spawnAreas[
+        Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
       ];
       const spawnPos = getAreaEntrance(spawnArea);
       agent.position = { ...spawnPos };
@@ -2297,7 +2322,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
-      const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts);
+      const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts, this.getGameRules());
       this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
@@ -2325,7 +2350,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       // Create fresh controller
       const controller = new AgentController(
         agent, cognition, this.world, this.broadcaster, 7, 23, 'plaza',
-        this.createActionExecutor(),
+        this.createActionExecutor(), this.mapConfig,
       );
       controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
       controller.bus = this.bus;

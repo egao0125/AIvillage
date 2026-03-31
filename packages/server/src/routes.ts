@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import type { SimulationEngine } from './simulation/engine.js';
 import { requireAuth } from './auth.js';
+import { MAP_REGISTRY } from '@ai-village/ai-engine';
 
 // =============================================================================
 // Security: Rate Limiting (in-memory, per-IP)
@@ -466,6 +467,31 @@ Relationships: ${mentalModels}`;
       res.json({ success: true, resurrected });
     },
   );
+
+  // =============================================================================
+  // Map Selection
+  // =============================================================================
+
+  router.get('/api/config/maps', (_req, res) => {
+    const maps = Object.values(MAP_REGISTRY).map(m => ({
+      id: m.id,
+      name: m.name,
+      description: m.description,
+      systems: m.systems,
+      winCondition: m.winCondition,
+    }));
+    res.json({ maps });
+  });
+
+  router.post('/api/config/map', (req, res) => {
+    const { mapId } = req.body;
+    if (!mapId || !MAP_REGISTRY[mapId]) {
+      res.status(400).json({ error: 'Unknown map' });
+      return;
+    }
+    engine.setMapConfig(mapId);
+    res.json({ ok: true, mapId });
+  });
 
   return router;
 }

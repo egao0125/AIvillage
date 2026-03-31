@@ -5,6 +5,7 @@ import { Sidebar, SIDEBAR_WIDTH } from './components/Sidebar';
 import { COLORS, FONTS } from './styles';
 import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
+import { MapSelectPage } from './components/MapSelectPage';
 import { SpectatorChat } from './components/SpectatorChat';
 import { FeedButton } from './components/FeedButton';
 import { NarrativeBar } from './components/NarrativeBar';
@@ -19,12 +20,26 @@ import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../c
 const DEV_TOOLS_ENABLED = true;
 
 export const App: React.FC = () => {
+  const [selectedMap, setSelectedMap] = useState<string | null>(null);
   const [entered, setEntered] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [spectatorChatOpen, setSpectatorChatOpen] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
+
+  const handleMapSelect = async (mapId: string) => {
+    try {
+      await fetch('/api/config/map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId }),
+      });
+    } catch (e) {
+      console.warn('[MapSelect] Failed to set map config:', e);
+    }
+    setSelectedMap(mapId);
+  };
 
   const handleEnter = () => {
     connectSocket();
@@ -46,6 +61,10 @@ export const App: React.FC = () => {
   const characterPageAgentId = useCharacterPageAgentId();
   const activeRecap = useActiveRecap();
   const socialViewOpen = useSocialViewOpen();
+
+  if (!selectedMap) {
+    return <MapSelectPage onSelect={handleMapSelect} />;
+  }
 
   if (!entered) {
     return <SetupPage onEnter={handleEnter} />;

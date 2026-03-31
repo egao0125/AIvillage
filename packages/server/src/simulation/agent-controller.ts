@@ -1,4 +1,4 @@
-import type { Agent, BoardPost, DriveState, GameTime, Institution, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Institution, MapConfig, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
@@ -85,6 +85,8 @@ export class AgentController {
   readonly sleepHour: number;
   readonly homeArea: string;
 
+  private mapConfig: MapConfig;
+
   constructor(
     agent: Agent,
     cognition: AgentCognition,
@@ -94,12 +96,20 @@ export class AgentController {
     sleepHour: number,
     homeArea: string = 'plaza',
     private soloActionExecutor?: SoloActionExecutor,
+    mapConfig?: MapConfig,
   ) {
     this.agent = agent;
     this.cognition = cognition;
     this.wakeHour = wakeHour;
     this.sleepHour = sleepHour;
     this.homeArea = homeArea;
+    // Default to village config with all systems enabled
+    this.mapConfig = mapConfig ?? {
+      id: 'village', name: 'The Village', description: '', mapSize: { width: 1024, height: 1024 },
+      spawnAreas: [], actions: [], buildGameRules: () => '', winCondition: 'none',
+      tickConfig: { decisionIdleTicks: 20 },
+      systems: { hunger: true, gathering: true, crafting: true, governance: true, property: true, combat: false, shrinkingZone: false, stealth: false, board: true },
+    };
 
     // Initialize drives and vitals if not set
     if (!this.agent.drives) {
