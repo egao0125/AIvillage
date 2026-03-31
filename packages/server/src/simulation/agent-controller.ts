@@ -3658,10 +3658,14 @@ Write ONLY the rule in the format above. Stay in character.`;
       this.handleApiSuccess();
       console.log(`[Decision] ${this.agent.config.name} → ${decision.actionId} | ${decision.reason.slice(0, 120)}`);
 
-      // Queue follow-up actions if present
+      // Queue follow-up actions if present (filter out entries missing actionId)
       if (decision.thenDo?.length) {
-        this.actionQueue = decision.thenDo.slice(0, 2);
-        console.log(`[ActionQueue] ${this.agent.config.name} queued ${this.actionQueue.length} follow-ups: ${this.actionQueue.map(a => a.actionId).join(' → ')}`);
+        this.actionQueue = decision.thenDo
+          .filter(a => a.actionId && typeof a.actionId === 'string')
+          .slice(0, 2);
+        if (this.actionQueue.length > 0) {
+          console.log(`[ActionQueue] ${this.agent.config.name} queued ${this.actionQueue.length} follow-ups: ${this.actionQueue.map(a => a.actionId).join(' → ')}`);
+        }
       }
 
       // Guard: agent may have entered a conversation while awaiting LLM
@@ -3690,7 +3694,7 @@ Write ONLY the rule in the format above. Stay in character.`;
 
   /** Validate whether a queued action is still executable given current world state */
   private canStillExecute(actionId: string): boolean {
-    if (!this.agent.alive) return false;
+    if (!this.agent.alive || !actionId) return false;
     // Eat: still have the food?
     if (actionId.startsWith('eat_')) {
       const food = actionId.replace('eat_', '');
