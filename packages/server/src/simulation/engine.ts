@@ -131,10 +131,14 @@ export class SimulationEngine {
       this.decayWorldObjects();
     });
 
-    // Tick controllers
+    // Tick controllers — per-agent try-catch so one bad agent doesn't pause the sim
     this.bus.on('tick', (e) => {
-      for (const controller of this.controllers.values()) {
-        controller.tick(e.time);
+      for (const [agentId, controller] of this.controllers.entries()) {
+        try {
+          controller.tick(e.time);
+        } catch (err) {
+          console.error(`[Engine] controller.tick() threw for agent ${agentId} — skipping:`, (err as Error).message);
+        }
       }
     });
 
@@ -1303,7 +1307,8 @@ export class SimulationEngine {
         })
         .catch((err: unknown) => {
           console.error('[Engine] Error advancing conversation:', err);
-          // Release agents on error
+          // Release agents on error and mark conversation ended to prevent orphaning
+          this.world.endConversation(conv.id);
           for (const pid of conv.participants) {
             const controller = this.controllers.get(pid);
             if (controller) {

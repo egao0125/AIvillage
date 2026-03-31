@@ -116,6 +116,12 @@ app.use('/api', optionalAuth());
 
 app.use(createRouter(engine));
 
+// Catch unmatched /api/* routes before the SPA catch-all so they return JSON, not HTML.
+// Without this, undefined API endpoints return a 200 HTML response which breaks client error handling.
+app.use('/api', (_req: express.Request, res: express.Response) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
 // In production, serve the built client files
 if (isProduction) {
   const clientDist = path.resolve(__dirname, '../../client/dist');
@@ -124,6 +130,16 @@ if (isProduction) {
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 }
+
+// Global error handler — must be registered after all routes and middleware.
+// Without this, errors thrown inside route handlers produce unhandled-rejection crashes.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[Express] Unhandled route error:', err.message);
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Spectator comment rate limit: 1 per 10 seconds per socket
 const spectatorLastComment: Map<string, number> = new Map();

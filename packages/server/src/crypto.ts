@@ -2,7 +2,9 @@
  * AES-256-GCM encryption for sensitive values (API keys) stored in the database.
  *
  * Encrypted format: "<iv_hex>:<tag_hex>:<ciphertext_hex>"
- *   - IV:         16 random bytes, unique per encryption
+ *   - IV:         12 random bytes (96 bits), unique per encryption
+ *                 NIST SP 800-38D §8.2 recommends 96-bit IV for GCM — it is used
+ *                 directly as the counter block without GHASH pre-processing.
  *   - Tag:        16 bytes GCM authentication tag (detects tampering)
  *   - Ciphertext: variable length
  *
@@ -14,12 +16,14 @@
  *   decryptApiKey() detects whether a stored value is in encrypted format.
  *   If not (plaintext legacy value), it returns the value as-is.
  *   This allows gradual migration without wiping existing data.
+ *   Existing values encrypted with the old 16-byte IV will still decrypt correctly
+ *   because Node.js/OpenSSL reads the IV length from the stored hex, not this constant.
  */
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
 const ALGO = 'aes-256-gcm';
-const IV_LEN = 16;   // bytes
+const IV_LEN = 12;   // bytes — 96 bits, NIST SP 800-38D §8.2 recommended size for GCM
 const TAG_LEN = 16;  // bytes
 
 // Matches "<hex>:<hex>:<hex>" — our encrypted format.

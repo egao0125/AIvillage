@@ -133,6 +133,7 @@ export function optionalAuth(_config?: unknown) {
     try {
       const { payload } = await jwtVerify(token, JWKS, {
         algorithms: ['RS256'],
+        clockTolerance: '30s',
         issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
       });
       // Cognito access tokens must carry token_use=access and client_id matching our app
@@ -325,6 +326,7 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
       try {
         const { payload } = await jwtVerify(token, JWKS, {
           algorithms: ['RS256'],
+        clockTolerance: '30s',
           issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
         });
         // Validate token_use=access and client_id before trusting the token for a sign-out action
@@ -362,6 +364,7 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
     try {
       const { payload } = await jwtVerify(token, JWKS, {
         algorithms: ['RS256'],
+        clockTolerance: '30s',
         issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
       });
       // Cognito access tokens must carry token_use=access and client_id matching our app
