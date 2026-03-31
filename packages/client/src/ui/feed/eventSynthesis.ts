@@ -11,10 +11,6 @@ import type {
 import type { VillageEvent, EventType } from './types';
 import { EVENT_BADGES } from './types';
 
-function truncate(s: string, len: number): string {
-  return s.length > len ? s.slice(0, len) + '...' : s;
-}
-
 function agentName(agents: Map<string, Agent>, id: string): string {
   return agents.get(id)?.config.name ?? 'Unknown';
 }
@@ -46,17 +42,16 @@ export function synthesizeEvents(
       case 'rule': {
         type = 'rule';
         const status = post.ruleStatus ?? 'proposed';
-        const prefix =
+        headline =
           status === 'passed' ? 'Rule passed' :
           status === 'rejected' ? 'Rule rejected' :
           status === 'repealed' ? 'Rule repealed' :
-          `${post.authorName} proposed rule`;
-        headline = `${prefix}: ${truncate(post.content, 80)}`;
+          `${post.authorName} proposed a rule`;
         break;
       }
       case 'decree':
         type = 'decree';
-        headline = `${post.authorName} issued decree: ${truncate(post.content, 80)}`;
+        headline = `${post.authorName} issued a decree`;
         break;
       case 'alliance':
         type = 'alliance';
@@ -64,23 +59,23 @@ export function synthesizeEvents(
         break;
       case 'announcement':
         type = 'announcement';
-        headline = `${post.authorName}: ${truncate(post.content, 80)}`;
+        headline = `${post.authorName} made an announcement`;
         break;
       case 'bounty':
         type = 'bounty';
-        headline = `${post.authorName} posted bounty: ${truncate(post.content, 80)}`;
+        headline = `${post.authorName} posted a bounty`;
         break;
       case 'threat':
         type = 'threat';
-        headline = `${post.authorName} threatened: ${truncate(post.content, 80)}`;
+        headline = `${post.authorName} made a threat`;
         break;
       case 'trade':
         type = 'trade';
-        headline = `${post.authorName}: ${truncate(post.content, 80)}`;
+        headline = `${post.authorName} posted a trade`;
         break;
       case 'news':
         type = 'announcement';
-        headline = `${post.authorName}: ${truncate(post.content, 80)}`;
+        headline = `${post.authorName} shared news`;
         break;
       default:
         continue;
