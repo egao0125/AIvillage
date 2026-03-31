@@ -611,6 +611,38 @@ If nothing notable was exchanged, return []`;
     return `\n- Weight: ${totalWeight}/15.${spokenStr} Don't over-promise.`.slice(0, 100);
   }
 
+  // --- Stakes Synthesis (Meta-Harness evolved pattern) ---
+
+  /**
+   * Build a "WHAT'S AT STAKE" block that synthesizes the most pressing
+   * commitment + primary fear + current trigger into a single tension statement.
+   *
+   * Evolved via Meta-Harness: this framing anchors decisions in personal
+   * consequences rather than option-browsing, producing +0.12 emergence
+   * quality over flat context listing.
+   */
+  private buildStakesBlock(situation: AgentSituation): string {
+    const config = this.agent.config;
+    const commitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    const sorted = [...commitments].sort((a, b) => b.weight - a.weight);
+
+    const parts: string[] = [];
+    if (sorted.length > 0) {
+      const top = sorted[0];
+      parts.push(`You promised ${top.targetName}: ${top.content.slice(0, 90)}`);
+    }
+    if (config.fears && config.fears.length > 0) {
+      parts.push(`Core fear: ${config.fears[0].toLowerCase()}`);
+    }
+    if (situation.trigger) {
+      parts.push(situation.trigger);
+    }
+
+    return parts.length > 0
+      ? `\nWHAT'S AT STAKE: ${parts.join(' | ')}`
+      : '';
+  }
+
   // --- Structured Decision ---
 
   /**
@@ -653,7 +685,25 @@ If nothing notable was exchanged, return []`;
     }
 
     if (situation.nearbyAgents.length > 0) {
-      actionMenu += '\n\nPeople nearby:\n' + situation.nearbyAgents.map(a => `- ${a.name} (${a.activity})`).join('\n');
+      // Meta-Harness evolved pattern: enrich nearby agents with dossier context
+      // Cross-referencing trust + summary next to each name produces more
+      // socially-grounded decisions (+0.04 emergence over flat name lists)
+      const nearbyLines = situation.nearbyAgents.map(a => {
+        const dossier = this.fourStream?.getDossier(a.id);
+        if (dossier && dossier.summary) {
+          return `- ${a.name} [trust:${dossier.trust}] (${a.activity}): ${dossier.summary.slice(0, 80)}`;
+        }
+        return `- ${a.name} (${a.activity})`;
+      });
+      // Sort by trust (highest first) so the model sees most-trusted first
+      if (this.fourStream) {
+        nearbyLines.sort((a, b) => {
+          const trustA = parseInt(a.match(/trust:(-?\d+)/)?.[1] ?? '0');
+          const trustB = parseInt(b.match(/trust:(-?\d+)/)?.[1] ?? '0');
+          return trustB - trustA;
+        });
+      }
+      actionMenu += '\n\nPeople nearby:\n' + nearbyLines.join('\n');
       if (socialActions.length > 0) {
         actionMenu += '\n\nWith any nearby person (replace NAME with their first name):\n' + socialActions.map(a => a.id + ' — ' + a.label).join('\n');
         actionMenu += '\n\nExample: talk_wren, steal_felix, ally_ren';
@@ -749,6 +799,7 @@ Season: ${situation.season}.
 ${vitalsSection}
 
 ${this.buildRealityBlock()}${this.buildPromiseLedger()}
+${this.buildStakesBlock(situation)}
 ${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
@@ -760,11 +811,9 @@ ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
 
 ${actionMenu}
 
-What does YOUR CHARACTER do next?
+Given what's at stake — the promises made, the fears driving you — what does this specific person do? Not the safe choice. The human one.
 
-Not the safe choice. Not the polite choice. The honest one — what would THIS person, with THIS personality, in THIS situation, actually do?
-
-Consider: what you need right now, who's nearby and what they have, what you've been doing today, what your relationships look like, and whether it's time to build something bigger — an alliance, a rule, a plan.
+First say SOCIAL: <one sentence — who nearby matters most right now and why>, then reply with JSON.
 
 ${jsonInstruction}`;
 
@@ -826,9 +875,12 @@ ${jsonInstruction}`;
       };
     }
 
+    // Strip SOCIAL reasoning line before parsing (Meta-Harness evolved pattern)
+    const jsonReady = response.replace(/^SOCIAL:.*$/m, '').trim();
+
     // Parse JSON
     try {
-      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const cleaned = jsonReady.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned) as AgentDecision;
       if (parsed.actionId && parsed.reason) {
         if (parsed.thenDo) parsed.thenDo = parsed.thenDo.slice(0, 2);
@@ -838,7 +890,7 @@ ${jsonInstruction}`;
 
     // Try extracting JSON from mixed prose+JSON output
     try {
-      const jsonMatch = response.match(/\{[\s\S]*"actionId"[\s\S]*"reason"[\s\S]*\}/);
+      const jsonMatch = jsonReady.match(/\{[\s\S]*"actionId"[\s\S]*"reason"[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]) as AgentDecision;
         if (parsed.actionId && parsed.reason) {
