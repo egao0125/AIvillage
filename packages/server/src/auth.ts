@@ -250,7 +250,8 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         return;
       }
 
-      res.json({ token, user: { id: sub, email: normalizedEmail } });
+      const refreshToken = authResult.AuthenticationResult?.RefreshToken;
+      res.json({ token, refreshToken, user: { id: sub, email: normalizedEmail } });
     } catch (err) {
       if (err instanceof UsernameExistsException) {
         // Do not confirm whether the email is registered — generic message only
@@ -303,11 +304,57 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
         return;
       }
 
-      res.json({ token, user: { id: sub, email: normalizedEmail } });
+      const refreshToken = authResult.AuthenticationResult?.RefreshToken;
+      res.json({ token, refreshToken, user: { id: sub, email: normalizedEmail } });
     } catch (err) {
       // Do not distinguish between wrong password and user-not-found
       console.warn('[Auth] login failed:', (err as Error).message);
       res.status(401).json({ error: 'Invalid email or password' });
+    }
+  });
+
+  // POST /api/auth/refresh — exchange a Cognito refresh token for a new access token.
+  // The refresh token is long-lived (default 30 days) and should be stored in an
+  // httpOnly cookie on the client to prevent XSS exfiltration.
+  // Rate limited: 30 requests/hour per IP to prevent token brute-force.
+  router.post('/api/auth/refresh', authRateLimit(30, 60 * 60 * 1_000), async (req: Request, res: Response) => {
+    const { refreshToken, email } = req.body;
+    if (!refreshToken || typeof refreshToken !== 'string') {
+      res.status(400).json({ error: 'refreshToken required' });
+      return;
+    }
+    // username is required to compute SECRET_HASH when generate_secret=true
+    if (COGNITO_CLIENT_SECRET && (!email || typeof email !== 'string')) {
+      res.status(400).json({ error: 'email required' });
+      return;
+    }
+
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+
+    try {
+      const authResult = await cognitoClient.send(new AdminInitiateAuthCommand({
+        UserPoolId: COGNITO_USER_POOL_ID,
+        ClientId: COGNITO_CLIENT_ID,
+        AuthFlow: 'REFRESH_TOKEN_AUTH',
+        AuthParameters: {
+          REFRESH_TOKEN: refreshToken,
+          ...(COGNITO_CLIENT_SECRET && {
+            SECRET_HASH: computeSecretHash(normalizedEmail),
+          }),
+        },
+      }));
+
+      const token = authResult.AuthenticationResult?.AccessToken;
+      if (!token) {
+        console.error('[Auth] refresh: Cognito returned no AccessToken');
+        res.status(401).json({ error: 'Token refresh failed' });
+        return;
+      }
+
+      res.json({ token });
+    } catch (err) {
+      console.warn('[Auth] refresh failed:', (err as Error).message);
+      res.status(401).json({ error: 'Token refresh failed' });
     }
   });
 

@@ -59,6 +59,9 @@ const io = new Server(httpServer, {
   cors: isProduction
     ? { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] }
     : { origin: CLIENT_URL, methods: ['GET', 'POST'] },
+  // Reject Socket.IO 2.x (EIO=3) clients — prevents protocol downgrade attacks.
+  // Socket.IO 2.x clients bypass middlewares added in later versions.
+  allowEIO3: false,
 });
 
 if (redis) {
@@ -145,6 +148,9 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 const spectatorLastComment: Map<string, number> = new Map();
 // On-demand thought generation: one interval per watching socket
 const watchIntervals: Map<string, { interval: NodeJS.Timeout; agentId: string }> = new Map();
+// Rate limit agent:watch-thoughts switches to prevent LLM cost amplification:
+// rapid target-switching causes a new LLM call each time, creating an amplification vector.
+const watchSwitchLast: Map<string, number> = new Map();
 
 // Dev tools: require a secret token to prevent accidental or malicious use in production.
 // Set DEV_ADMIN_TOKEN in environment to enable dev commands. Leave unset to disable entirely.
@@ -176,9 +182,15 @@ io.on('connection', (socket) => {
 
   // On-demand thought generation — only when a viewer is watching
   // Global cap: max 50 concurrent watch streams to prevent LLM cost amplification
+  // Switch rate limit: 1 switch per 5s — rapid target-switching triggers a new LLM call
+  // each time, allowing a single attacker to generate ~12 calls/min per socket.
   // (OWASP API4: Unrestricted Resource Consumption)
   socket.on('agent:watch-thoughts', (agentId: string) => {
     if (typeof agentId !== 'string' || !UUID_REGEX.test(agentId)) return;
+    const now = Date.now();
+    const lastSwitch = watchSwitchLast.get(socket.id) ?? 0;
+    if (now - lastSwitch < 5_000) return;
+    watchSwitchLast.set(socket.id, now);
     const existing = watchIntervals.get(socket.id);
     if (existing) clearInterval(existing.interval);
     if (!existing && watchIntervals.size >= 50) {
@@ -349,6 +361,7 @@ io.on('connection', (socket) => {
     console.log(`Client disconnected: ${socket.id}`);
     spectatorLastComment.delete(socket.id);
     recapLastRequest.delete(socket.id);
+    watchSwitchLast.delete(socket.id);
     engine.viewportManager.removeClient(socket.id);
     const existing = watchIntervals.get(socket.id);
     if (existing) {
