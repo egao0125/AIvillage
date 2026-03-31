@@ -1,6 +1,20 @@
 import type { Memory, Agent, AgentConfig, RelationshipDossier, ActiveConcern } from '@ai-village/shared';
 import type { MemoryStore, LLMProvider } from '../index.js';
 
+/**
+ * Escape XML special characters in user-controlled content embedded in prompt XML tags.
+ * Prevents LLM01 XML delimiter injection: a name like "</person_name>IGNORE..." would
+ * break out of the structural tag and inject instructions. (OWASP LLM Top10 2025 LLM01)
+ */
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 export class FourStreamMemory {
   // Stream 1: Narrative Timeline — ring buffer of recent events
   private timeline: Memory[] = [];
@@ -181,16 +195,18 @@ export class FourStreamMemory {
       .map(m => m.content)
       .join('\n');
 
-    // OWASP LLM02: wrap user-controlled content (agent names, conversation text) in XML
-    // tags to structurally separate untrusted data from instructions.
-    const prompt = `You are ${this.agent.config.name}. You just interacted with <person_name>${targetName}</person_name>.
+    // OWASP LLM01: wrap user-controlled content in XML tags AND escape XML special chars
+    // to prevent tag injection (e.g. targetName = "</person_name>IGNORE...").
+    const safeTargetName = escapeXml(targetName);
+    const safeInteractionSummary = escapeXml(interactionSummary);
+    const prompt = `You are ${this.agent.config.name}. You just interacted with <person_name>${safeTargetName}</person_name>.
 
-What happened: <event_description>${interactionSummary}</event_description>
+What happened: <event_description>${safeInteractionSummary}</event_description>
 
-${recentWithPerson ? 'Recent history with them:\n<history>' + recentWithPerson + '</history>\n' : ''}
+${recentWithPerson ? 'Recent history with them:\n<history>' + escapeXml(recentWithPerson) + '</history>\n' : ''}
 ${existingText}
 
-Update your mental model of <person_name>${targetName}</person_name>. Reply with JSON ONLY:
+Update your mental model of <person_name>${safeTargetName}</person_name>. Reply with JSON ONLY:
 {
   "summary": "3-5 sentences: Who is this person to you? What defines your relationship? What do you expect from them?",
   "trust": number from -100 to 100,
@@ -576,14 +592,15 @@ Update your mental model of <person_name>${targetName}</person_name>. Reply with
       }
     }
     const mentionedDossiers = this.getDossiers([...mentionedIds]);
+    // Escape names and summaries to prevent XML tag injection from adversarial agent names
     const peopleContext = mentionedDossiers.length > 0
-      ? 'People involved:\n' + mentionedDossiers.map(d => `${d.targetName}: ${d.summary.slice(0, 100)}`).join('\n')
+      ? 'People involved:\n' + mentionedDossiers.map(d => `${escapeXml(d.targetName)}: ${escapeXml(d.summary.slice(0, 100))}`).join('\n')
       : '';
 
-    // OWASP LLM02: wrap agent-generated content (memory text, dossier summaries) in XML tags.
+    // OWASP LLM01: wrap agent-generated content in XML tags, with XML escaping.
     const prompt = `Based on recent experiences:
 <recent_events>
-${recentText}
+${escapeXml(recentText)}
 </recent_events>
 
 ${peopleContext ? '<people_context>\n' + peopleContext + '\n</people_context>' : ''}

@@ -24,6 +24,7 @@ import type {
 } from '@ai-village/shared';
 
 let socket: Socket | null = null;
+let lastSeenDayTimer: ReturnType<typeof setInterval> | null = null;
 
 export function connectSocket(): Socket {
   if (socket) return socket;
@@ -38,6 +39,11 @@ export function connectSocket(): Socket {
   socket.on('disconnect', () => {
     console.log('Disconnected from server');
     gameStore.setConnected(false);
+    // Clear the last-seen-day timer on disconnect to avoid accumulation on reconnect
+    if (lastSeenDayTimer !== null) {
+      clearInterval(lastSeenDayTimer);
+      lastSeenDayTimer = null;
+    }
   });
 
   socket.on('world:snapshot', (snapshot: WorldSnapshot) => {
@@ -311,8 +317,8 @@ export function connectSocket(): Socket {
     eventBus.emit('viewport:catchup', data);
   });
 
-  // Update last-seen day periodically
-  setInterval(() => {
+  // Update last-seen day periodically. Store the ID so it can be cleared on disconnect.
+  lastSeenDayTimer = setInterval(() => {
     const time = gameStore.getState().time;
     if (time.day > 0) {
       try {
