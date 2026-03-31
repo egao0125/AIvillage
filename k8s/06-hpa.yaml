@@ -9,22 +9,13 @@ spec:
     kind: Deployment
     name: ai-village
   # -----------------------------------------------------------------------
-  # maxReplicas is intentionally 1.
-  #
-  # The simulation engine is stateful (agent state lives in process memory).
-  # Multiple replicas would each run an independent simulation — split state.
-  #
-  # To enable horizontal scaling, the following must be completed first:
-  #   1. Per-agent row persistence — world/agent state persisted per-agent row
-  #      instead of a single id:'current' row (eliminates Last Write Wins)
-  #   2. Shared agent state store  — AgentController state externalised to
-  #      Redis or DB so all pods share one simulation
-  #   3. Uncomment sticky sessions in 05-ingress.yaml
-  #
-  # Once done, set maxReplicas: 3 (or higher) and re-apply.
+  # maxReplicas: 2 — leader election により1Podがシミュレーションを担当。
+  # 2Pod目はHTTP/WS読み込みサービング + リーダーフェイルオーバー待機。
+  # 書き込みエンドポイント (POST /api/agents等) はリーダーPodのみ受け付け。
+  # 詳細: packages/server/src/cluster/leader-election.ts
   # -----------------------------------------------------------------------
   minReplicas: 1
-  maxReplicas: 1
+  maxReplicas: 2
   metrics:
     - type: Resource
       resource:

@@ -12,12 +12,14 @@ import { AgentController } from './agent-controller.js';
 import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
 import { AREAS } from '../map/village.js';
-import { RdsPersistence, type ControllerData } from '../persistence/rds.js';
+import { RdsPersistence, type ControllerData, VersionConflictError } from '../persistence/rds.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
 import { CharacterTimeline } from './character-timeline.js';
 import { StorylineDetector } from './storyline-detector.js';
 import { RecapGenerator } from './recap-generator.js';
+import { LeaderElection } from '../cluster/leader-election.js';
+import { getRedis } from '../redis.js';
 
 export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
@@ -57,6 +59,12 @@ export class SimulationEngine {
   private dbHealthCircuitOpenAt: number = 0;
   private static readonly DB_HEALTH_CIRCUIT_THRESHOLD = 3;   // open after 3 consecutive failures
   private static readonly DB_HEALTH_CIRCUIT_RESET_MS = 30_000; // re-try after 30 s
+
+  // Distributed leader election — only the leader Pod runs the simulation tick loop.
+  // Followers serve HTTP/WS reads from Redis snapshot. No-Redis fallback: always leader.
+  private readonly leaderElection: LeaderElection = new LeaderElection();
+  // Optimistic lock version for world_state row — incremented on each successful save.
+  private worldStateVersion: number = 0;
 
   constructor(private io: Server) {
     this.world = new World();
@@ -118,6 +126,35 @@ export class SimulationEngine {
     this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus, this.controllers);
     // Wire bystander notification when conversations end
     this.conversationManager.onConversationEnd = (conv) => this.notifyConversationBystanders(conv);
+
+    // Distributed leader election: only one Pod runs the simulation tick loop.
+    // Followers serve HTTP/WS reads; the leader writes state to Redis for them.
+    const leaderAcquired = await this.leaderElection.tryAcquire();
+    console.log(`[Engine] ${leaderAcquired ? 'Leadership acquired' : 'Running as follower'} (podId=${this.leaderElection.podId})`);
+
+    // Callback invoked when heartbeat renewal fails (e.g. Redis TTL expired or evicted).
+    // Pause the simulation immediately so the stale leader doesn't overwrite new state.
+    this.leaderElection.onLeadershipLost = () => {
+      console.error('[Engine] Leadership lost — pausing simulation tick');
+      this.pause();
+      // Poll until we re-acquire; another Pod may already be the leader by then.
+      this.leaderElection.startRetrying(() => {
+        console.log('[Engine] Leadership re-acquired — restarting simulation tick');
+        this.loadFromRds().then(() => this.start()).catch((err: unknown) => {
+          console.error('[Engine] Re-acquire reload failed:', (err as Error).message);
+        });
+      });
+    };
+
+    // Non-leader follower: keep polling so it can promote if the leader dies.
+    if (!leaderAcquired) {
+      this.leaderElection.startRetrying(() => {
+        console.log('[Engine] Follower promoted to leader — starting simulation tick');
+        this.loadFromRds().then(() => this.start()).catch((err: unknown) => {
+          console.error('[Engine] Follower promotion reload failed:', (err as Error).message);
+        });
+      });
+    }
 
     // Restore from RDS if persistence is enabled
     if (this.persistence) {
@@ -305,13 +342,33 @@ export class SimulationEngine {
       }
     });
 
-    // Periodic save
+    // Periodic save with optimistic locking.
+    // Only the leader Pod writes to RDS; the snapshot is also pushed to Redis so
+    // follower Pods can serve reads without hitting the DB.
     this.bus.on('save_requested', () => {
-      if (this.persistence) {
-        void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-          console.error('[Persistence] Periodic save failed:', err)
-        );
-      }
+      if (!this.persistence) return;
+      if (!this.leaderElection.isLeader) return; // followers must not write world state
+
+      const expectedVersion = this.worldStateVersion;
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, expectedVersion)
+        .then((newVersion: number) => {
+          this.worldStateVersion = newVersion;
+          // Publish snapshot to Redis so follower Pods can serve getSnapshot() without RDS.
+          return this.writeRedisSnapshot();
+        })
+        .catch((err: unknown) => {
+          if ((err as Error).name === 'VersionConflictError') {
+            // Another Pod wrote a newer version — reload and surrender leadership.
+            // This should not happen in practice (only one leader at a time), but
+            // guard against split-brain edge cases during leader transitions.
+            console.error('[Persistence] Version conflict on save — reloading world state');
+            void this.loadFromRds().catch((e: unknown) => {
+              console.error('[Persistence] Reload after version conflict failed:', (e as Error).message);
+            });
+          } else {
+            console.error('[Persistence] Periodic save failed:', (err as Error).message);
+          }
+        });
     });
 
     console.log(`[Engine] AI Village initialized (no starter agents — users create agents via UI)`);
@@ -322,13 +379,16 @@ export class SimulationEngine {
 
     try {
       // Load all data in parallel
-      const [worldData, agents, controllerDataMap] = await Promise.all([
+      const [worldStateResult, agents, controllerDataMap] = await Promise.all([
         this.persistence.loadWorldState(),
         this.persistence.loadAgents(),
         this.persistence.loadAgentControllers(),
       ]);
 
-      if (worldData) {
+      if (worldStateResult) {
+        // Capture the optimistic-lock version so saveAll() can detect concurrent writes.
+        this.worldStateVersion = worldStateResult.version;
+        const worldData = worldStateResult.data;
         this.world.time = worldData.time as typeof this.world.time;
         this.world.weather = worldData.weather as typeof this.world.weather;
         this.world.board = (worldData.board ?? []) as typeof this.world.board;
@@ -1089,8 +1149,16 @@ export class SimulationEngine {
       clearInterval(this.decisionInterval);
       this.decisionInterval = null;
     }
+
+    // Release leader lock before closing DB so the next Pod can acquire immediately.
+    // destroy() also stops heartbeat + retry timers.
+    await this.leaderElection.release();
+    this.leaderElection.destroy();
+
     if (this.persistence) {
       try {
+        // Best-effort final save with unconditional upsert (no expectedVersion)
+        // so a leadership transition immediately before shutdown cannot cause data loss.
         await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
         console.log('[Engine] Final state saved to RDS');
       } catch (err) {
@@ -2477,6 +2545,39 @@ Answer with ONLY one word: "support" or "oppose".`,
 
   get isRunning(): boolean {
     return this.tickInterval !== null;
+  }
+
+  /** True when this Pod holds the Redis leader lock (or Redis is not configured). */
+  get isLeader(): boolean {
+    return this.leaderElection.isLeader;
+  }
+
+  /**
+   * Write the current world snapshot to Redis so follower Pods can serve
+   * read-only API responses (getSnapshot, agent list, board, etc.) without
+   * touching the DB or diverging from the leader's authoritative state.
+   *
+   * Key: ai-village:world:snapshot  TTL: 120 s
+   * If Redis is unavailable the failure is logged but does not throw — followers
+   * will fall back to their last cached snapshot or return stale data, which is
+   * acceptable for a read-only view.
+   */
+  private async writeRedisSnapshot(): Promise<void> {
+    const redis = getRedis();
+    if (!redis) return; // single-Pod dev mode — no Redis, nothing to write
+
+    try {
+      const snapshot = this.getSnapshot();
+      await redis.set(
+        'ai-village:world:snapshot',
+        JSON.stringify(snapshot),
+        'EX',
+        120,
+      );
+    } catch (err) {
+      // Non-fatal: followers serve the previous snapshot until the next write.
+      console.error('[Engine] writeRedisSnapshot failed:', (err as Error).message);
+    }
   }
 
   /**

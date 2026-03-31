@@ -67,6 +67,10 @@ data:
     ALTER DEFAULT PRIVILEGES IN SCHEMA public
       GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aivillage_app;
 
+    -- Add version column for optimistic locking (horizontal scaling / leader election)
+    -- IF NOT EXISTS makes this idempotent — safe to re-run on existing clusters
+    ALTER TABLE world_state ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
+
     COMMIT;
 ---
 apiVersion: batch/v1

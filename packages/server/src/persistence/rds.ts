@@ -6,6 +6,13 @@ import { encryptApiKey, decryptApiKey } from '../crypto.js';
 const { Pool: PgPool } = pg;
 type Pool = pg.Pool;
 
+export class VersionConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VersionConflictError';
+  }
+}
+
 export interface ControllerData {
   controllerState: string;
   currentGoals: string[];
@@ -86,7 +93,7 @@ export class RdsPersistence {
     });
   }
 
-  async saveWorldState(world: World): Promise<void> {
+  async saveWorldState(world: World, expectedVersion?: number): Promise<number> {
     const data: WorldStateData = {
       time: world.time,
       weather: world.weather,
@@ -109,16 +116,46 @@ export class RdsPersistence {
       activeBuildProjects: mapToRecord(world.activeBuildProjects),
     };
 
-    try {
-      await this.pool.query(
-        `INSERT INTO world_state (id, data, updated_at)
-         VALUES ('current', $1, NOW())
-         ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-        [JSON.stringify(data)],
-      );
-    } catch (err) {
-      console.error('[RDS] saveWorldState failed:', (err as Error).message);
-      throw err;
+    if (expectedVersion && expectedVersion > 0) {
+      // Optimistic locking: only update the row if its version matches expectedVersion.
+      // Another pod may have already incremented the version — detect conflict instead of
+      // silently overwriting (Last Write Wins).
+      const client = await this.pool.connect();
+      try {
+        const result = await client.query<{ version: number }>(
+          `UPDATE world_state
+           SET data = $1, version = version + 1, updated_at = NOW()
+           WHERE id = 'current' AND version = $2
+           RETURNING version`,
+          [JSON.stringify(data), expectedVersion],
+        );
+        if (result.rowCount === 0) {
+          throw new VersionConflictError(
+            `World state version conflict: expected=${expectedVersion}. Another pod may have written.`,
+          );
+        }
+        return result.rows[0].version;
+      } finally {
+        client.release();
+      }
+    } else {
+      // Version-agnostic upsert — used for initial save or recovery.
+      try {
+        const result = await this.pool.query<{ version: number }>(
+          `INSERT INTO world_state (id, data, version, updated_at)
+           VALUES ('current', $1, 1, NOW())
+           ON CONFLICT (id) DO UPDATE
+             SET data = EXCLUDED.data,
+                 version = world_state.version + 1,
+                 updated_at = NOW()
+           RETURNING version`,
+          [JSON.stringify(data)],
+        );
+        return result.rows[0].version;
+      } catch (err) {
+        console.error('[RDS] saveWorldState failed:', (err as Error).message);
+        throw err;
+      }
     }
   }
 
@@ -215,9 +252,12 @@ export class RdsPersistence {
     world: World,
     controllers: Map<string, AgentController>,
     apiKeys?: Map<string, { apiKey: string; model: string }>,
-  ): Promise<void> {
+    expectedVersion?: number,
+  ): Promise<number> {
     // Exponential backoff retry for transient RDS errors (Multi-AZ failover window ~60s).
     // AWS Database Blog BP: retry up to 3 times with 1s→2s→4s delays (max 10s cap).
+    // VersionConflictError is NOT retried — it is re-thrown immediately so the caller
+    // (leader election) can detect the conflict and step down.
     const MAX_RETRIES = 3;
     let delay = 1_000;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -228,16 +268,20 @@ export class RdsPersistence {
         // saveAgentControllers fails) leaves the DB in an inconsistent state that
         // causes agents to lose their controller context on pod restart.
         await client.query('BEGIN');
-        await this.saveWorldStateClient(client, world);
+        const newVersion = await this.saveWorldStateClient(client, world, expectedVersion);
         await this.saveAgentsClient(client, world.agents);
         await this.saveAgentControllersClient(client, controllers, apiKeys);
         await client.query('COMMIT');
         console.log(`[Persistence] Saved: ${world.agents.size} agents, ${controllers.size} controllers`);
-        return;
+        return newVersion;
       } catch (err) {
         await client.query('ROLLBACK').catch((rollbackErr: unknown) => {
           console.warn('[RDS] ROLLBACK failed (connection may already be dead):', (rollbackErr as Error).message);
         });
+        // VersionConflictError must not be retried — re-throw immediately
+        if (err instanceof VersionConflictError) {
+          throw err;
+        }
         const transient = this.isTransientError(err);
         if (transient && attempt < MAX_RETRIES) {
           console.warn(`[RDS] saveAll transient error (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delay}ms:`, (err as Error).message);
@@ -253,11 +297,13 @@ export class RdsPersistence {
         client.release();
       }
     }
+    // Unreachable — the loop always returns or throws, but TypeScript requires a return type
+    throw new Error('[RDS] saveAll: unexpected exit from retry loop');
   }
 
   // Client-scoped variants used inside the saveAll transaction.
   // These accept an already-checked-out PoolClient so all writes share a single transaction.
-  private async saveWorldStateClient(client: pg.PoolClient, world: World): Promise<void> {
+  private async saveWorldStateClient(client: pg.PoolClient, world: World, expectedVersion?: number): Promise<number> {
     // Identical serialization to saveWorldState() — uses the same mapToRecord helpers.
     const data: WorldStateData = {
       time: world.time,
@@ -280,12 +326,36 @@ export class RdsPersistence {
       villageMemory: world.villageMemory,
       activeBuildProjects: mapToRecord(world.activeBuildProjects),
     };
-    await client.query(
-      `INSERT INTO world_state (id, data, updated_at)
-       VALUES ('current', $1, NOW())
-       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-      [JSON.stringify(data)],
-    );
+
+    if (expectedVersion && expectedVersion > 0) {
+      // Optimistic locking inside transaction: only update if version matches.
+      const result = await client.query<{ version: number }>(
+        `UPDATE world_state
+         SET data = $1, version = version + 1, updated_at = NOW()
+         WHERE id = 'current' AND version = $2
+         RETURNING version`,
+        [JSON.stringify(data), expectedVersion],
+      );
+      if (result.rowCount === 0) {
+        throw new VersionConflictError(
+          `World state version conflict: expected=${expectedVersion}. Another pod may have written.`,
+        );
+      }
+      return result.rows[0].version;
+    } else {
+      // Version-agnostic upsert — used for initial save or recovery.
+      const result = await client.query<{ version: number }>(
+        `INSERT INTO world_state (id, data, version, updated_at)
+         VALUES ('current', $1, 1, NOW())
+         ON CONFLICT (id) DO UPDATE
+           SET data = EXCLUDED.data,
+               version = world_state.version + 1,
+               updated_at = NOW()
+         RETURNING version`,
+        [JSON.stringify(data)],
+      );
+      return result.rows[0].version;
+    }
   }
 
   private async saveAgentsClient(client: pg.PoolClient, agents: Map<string, Agent>): Promise<void> {
@@ -338,14 +408,14 @@ export class RdsPersistence {
     );
   }
 
-  async loadWorldState(): Promise<WorldStateData | null> {
-    const result = await this.pool.query<{ data: WorldStateData }>(
-      `SELECT data FROM world_state WHERE id = 'current'`,
+  async loadWorldState(): Promise<{ data: WorldStateData; version: number } | null> {
+    const result = await this.pool.query<{ data: WorldStateData; version: number }>(
+      `SELECT data, version FROM world_state WHERE id = 'current'`,
     );
     if (result.rows.length === 0) return null;
-    const worldData = result.rows[0].data;
-    if (!worldData || !worldData.time) return null;
-    return worldData;
+    const { data, version } = result.rows[0];
+    if (!data || !data.time) return null;
+    return { data, version };
   }
 
   async loadAgents(): Promise<Agent[]> {

@@ -346,6 +346,10 @@ io.on('connection', (socket) => {
 
   socket.on('dev:resume', (token: unknown) => {
     if (!isDevAuthorized(token)) return;
+    if (!engine.isLeader) {
+      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot resume' });
+      return;
+    }
     engine.start();
     io.emit('dev:status', { paused: !engine.isRunning });
   });
@@ -425,7 +429,14 @@ io.on('connection', (socket) => {
 });
 
 engine.initialize().then(() => {
-  engine.start();
+  // Only the leader Pod runs the simulation tick loop.
+  // Follower Pods serve HTTP/WS reads and promote automatically via startRetrying()
+  // (wired in initialize()) when the leader lock becomes available.
+  if (engine.isLeader) {
+    engine.start();
+  } else {
+    console.log('[Server] Running as follower — simulation tick deferred until leadership acquired');
+  }
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`AI Village server running on port ${PORT}`);
   });
