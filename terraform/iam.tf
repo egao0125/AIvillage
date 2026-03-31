@@ -194,12 +194,6 @@ resource "aws_iam_policy" "app_secrets" {
 #      with role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 # ---------------------------------------------------------------------------
 
-data "aws_iam_openid_connect_provider" "github" {
-  # GitHub's OIDC provider — registered by this resource.
-  # Each AWS account needs only one OIDC provider per issuer URL.
-  url = "https://token.actions.githubusercontent.com"
-}
-
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 

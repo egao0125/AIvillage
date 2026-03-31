@@ -39,5 +39,6 @@ terraform {
     region         = "ap-northeast-1"
     encrypt        = true
     dynamodb_table = "ai-village-terraform-locks"
+    profile        = "ai-village"
   }
 }
