@@ -22,3 +22,5 @@ terraform/terraform.tfstate.*.backup
 terraform/tfplan
 terraform/tfplan.json
 terraform/terraform.tfvars
+terraform/bootstrap/.terraform/
+terraform/bootstrap/terraform.tfstate*
