@@ -58,8 +58,8 @@ app.set('trust proxy', 1);
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: isProduction
-    ? { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'] }
-    : { origin: CLIENT_URL, methods: ['GET', 'POST'] },
+    ? { origin: ALLOWED_ORIGINS, methods: ['GET', 'POST'], credentials: true }
+    : { origin: CLIENT_URL, methods: ['GET', 'POST'], credentials: true },
   // Reject Socket.IO 2.x (EIO=3) clients — prevents protocol downgrade attacks.
   // Socket.IO 2.x clients bypass middlewares added in later versions.
   allowEIO3: false,
@@ -283,7 +283,12 @@ io.on('connection', (socket) => {
   // (OWASP API4: Unrestricted Resource Consumption; NIST SP 800-53 SC-5)
   const recapLastRequest = new Map<string, number>();
   socket.on('recap:request', async (data: { sinceDay: number }) => {
-    if (typeof data?.sinceDay !== 'number') return;
+    // Reject non-number, NaN, Infinity, and non-positive values.
+    // Without Number.isFinite(): sinceDay=Infinity or sinceDay=-9999 would bypass
+    // the type check and pass a garbage value to generateRecap, potentially scanning
+    // the entire narrative history and triggering unbounded LLM cost.
+    // (OWASP API4: Unrestricted Resource Consumption / CWE-20)
+    if (typeof data?.sinceDay !== 'number' || !Number.isFinite(data.sinceDay) || data.sinceDay < 1) return;
     // LLM-costing event: require authenticated session.
     if (!socket.data.userId) {
       socket.emit('recap:error', { error: 'Authentication required' });
@@ -380,7 +385,10 @@ io.on('connection', (socket) => {
 
   // --- Infra 6: Viewport-aware streaming ---
   socket.on('viewport:update', (data: { x: number; y: number; width: number; height: number }) => {
-    if (typeof data?.x !== 'number' || typeof data?.y !== 'number') return;
+    // Reject NaN/Infinity coordinates — these would corrupt the spatial filter geometry.
+    // (CWE-20: Improper Input Validation)
+    if (typeof data?.x !== 'number' || !Number.isFinite(data.x) ||
+        typeof data?.y !== 'number' || !Number.isFinite(data.y)) return;
     // Clamp width/height to prevent memory amplification via very large viewport requests
     // (OWASP API4: Unrestricted Resource Consumption)
     engine.viewportManager.setViewport(socket.id, {

@@ -362,7 +362,13 @@ Relationships: ${mentalModels}`;
       const safeSleepHour = clampNumber(sleepHour, 0, 23, 23);
       const safeCurrency = clampNumber(startingGold, 0, 10000, 0);
 
-      const agent = engine.addAgent(config, safeWakeHour, safeSleepHour, safeCurrency, apiKey.trim(), safeModel, req.userId!);
+      // requireAuth middleware (line 275) guarantees req.userId is set — this guard
+      // is a defensive double-check against future middleware reordering. (CWE-287)
+      if (!req.userId) {
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+      const agent = engine.addAgent(config, safeWakeHour, safeSleepHour, safeCurrency, apiKey.trim(), safeModel, req.userId);
       res.json({ agent: { id: agent.id, name: agent.config.name } });
     },
   );

@@ -67,7 +67,10 @@ spec:
         - name: pgbouncer
           # Pin to a specific digest in production to prevent supply chain attacks.
           # Update periodically (monthly) for security patches.
-          image: bitnami/pgbouncer:1.23.1
+          # 1.25.1: fixes CVE-2025-12819 (untrusted search_path in auth_query).
+          # Our config uses userlist.txt (not auth_user+auth_query), so not directly affected,
+          # but upgrading closes the risk in case config evolves. Always run latest patched release.
+          image: bitnami/pgbouncer:1.25.1
           imagePullPolicy: IfNotPresent
 
           ports:

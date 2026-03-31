@@ -30,17 +30,24 @@ const TAG_LEN = 16;  // bytes
 // Rejects plaintext API keys (sk-ant-..., sk-...) which don't contain colons.
 const ENCRYPTED_RE = /^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/i;
 
+// Cache the parsed key so we don't run the regex + Buffer.from on every encrypt/decrypt call.
+// 'unchecked' = not yet loaded; null = key absent/invalid; Buffer = ready key.
+let _cachedKey: Buffer | null | 'unchecked' = 'unchecked';
+
 function loadKey(): Buffer | null {
+  if (_cachedKey !== 'unchecked') return _cachedKey;
   const hex = process.env.ENCRYPTION_KEY;
-  if (!hex) return null;
+  if (!hex) { _cachedKey = null; return null; }
   if (!/^[0-9a-f]{64}$/i.test(hex)) {
     console.error(
       '[Crypto] ENCRYPTION_KEY must be exactly 64 hex characters (0-9, a-f). ' +
       'Current value has length ' + hex.length + ' and/or contains non-hex characters. Key ignored — storing plaintext.',
     );
+    _cachedKey = null;
     return null;
   }
-  return Buffer.from(hex, 'hex');
+  _cachedKey = Buffer.from(hex, 'hex');
+  return _cachedKey;
 }
 
 /**

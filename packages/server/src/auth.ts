@@ -309,7 +309,9 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
   router.post('/api/auth/login', authRateLimit(10, 15 * 60 * 1_000), async (req: Request, res: Response) => {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    // typeof guards prevent TypeError when non-string values (e.g. 123, null) arrive
+    // via malformed JSON — same hardening as the signup endpoint. (CWE-20)
+    if (!email || typeof email !== 'string' || !password || typeof password !== 'string') {
       res.status(400).json({ error: 'Email and password required' });
       return;
     }
