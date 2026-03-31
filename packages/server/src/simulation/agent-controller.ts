@@ -3378,15 +3378,6 @@ CONSEQUENCE: [What happens to violators — reputation loss, exile vote, food pe
 
 The rule must be about actions that actually exist in this village: gathering, eating, giving, stealing, fighting, trading, trespassing, hoarding, sharing. Don't write rules about things people can't actually do or check.
 
-Good rule:
-RULE: Anyone with more than 5 food must give 1 to a person with none, if they are at the same location.
-APPLIES TO: Everyone
-CONSEQUENCE: Violator loses 10 reputation and gets publicly named on the board.
-
-Bad rule:
-RULE: Commons transparency
-(What does this mean? What action? What consequence?)
-
 Write ONLY the rule in the format above. Stay in character.`;
         ruleContent = await this.cognition.llmProvider.complete(
           `You are ${this.agent.config.name}. Write only the proposed rule in RULE/APPLIES TO/CONSEQUENCE format. No preamble, no quotes.`,
