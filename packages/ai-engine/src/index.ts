@@ -13,6 +13,7 @@ import { ActionCache } from './action-cache.js';
 // --- World Rules + Action Resolver (deterministic physics) ---
 export * from './world-rules.js';
 export * from './action-resolver.js';
+export { MAP_REGISTRY, getMapConfig } from './maps/index.js';
 import { buildGameRules } from './game-rules.js';
 
 // --- Memory Stream ---
@@ -107,7 +108,7 @@ export class AgentCognition {
       ? Array.from(this.knownPlaces.values()).join('\n')
       : 'You don\'t know this area yet. Look around, explore, and talk to people to learn what\'s here.';
 
-    return `${GAME_RULES}
+    return `${this.gameRulesOverride ?? GAME_RULES}
 
 PLACES I KNOW:
 ${placesLines}`;
@@ -128,17 +129,22 @@ ${placesLines}`;
   /** Four Stream Memory — categorical retrieval replacing TF-IDF flat pool */
   public fourStream?: FourStreamMemory;
 
+  /** Custom game rules text — if not provided, uses auto-generated village rules */
+  private gameRulesOverride?: string;
+
   constructor(
     private agent: Agent,
     private memory: MemoryStore,
     private llm: LLMProvider,
     parts?: WorldViewParts,
+    gameRules?: string,
   ) {
     if (parts) {
       this.knownPlaces = new Map(Object.entries(parts.knownPlaces));
       this.myExperience = parts.myExperience;
       this.knowsPlaza = parts.knowsPlaza ?? false;
     }
+    this.gameRulesOverride = gameRules;
   }
 
   /** Public accessor for the LLM provider (used by FourStreamMemory for dossier/belief generation) */
