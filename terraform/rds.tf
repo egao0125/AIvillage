@@ -118,9 +118,10 @@ resource "aws_db_instance" "this" {
 
   multi_az            = true
   storage_encrypted   = true
+  kms_key_id          = aws_kms_key.rds.arn  # CMK for audit trail + rotation; see kms.tf
   deletion_protection = true
 
-  backup_retention_period = 7
+  backup_retention_period = 14  # 14 days (AWS Well-Architected REL-11 minimum for production)
   backup_window           = "03:00-04:00"
   maintenance_window      = "Mon:04:00-Mon:05:00"
 

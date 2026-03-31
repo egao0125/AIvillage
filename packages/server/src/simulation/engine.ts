@@ -2374,10 +2374,14 @@ Answer with ONLY one word: "support" or "oppose".`,
     }
     // Block periodic saves for the duration of the wipe so save_requested cannot
     // interleave with the DELETE+INSERT sequence inside freshStart.
+    // try-finally guarantees the flag is cleared even if an exception is thrown
+    // mid-way (e.g. RDS write fails during memory seeding), preventing a permanent
+    // stall of the persistence layer.
     this.isReloadingState = true;
     const wasRunning = this.isRunning;
     this.pause();
     console.log('[Engine] Fresh start — wiping world state and memories');
+    try {
 
     // 0. Kill old controllers/cognitions FIRST to stop all in-flight writes
     this.controllers.clear();
@@ -2556,13 +2560,15 @@ Answer with ONLY one word: "support" or "oppose".`,
       console.log('[FreshStart] Final cleanup + re-seed complete');
     }
 
-    // 6. Resume if was running
-    this.isReloadingState = false; // re-enable periodic saves
-    if (wasRunning) {
-      this.start();
+      // 6. Resume if was running
+      if (wasRunning) {
+        this.start();
+      }
+      console.log('[Engine] Fresh start complete — day 1, all agents reset');
+    } finally {
+      // Always re-enable periodic saves — even if an exception aborted the wipe.
+      this.isReloadingState = false;
     }
-
-    console.log('[Engine] Fresh start complete — day 1, all agents reset');
   }
 
   get isConfigured(): boolean {

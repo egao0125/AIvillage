@@ -440,13 +440,16 @@ io.on('connection', (socket) => {
     // (CWE-20: Improper Input Validation)
     if (typeof data?.x !== 'number' || !Number.isFinite(data.x) ||
         typeof data?.y !== 'number' || !Number.isFinite(data.y)) return;
-    // Clamp width/height to prevent memory amplification via very large viewport requests
-    // (OWASP API4: Unrestricted Resource Consumption)
+    // Clamp width/height to prevent memory amplification via very large viewport requests.
+    // Type-check width/height too — Math.min(NaN, 200) = NaN, which would corrupt spatial queries.
+    // (OWASP API4: Unrestricted Resource Consumption / CWE-20: Improper Input Validation)
+    const rawWidth = typeof data?.width === 'number' && Number.isFinite(data.width) ? data.width : 40;
+    const rawHeight = typeof data?.height === 'number' && Number.isFinite(data.height) ? data.height : 30;
     engine.viewportManager.setViewport(socket.id, {
       x: data.x,
       y: data.y,
-      width: Math.min(data.width ?? 40, 200),
-      height: Math.min(data.height ?? 30, 200),
+      width: Math.min(rawWidth, 200),
+      height: Math.min(rawHeight, 200),
       buffer: 10,
     });
     // Send catch-up: agents currently in the new viewport

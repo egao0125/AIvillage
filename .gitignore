@@ -16,4 +16,9 @@ terraform/.terraform/
 terraform/.terraform.lock.hcl
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
+# Numbered backup files created by terraform state mv / import operations
+terraform/terraform.tfstate.*.backup
+# Saved plan files (may contain plaintext secrets — never commit)
+terraform/tfplan
+terraform/tfplan.json
 terraform/terraform.tfvars

@@ -36,6 +36,11 @@ export function connectSocket(): Socket {
   socket = io('/', {
     transports: ['websocket', 'polling'],
     auth: (cb) => cb({ token: getToken() ?? '' }),
+    // Cap reconnection attempts to prevent a permanently-gone server from causing
+    // an infinite background retry loop in the browser tab.
+    // 10 attempts × exponential back-off ≈ ~5 minutes of retrying, then the UI
+    // shows a "connection lost — reload" state via the 'reconnect_failed' event.
+    reconnectionAttempts: 10,
   });
 
   socket.on('connect', () => {
@@ -51,6 +56,12 @@ export function connectSocket(): Socket {
       clearInterval(lastSeenDayTimer);
       lastSeenDayTimer = null;
     }
+  });
+
+  // All reconnection attempts exhausted — inform the user so they know to reload.
+  socket.on('reconnect_failed', () => {
+    console.error('[Socket] Reconnection failed after max attempts. Please reload the page.');
+    gameStore.setConnected(false);
   });
 
   socket.on('world:snapshot', (snapshot: WorldSnapshot) => {

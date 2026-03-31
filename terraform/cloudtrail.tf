@@ -163,6 +163,49 @@ resource "aws_s3_bucket_policy" "cloudtrail" {
   depends_on = [aws_s3_bucket_public_access_block.cloudtrail]
 }
 
+# Server access logging for CloudTrail bucket — CIS AWS Foundations 2.8.
+# Uses a dedicated logging bucket so that the audit log bucket itself has
+# an immutable access trail.  The logs bucket uses AWS-managed SSE (not CMK)
+# to avoid a circular dependency between the KMS key and the logging bucket.
+resource "aws_s3_bucket" "cloudtrail_access_logs" {
+  bucket        = "ai-village-cloudtrail-access-logs-${data.aws_caller_identity.current.account_id}"
+  force_destroy = false
+  tags          = var.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "cloudtrail_access_logs" {
+  bucket                  = aws_s3_bucket.cloudtrail_access_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "cloudtrail_access_logs" {
+  bucket = aws_s3_bucket.cloudtrail_access_logs.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"  # aws/s3 managed key — avoids CMK circular dep
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail_access_logs" {
+  bucket = aws_s3_bucket.cloudtrail_access_logs.id
+  rule {
+    id     = "access-log-retention"
+    status = "Enabled"
+    filter {}
+    expiration { days = 90 }
+  }
+}
+
+resource "aws_s3_bucket_logging" "cloudtrail" {
+  bucket        = aws_s3_bucket.cloudtrail.id
+  target_bucket = aws_s3_bucket.cloudtrail_access_logs.id
+  target_prefix = "cloudtrail-bucket-access/"
+}
+
 # ---------------------------------------------------------------------------
 # CloudWatch Logs — real-time trail delivery for alerting
 # ---------------------------------------------------------------------------

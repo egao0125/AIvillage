@@ -1,9 +1,10 @@
 # ---------------------------------------------------------------------------
 # KMS Customer-Managed Keys (CMK)
 #
-# Two separate CMKs with distinct trust domains:
+# CMKs with distinct trust domains:
 #   secrets_manager — encrypts all Secrets Manager secrets (ai-village/*)
 #   ecr             — encrypts ECR container image layers
+#   rds             — encrypts RDS storage (customer-managed for audit trail + rotation)
 #
 # Key Policy design:
 #   Root account: kms:* for break-glass key administration
@@ -139,4 +140,62 @@ resource "aws_kms_key" "eks" {
 resource "aws_kms_alias" "eks" {
   name          = "alias/ai-village-eks"
   target_key_id = aws_kms_key.eks.key_id
+}
+
+# ---------------------------------------------------------------------------
+# CMK for RDS storage encryption.
+#
+# AWS defaults to the aws/rds managed key when kms_key_id is omitted — that
+# key cannot be rotated on a custom schedule and its usage is not visible in
+# CloudTrail audit logs at the statement level.  Using a CMK provides:
+#   - Annual automatic key rotation (NIST SP 800-57 §5.3)
+#   - Per-statement CloudTrail visibility (kms:GenerateDataKey*, kms:Decrypt)
+#   - Break-glass revocation: disabling the CMK renders RDS storage unreadable
+#
+# Key policy:
+#   Root account: kms:* for break-glass administration
+#   RDS service principal: GenerateDataKey* + Decrypt (required for encrypted storage)
+# ---------------------------------------------------------------------------
+
+resource "aws_kms_key" "rds" {
+  description             = "CMK for AI Village RDS PostgreSQL storage encryption"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAdministration"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        # RDS needs key policy permission (IAM policy alone is insufficient for storage CMK).
+        Sid    = "AllowRDSStorageEncryption"
+        Effect = "Allow"
+        Principal = {
+          Service = "rds.amazonaws.com"
+        }
+        Action = [
+          "kms:GenerateDataKey*",
+          "kms:Decrypt",
+          "kms:CreateGrant",
+          "kms:DescribeKey",
+        ]
+        Resource = "*"
+      },
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_kms_alias" "rds" {
+  name          = "alias/ai-village-rds"
+  target_key_id = aws_kms_key.rds.key_id
 }
