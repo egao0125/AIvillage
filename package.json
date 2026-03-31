@@ -12,7 +12,14 @@
     "test": "pnpm run --recursive test",
     "spawn": "pnpm --filter @ai-village/server spawn"
   },
-  "keywords": ["ai", "agents", "simulation", "generative-agents", "pixel-art", "mmo"],
+  "keywords": [
+    "ai",
+    "agents",
+    "simulation",
+    "generative-agents",
+    "pixel-art",
+    "mmo"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
