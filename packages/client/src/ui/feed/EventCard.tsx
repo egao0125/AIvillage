@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import type { VillageEvent } from './types';
 import type { ChatEntry } from '../../core/GameStore';
 import { ConversationExpander } from './ConversationExpander';
-import { ConsequencesExpander } from './ConsequencesExpander';
 import { COLORS, FONTS } from '../styles';
 
 const TRUNCATE_LENGTH = 140;
@@ -12,9 +11,6 @@ const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }
   rejected: { bg: '#ef444433', color: '#ef4444', label: 'REJECTED' },
   repealed: { bg: '#6b728033', color: '#9ca3af', label: 'REPEALED' },
 };
-
-// Event types that have structured data worth showing in the details expander
-const TYPES_WITH_STRUCTURED_DATA = new Set(['rule', 'election', 'institution']);
 
 interface EventCardProps {
   event: VillageEvent;
@@ -30,7 +26,6 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
     ? event.headline.slice(0, TRUNCATE_LENGTH) + '...'
     : event.headline;
 
-  const hasStructuredData = TYPES_WITH_STRUCTURED_DATA.has(event.type) && !!event.sourceData;
   const statusStyle = event.status ? STATUS_STYLES[event.status] : null;
 
   return (
@@ -121,30 +116,6 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
           </button>
         )}
       </div>
-
-      {/* Details toggle — for short cards, or always visible when long card is expanded */}
-      {hasStructuredData && (
-        <>
-          {!isLong && (
-            <button
-              onClick={() => setExpanded(prev => !prev)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: COLORS.accent,
-                fontFamily: FONTS.body,
-                fontSize: '11px',
-                cursor: 'pointer',
-                padding: 0,
-                marginTop: 8,
-              }}
-            >
-              {expanded ? '▾ Hide details' : '▸ Details'}
-            </button>
-          )}
-          {expanded && <ConsequencesExpander event={event} />}
-        </>
-      )}
 
       {/* Conversation expander */}
       {event.sourceConversationId && (
