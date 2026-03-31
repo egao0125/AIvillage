@@ -1658,12 +1658,17 @@ export class AgentController {
     }
     const propertyInfo = lines.join('\n');
 
-    // Build village rules from passed board posts
+    // Build village rules from passed board posts — structured format when available
     let villageRules: string | undefined;
     const passedRules = this.world.getActiveBoard()
       .filter(p => p.type === 'rule' && p.ruleStatus === 'passed');
     if (passedRules.length > 0) {
-      villageRules = passedRules.map((r, i) => `${i + 1}. ${r.content}`).join('\n');
+      villageRules = passedRules.map((r, i) => {
+        if (r.ruleAction && r.ruleConsequence) {
+          return `${i + 1}. ${r.ruleAction}\n   Applies to: ${r.ruleAppliesTo || 'Everyone'}\n   Consequence: ${r.ruleConsequence}`;
+        }
+        return `${i + 1}. ${r.content}`;
+      }).join('\n\n');
     }
 
     // Build group info from Institution membership
@@ -3354,6 +3359,9 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
     // --- Propose Rule ---
     if (actionId === 'propose_rule') {
       let ruleContent: string;
+      let ruleAction: string | undefined;
+      let ruleAppliesTo: string | undefined;
+      let ruleConsequence: string | undefined;
       try {
         const identity = this.cognition.identityBlock;
         const rulePrompt = `${identity}
@@ -3362,19 +3370,41 @@ You decided to propose a rule for the village.
 
 Your reason: ${decision.reason}
 
-Write the ACTUAL RULE you would propose. This is a public proposal — other villagers will read and vote on it. Not your inner thoughts — what you actually write down. Stay in character.
+Write a rule that other villagers will vote on. The rule MUST follow this exact format:
 
-Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
+RULE: [What specific action is required or prohibited]
+APPLIES TO: [Who — everyone, property owners, group members, etc.]
+CONSEQUENCE: [What happens to violators — reputation loss, exile vote, food penalty, etc.]
+
+The rule must be about actions that actually exist in this village: gathering, eating, giving, stealing, fighting, trading, trespassing, hoarding, sharing. Don't write rules about things people can't actually do or check.
+
+Good rule:
+RULE: Anyone with more than 5 food must give 1 to a person with none, if they are at the same location.
+APPLIES TO: Everyone
+CONSEQUENCE: Violator loses 10 reputation and gets publicly named on the board.
+
+Bad rule:
+RULE: Commons transparency
+(What does this mean? What action? What consequence?)
+
+Write ONLY the rule in the format above. Stay in character.`;
         ruleContent = await this.cognition.llmProvider.complete(
-          `You are ${this.agent.config.name}. Write only the proposed rule. No preamble, no quotes.`,
+          `You are ${this.agent.config.name}. Write only the proposed rule in RULE/APPLIES TO/CONSEQUENCE format. No preamble, no quotes.`,
           rulePrompt,
         );
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
-        ruleContent = this.ensureCompleteSentence(ruleContent);
-        if (ruleContent.length < 3 || ruleContent.length > 300) {
+        if (ruleContent.length < 3 || ruleContent.length > 500) {
           console.warn(`[ProposeRule] ${this.agent.config.name} content length out of range (${ruleContent.length}), using reason`);
           ruleContent = this.truncateAtSentence(decision.reason, 200);
         }
+
+        // Parse structured rule fields
+        const ruleMatch = ruleContent.match(/RULE:\s*(.+?)(?=\nAPPLIES TO:)/is);
+        const appliesMatch = ruleContent.match(/APPLIES TO:\s*(.+?)(?=\nCONSEQUENCE:)/is);
+        const conseqMatch = ruleContent.match(/CONSEQUENCE:\s*(.+?)$/is);
+        ruleAction = ruleMatch?.[1]?.trim();
+        ruleAppliesTo = appliesMatch?.[1]?.trim() || 'Everyone';
+        ruleConsequence = conseqMatch?.[1]?.trim() || 'Reputation loss';
       } catch (err) {
         console.error(`[ProposeRule] ${this.agent.config.name} LLM call failed:`, err);
         ruleContent = this.truncateAtSentence(decision.reason, 200);
@@ -3386,11 +3416,14 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         authorName: this.agent.config.name,
         type: 'rule' as const,
         channel: 'all' as const,
-        content: ruleContent,
+        content: ruleAction || ruleContent,
         timestamp: Date.now(),
         day: this.world.time.day,
         votes: [] as { agentId: string; vote: 'like' | 'dislike' }[],
         ruleStatus: 'proposed' as const,
+        ruleAction,
+        ruleAppliesTo,
+        ruleConsequence,
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
