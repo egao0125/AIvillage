@@ -11,6 +11,7 @@ export type EventType =
   | 'institution'
   | 'crisis'
   | 'announcement'
+  | 'news'
   | 'bounty'
   | 'threat';
 
@@ -43,6 +44,7 @@ export const EVENT_BADGES: Record<EventType, { icon: string; color: string }> = 
   institution:  { icon: '🏛️', color: '#8b5cf6' },
   crisis:       { icon: '⚡', color: '#ef4444' },
   announcement: { icon: '📢', color: '#60a5fa' },
+  news:         { icon: '📰', color: '#ec4899' },
   bounty:       { icon: '🎯', color: '#f97316' },
   threat:       { icon: '🔥', color: '#ef4444' },
 };
