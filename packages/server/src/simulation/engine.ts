@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
+import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
@@ -12,7 +12,7 @@ import { AgentController } from './agent-controller.js';
 import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
 import { AREAS } from '../map/village.js';
-import { RdsPersistence } from '../persistence/rds.js';
+import { RdsPersistence, type ControllerData } from '../persistence/rds.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
 import { CharacterTimeline } from './character-timeline.js';
@@ -347,8 +347,11 @@ export class SimulationEngine {
 
         // Fix 3: Restore emergent world state
         if (worldData.worldObjects && Array.isArray(worldData.worldObjects)) {
-          for (const obj of worldData.worldObjects as any[]) {
-            if (obj && obj.id) this.world.worldObjects.set(obj.id, obj);
+          for (const raw of worldData.worldObjects) {
+            if (raw != null && typeof raw === 'object' && 'id' in raw) {
+              const wo = raw as WorldObject;
+              this.world.worldObjects.set(wo.id, wo);
+            }
           }
         }
         if (worldData.culturalNames) {
@@ -394,8 +397,8 @@ export class SimulationEngine {
 
         // Restore per-agent BYOK key from RDS; fall back to env var round-robin
         const ctrlDataForKey = controllerDataMap.get(agent.id);
-        const savedKey = (ctrlDataForKey as any)?.apiKey as string | undefined;
-        const savedModel = (ctrlDataForKey as any)?.model as string | undefined;
+        const savedKey = ctrlDataForKey?.apiKey;
+        const savedModel = ctrlDataForKey?.model;
 
         let effectiveKey: string;
         let keyLabel: string;
@@ -425,11 +428,11 @@ export class SimulationEngine {
         // Create cognition with RDS-backed memory + throttled LLM
         const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
-        const savedParts = (ctrlDataForWorldView as any)?.worldViewParts as WorldViewParts | undefined;
+        const savedParts = ctrlDataForWorldView?.worldViewParts;
         const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts);
         // Reset MY EXPERIENCE to prevent stale worldView from previous simulation runs
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
-        const freshParts = buildStartingWorldViewParts(spawnArea as any);
+        const freshParts = buildStartingWorldViewParts(spawnArea);
         cognition.resetExperience(freshParts.myExperience);
         this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
         this.cognitions.set(agent.id, cognition);
@@ -462,7 +465,7 @@ export class SimulationEngine {
           controller.state = (restoredState === 'moving' || restoredState === 'performing' || restoredState === 'conversing' || restoredState === 'deciding')
             ? 'idle'
             : restoredState;
-          controller.currentGoals = (ctrlData as any).currentGoals ?? [];
+          controller.currentGoals = ctrlData.currentGoals ?? [];
           controller.activityTimer = ctrlData.activityTimer ?? 0;
           controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
         }
@@ -1549,25 +1552,30 @@ export class SimulationEngine {
 
   getSnapshot(): WorldSnapshot {
     const snapshot = this.world.getSnapshot();
-    // Enrich agents with worldView and sync memory streams from cognition
-    for (const agent of snapshot.agents) {
+    // Enrich agents with worldView and sync memory streams from cognition.
+    // Shallow-copy each agent's config to avoid mutating the originals in world.agents —
+    // deleting private fields from the original would strip soul/backstory from LLM prompts
+    // for the remainder of the process lifetime. (OWASP API3: Broken Object Property Level Auth)
+    for (let i = 0; i < snapshot.agents.length; i++) {
+      const agent = snapshot.agents[i];
       const cognition = this.cognitions.get(agent.id);
       if (cognition) {
         agent.worldView = cognition.worldView;
         cognition.fourStream?.syncAllToAgent();
       }
-      // Strip private character data — OWASP API3: Broken Object Property Level Authorization.
-      // soul/backstory/fears/desires/speechPattern are internal LLM-prompt fields only.
-      // Never sent to any client regardless of auth status (REST or Socket.IO).
-      const cfg = agent.config as unknown as Record<string, unknown>;
-      delete cfg['soul'];
-      delete cfg['backstory'];
-      delete cfg['fears'];
-      delete cfg['desires'];
-      delete cfg['speechPattern'];
-      delete cfg['coreValues'];
-      delete cfg['contradictions'];
-      delete cfg['goal'];
+      // Shallow-copy config — strip private fields only from the snapshot copy,
+      // keeping the original agent.config intact for LLM prompts.
+      const rawCfg = agent.config as unknown as Record<string, unknown>;
+      const safeCfg = { ...rawCfg };
+      delete safeCfg['soul'];
+      delete safeCfg['backstory'];
+      delete safeCfg['fears'];
+      delete safeCfg['desires'];
+      delete safeCfg['speechPattern'];
+      delete safeCfg['coreValues'];
+      delete safeCfg['contradictions'];
+      delete safeCfg['goal'];
+      snapshot.agents[i] = { ...agent, config: safeCfg as unknown as typeof agent.config };
     }
     snapshot.narratives = this.narrator.getRecentNarratives();
     snapshot.storylines = this.storylineDetector.getStorylines();

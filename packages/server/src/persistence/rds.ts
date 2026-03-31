@@ -230,7 +230,9 @@ export class RdsPersistence {
         console.log(`[Persistence] Saved: ${world.agents.size} agents, ${controllers.size} controllers`);
         return;
       } catch (err) {
-        await client.query('ROLLBACK').catch(() => { /* ignore rollback error */ });
+        await client.query('ROLLBACK').catch((rollbackErr: unknown) => {
+          console.warn('[RDS] ROLLBACK failed (connection may already be dead):', (rollbackErr as Error).message);
+        });
         const transient = this.isTransientError(err);
         if (transient && attempt < MAX_RETRIES) {
           console.warn(`[RDS] saveAll transient error (attempt ${attempt}/${MAX_RETRIES}), retrying in ${delay}ms:`, (err as Error).message);

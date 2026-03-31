@@ -7,7 +7,7 @@ import { createAdapter } from '@socket.io/redis-streams-adapter';
 import { timingSafeEqual, createHash } from 'crypto';
 import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
-import { createAuthRouter, optionalAuth } from './auth.js';
+import { createAuthRouter, optionalAuth, verifyToken, stopAuthRateLimitCleaner } from './auth.js';
 import { setupRedis, closeRedis } from './redis.js';
 import { isEncryptionConfigured } from './crypto.js';
 import path from 'path';
@@ -91,10 +91,14 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
+      // unsafe-inline is required for Tailwind CSS utility classes in inline styles.
+      // TODO: Replace with nonce-based CSP once a nonce middleware is in place (OWASP CSP Cheat Sheet)
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:', 'https:'],
       connectSrc: ["'self'", ...wssOrigins],
       frameAncestors: ["'none'"],
+      // Upgrade HTTP to HTTPS automatically in production (HSTS layer 2)
+      ...(isProduction && { upgradeInsecureRequests: [] }),
     },
   },
   strictTransportSecurity: isProduction
@@ -102,6 +106,16 @@ app.use(helmet({
     : false,
   frameguard: { action: 'deny' },
 }));
+
+// Permissions-Policy: restrict access to sensitive browser APIs not used by AI Village.
+// (OWASP Security Headers Cheat Sheet)
+app.use((_req, res, next) => {
+  res.setHeader(
+    'Permissions-Policy',
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(self)',
+  );
+  next();
+});
 
 // Limit request body size to prevent abuse
 app.use(express.json({ limit: '16kb' }));
@@ -166,6 +180,21 @@ function isDevAuthorized(token: unknown): boolean {
   return timingSafeEqual(DEV_ADMIN_TOKEN_HASH, tokenHash);
 }
 
+// ---------------------------------------------------------------------------
+// Socket.IO optional authentication middleware.
+// Spectators may connect without auth; token carriers get socket.data.userId set.
+// LLM-cost events (agent:watch-thoughts, recap:request) check for socket.data.userId.
+// (OWASP API4: Unrestricted Resource Consumption — unauthenticated LLM calls blocked)
+// ---------------------------------------------------------------------------
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (typeof token === 'string' && token.length > 0) {
+    const userId = await verifyToken(token);
+    if (userId) socket.data.userId = userId;
+  }
+  next(); // always allow connection — spectators are valid users
+});
+
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
 
@@ -187,6 +216,11 @@ io.on('connection', (socket) => {
   // (OWASP API4: Unrestricted Resource Consumption)
   socket.on('agent:watch-thoughts', (agentId: string) => {
     if (typeof agentId !== 'string' || !UUID_REGEX.test(agentId)) return;
+    // LLM-costing event: require an authenticated session to prevent free LLM amplification.
+    if (!socket.data.userId) {
+      socket.emit('agent:thought', { agentId, thought: null, error: 'Authentication required' });
+      return;
+    }
     const now = Date.now();
     const lastSwitch = watchSwitchLast.get(socket.id) ?? 0;
     if (now - lastSwitch < 5_000) return;
@@ -244,6 +278,11 @@ io.on('connection', (socket) => {
   const recapLastRequest = new Map<string, number>();
   socket.on('recap:request', async (data: { sinceDay: number }) => {
     if (typeof data?.sinceDay !== 'number') return;
+    // LLM-costing event: require authenticated session.
+    if (!socket.data.userId) {
+      socket.emit('recap:error', { error: 'Authentication required' });
+      return;
+    }
     const now = Date.now();
     const last = recapLastRequest.get(socket.id) ?? 0;
     if (now - last < 60_000) {
@@ -402,6 +441,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Stop accepting new connections; close existing keep-alive connections immediately
   // closeAllConnections() is Node.js 18.2+ — terminates idle keep-alive sockets
   // that httpServer.close() alone would leave open indefinitely (k8s SIGTERM issue)
+  // Stop auth rate-limit cleanup interval
+  stopAuthRateLimitCleaner();
+
   httpServer.close(() => console.log('[Server] HTTP server closed'));
   httpServer.closeAllConnections();
 

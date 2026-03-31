@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import { gameStore } from '../core/GameStore';
 import { eventBus } from '../core/EventBus';
+import { getToken } from '../utils/auth';
 import type {
   Agent,
   AgentConfig,
@@ -30,7 +31,12 @@ let lastSeenDayTimer: ReturnType<typeof setInterval> | null = null;
 export function connectSocket(): Socket {
   if (socket) return socket;
 
-  socket = io('/', { transports: ['websocket', 'polling'] });
+  // Pass auth token as a callback so it is re-evaluated on every reconnect attempt.
+  // This ensures a refreshed token is used if the original expires mid-session.
+  socket = io('/', {
+    transports: ['websocket', 'polling'],
+    auth: (cb) => cb({ token: getToken() ?? '' }),
+  });
 
   socket.on('connect', () => {
     console.log('Connected to AI Village server');
@@ -65,15 +71,16 @@ export function connectSocket(): Socket {
     if (snapshot.villageMemory) gameStore.setVillageMemory(snapshot.villageMemory);
 
     // Check if we need a recap (returning after 2+ game days absence).
-    // localStorage may throw SecurityError in private browsing mode — guard all access.
+    // sessionStorage is tab-scoped and cleared on tab close — reduces XSS blast radius
+    // vs. localStorage which persists across sessions and is readable by all same-origin scripts.
     try {
-      const lastSeenDay = parseInt(localStorage.getItem('ai-village-last-seen-day') || '0');
+      const lastSeenDay = parseInt(sessionStorage.getItem('ai-village-last-seen-day') || '0');
       if (lastSeenDay > 0 && snapshot.time.day > lastSeenDay + 2) {
         socket?.emit('recap:request', { sinceDay: lastSeenDay });
       }
-      localStorage.setItem('ai-village-last-seen-day', String(snapshot.time.day));
+      sessionStorage.setItem('ai-village-last-seen-day', String(snapshot.time.day));
     } catch {
-      // localStorage unavailable (private browsing / storage quota) — skip recap tracking
+      // sessionStorage unavailable (private browsing / storage quota) — skip recap tracking
     }
 
     eventBus.emit('world:snapshot', snapshot);
@@ -323,9 +330,9 @@ export function connectSocket(): Socket {
     const time = gameStore.getState().time;
     if (time.day > 0) {
       try {
-        localStorage.setItem('ai-village-last-seen-day', String(time.day));
+        sessionStorage.setItem('ai-village-last-seen-day', String(time.day));
       } catch {
-        // localStorage unavailable (private browsing / storage quota) — skip
+        // sessionStorage unavailable (private browsing / storage quota) — skip
       }
     }
   }, 60_000);

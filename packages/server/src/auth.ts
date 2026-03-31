@@ -19,12 +19,17 @@ import { getRedis } from './redis.js';
 
 interface RateLimitEntry { count: number; resetAt: number; }
 const authRateLimitStore: Map<string, RateLimitEntry> = new Map();
-setInterval(() => {
+const authRateLimitCleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [ip, e] of authRateLimitStore) {
     if (now > e.resetAt) authRateLimitStore.delete(ip);
   }
 }, 5 * 60 * 1_000);
+
+/** Stop the rate-limit store cleanup interval. Call during graceful shutdown. */
+export function stopAuthRateLimitCleaner(): void {
+  clearInterval(authRateLimitCleanupInterval);
+}
 
 function authRateLimit(maxRequests: number, windowMs: number) {
   const windowSec = Math.ceil(windowMs / 1_000);
@@ -117,6 +122,25 @@ const JWKS = createRemoteJWKSet(
   ),
   { cacheMaxAge: 10 * 60 * 1_000 }, // Refresh JWKS cache every 10 minutes
 );
+
+/**
+ * Verify a Cognito access token and return the user's sub (userId), or null if invalid.
+ * Shared by Express middleware (optionalAuth) and Socket.IO io.use() middleware.
+ */
+export async function verifyToken(token: string): Promise<string | null> {
+  try {
+    const { payload } = await jwtVerify(token, JWKS, {
+      algorithms: ['RS256'],
+      clockTolerance: '30s',
+      issuer: `https://cognito-idp.${COGNITO_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`,
+    });
+    if (payload['token_use'] !== 'access') return null;
+    if (payload['client_id'] !== COGNITO_CLIENT_ID) return null;
+    return (payload.sub as string) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Middleware: extract user from Bearer token (non-blocking — sets req.userId or null).
