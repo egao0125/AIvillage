@@ -648,6 +648,9 @@ export interface BoardPost {
   ruleStatus?: 'proposed' | 'passed' | 'rejected' | 'repealed';
   claimTarget?: { type: 'area' | 'building'; id: string };  // if this is a property claim vote
   comments?: { agentId: string; agentName: string; content: string; timestamp: number }[];
+  ruleAction?: string;      // structured: what specific action the rule requires/prohibits
+  ruleAppliesTo?: string;   // structured: who the rule applies to
+  ruleConsequence?: string; // structured: what happens on violation
 }
 
 export interface WorldSnapshot {

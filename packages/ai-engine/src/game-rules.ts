@@ -172,7 +172,7 @@ Every action on this list is a real game mechanic. There are no other actions. I
 
 Items: All items are in personal inventories. You carry what you have. give moves one item from you to someone at your location. There is no shared storage.
 
-Rules: Anyone proposes, everyone votes at day's end, majority passes. Rules are public but compliance is each person's choice. Violating costs rep -10.
+Rules: Anyone can propose a rule. Every rule must specify what action is required, who it applies to, and what happens to violators. Everyone votes at day's end. Majority passes. Passed rules are shown to everyone on every decision. Violating costs rep -10.
 
 Groups: ally_NAME creates or invites. Leader can kick and set rules. betray_NAME leaves. Dissolves at ≤1 member. Roles are social labels — they don't change your action menu.
 
