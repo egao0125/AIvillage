@@ -193,9 +193,16 @@ resource "aws_kms_key" "rds" {
   })
 
   tags = var.tags
+
+  lifecycle {
+    # This is the AWS-managed default RDS encryption key (imported, not created by Terraform).
+    # Its key policy does not grant kms:TagResource/kms:PutKeyPolicy to SSO roles.
+    # ignore_changes = all prevents any update attempts — Terraform tracks it in state
+    # only to allow aws_kms_alias.rds and aws_db_instance.this to reference it.
+    ignore_changes = all
+  }
 }
 
-resource "aws_kms_alias" "rds" {
-  name          = "alias/ai-village-rds"
-  target_key_id = aws_kms_key.rds.key_id
-}
+# aws_kms_alias.rds intentionally omitted:
+# The existing RDS key is the AWS-managed default key; its policy does not
+# permit kms:CreateAlias from SSO roles. The key is referenced by ARN directly.

@@ -15,7 +15,7 @@
 
 resource "aws_wafv2_web_acl" "alb" {
   name        = "${var.cluster_name}-waf"
-  description = "WAF Web ACL for AI Village ALB — OWASP Top 10 + IP reputation"
+  description = "WAF Web ACL for AI Village ALB. OWASP Top 10 + IP reputation"
   scope       = "REGIONAL"
 
   default_action {
@@ -34,7 +34,7 @@ resource "aws_wafv2_web_acl" "alb" {
     statement {
       managed_rule_group_statement {
         vendor_name = "AWS"
-        name        = "AmazonIpReputationList"
+        name        = "AWSManagedRulesAmazonIpReputationList"
       }
     }
 
