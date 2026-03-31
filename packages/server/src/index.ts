@@ -3,7 +3,7 @@ import express from 'express';
 import helmet from 'helmet';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { createAdapter } from '@socket.io/redis-adapter';
+import { createAdapter } from '@socket.io/redis-streams-adapter';
 import { timingSafeEqual, createHash } from 'crypto';
 import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
@@ -46,7 +46,7 @@ if (isProduction && process.env.DEV_ADMIN_TOKEN) {
   process.exit(1);
 }
 
-// Redis: setup pub/sub clients before Socket.IO so the adapter is ready at startup.
+// Redis: setup client before Socket.IO so the adapter is ready at startup.
 // Falls back to in-memory (single-instance) when REDIS_URL is not set.
 const redis = setupRedis();
 
@@ -62,8 +62,12 @@ const io = new Server(httpServer, {
 });
 
 if (redis) {
-  io.adapter(createAdapter(redis.pub, redis.sub));
-  console.log('[Server] Socket.IO Redis adapter enabled — multi-instance ready');
+  // Redis Streams adapter: uses XADD/XREAD instead of PubSub.
+  // Events are buffered in the stream so they survive temporary Redis disconnections
+  // without packet loss — unlike the PubSub adapter which drops messages while offline.
+  // maxLen caps stream growth (sliding window of last 10,000 events).
+  io.adapter(createAdapter(redis, { maxLen: 10_000 }));
+  console.log('[Server] Socket.IO Redis Streams adapter enabled — multi-instance ready');
 } else {
   console.log('[Server] Socket.IO using in-memory adapter (single-instance only)');
 }

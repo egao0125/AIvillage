@@ -50,9 +50,12 @@ function rateLimit(maxRequests: number, windowMs: number) {
         if (count === 1) await redis.expire(key, windowSec);
         if (count > maxRequests) {
           const ttl = await redis.ttl(key);
+          const retryAfter = Math.max(ttl, 1);
+          // RFC 6585 §4 — set Retry-After header so HTTP clients can respect it automatically
+          res.set('Retry-After', String(retryAfter));
           res.status(429).json({
             error: 'Too many requests. Please try again later.',
-            retryAfter: Math.max(ttl, 1),
+            retryAfter,
           });
           return;
         }
@@ -73,9 +76,11 @@ function rateLimit(maxRequests: number, windowMs: number) {
       return;
     }
     if (entry.count >= maxRequests) {
+      const retryAfter = Math.ceil((entry.resetAt - now) / 1_000);
+      res.set('Retry-After', String(retryAfter));
       res.status(429).json({
         error: 'Too many requests. Please try again later.',
-        retryAfter: Math.ceil((entry.resetAt - now) / 1_000),
+        retryAfter,
       });
       return;
     }

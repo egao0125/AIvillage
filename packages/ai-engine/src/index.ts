@@ -1597,7 +1597,8 @@ Output a JSON array ONLY, no other text:
         notes: r.notes || [],
         lastUpdated: Date.now(),
       }));
-    } catch {
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} updateRelationships() parse failure:`, (err as Error).message);
       parsed = [];
     }
 

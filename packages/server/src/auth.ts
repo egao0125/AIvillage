@@ -41,7 +41,9 @@ function authRateLimit(maxRequests: number, windowMs: number) {
         if (count === 1) await redis.expire(key, windowSec);
         if (count > maxRequests) {
           const ttl = await redis.ttl(key);
-          res.status(429).json({ error: 'Too many requests. Please try again later.', retryAfter: Math.max(ttl, 1) });
+          const retryAfter = Math.max(ttl, 1);
+          res.set('Retry-After', String(retryAfter));
+          res.status(429).json({ error: 'Too many requests. Please try again later.', retryAfter });
           return;
         }
         next();
@@ -59,7 +61,9 @@ function authRateLimit(maxRequests: number, windowMs: number) {
       return;
     }
     if (entry.count >= maxRequests) {
-      res.status(429).json({ error: 'Too many requests. Please try again later.', retryAfter: Math.ceil((entry.resetAt - now) / 1_000) });
+      const retryAfter = Math.ceil((entry.resetAt - now) / 1_000);
+      res.set('Retry-After', String(retryAfter));
+      res.status(429).json({ error: 'Too many requests. Please try again later.', retryAfter });
       return;
     }
     entry.count++;

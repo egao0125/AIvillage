@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis';
 
-// Shared ioredis options for pub/sub clients used by Socket.IO adapter.
+// Shared ioredis options for the Redis client.
 // maxRetriesPerRequest: null — never throw on pending commands; keep retrying
 // until the connection recovers. This prevents the process from crashing when
 // Redis is temporarily unreachable.
@@ -11,17 +11,20 @@ const REDIS_OPTIONS = {
   lazyConnect: false,
 } as const;
 
-let _pub: Redis | null = null;
-let _sub: Redis | null = null;
+let _redis: Redis | null = null;
 
 /**
- * Initialize two Redis connections (pub + sub) from REDIS_URL.
+ * Initialize a Redis connection from REDIS_URL.
  * Returns null if REDIS_URL is not set — callers should fall back to in-memory.
  *
  * Call once at server startup (index.ts). Subsequent calls to getRedis() return
- * the same pub client without re-connecting.
+ * the same client without re-connecting.
+ *
+ * Used for:
+ *  - Socket.IO Redis Streams adapter (single connection, buffered delivery)
+ *  - Rate limiting (INCR + TTL)
  */
-export function setupRedis(): { pub: Redis; sub: Redis } | null {
+export function setupRedis(): Redis | null {
   const url = process.env.REDIS_URL;
   if (!url) {
     console.log(
@@ -33,33 +36,29 @@ export function setupRedis(): { pub: Redis; sub: Redis } | null {
   // Amazon Root CA は Node.js 組み込み CA ストアに含まれるため証明書検証を有効化
   // ElastiCache in-transit encryption の証明書は Amazon Trust Services が発行 (Mozilla trust store 収録済み)
   const tlsOptions = url.startsWith('rediss://') ? { tls: { rejectUnauthorized: true } } : {};
-  _pub = new Redis(url, { ...REDIS_OPTIONS, ...tlsOptions });
-  _sub = new Redis(url, { ...REDIS_OPTIONS, ...tlsOptions });
+  _redis = new Redis(url, { ...REDIS_OPTIONS, ...tlsOptions });
 
-  _pub.on('error', (err: Error) => console.error('[Redis pub] Error:', err.message || String(err)));
-  _sub.on('error', (err: Error) => console.error('[Redis sub] Error:', err.message || String(err)));
-  _pub.on('ready', () => console.log('[Redis] Connected and ready'));
+  _redis.on('error', (err: Error) => console.error('[Redis] Error:', err.message || String(err)));
+  _redis.on('ready', () => console.log('[Redis] Connected and ready'));
 
-  return { pub: _pub, sub: _sub };
+  return _redis;
 }
 
 /**
- * Returns the pub/general-purpose Redis client.
+ * Returns the Redis client.
  * Null when Redis is not configured (REDIS_URL unset).
  * Safe to call before setupRedis() — returns null.
  */
 export function getRedis(): Redis | null {
-  return _pub;
+  return _redis;
 }
 
 /**
- * Close both Redis connections immediately.
+ * Close the Redis connection immediately.
  * Uses disconnect() (force-close) rather than quit() so shutdown is instant
  * even when Redis is unreachable and pending reconnects are queued.
  */
 export async function closeRedis(): Promise<void> {
-  _pub?.disconnect();
-  _sub?.disconnect();
-  _pub = null;
-  _sub = null;
+  _redis?.disconnect();
+  _redis = null;
 }
