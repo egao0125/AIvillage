@@ -8,13 +8,12 @@ metadata:
     app.kubernetes.io/name: ai-village
 spec:
   # -----------------------------------------------------------------------
-  # IMPORTANT: Keep replicas: 1 until the following is resolved:
-  #   World state is persisted as id:'current' (single row);
-  #     two pods would overwrite each other (Last Write Wins).
-  #   Agent state lives entirely in process memory (Map<string,AgentController>);
-  #     pods cannot share simulation state.
-  # Once stateless persistence is implemented, set replicas: 2+ and
-  # enable sticky sessions in 05-ingress.yaml.
+  # replicas: 1 (HPA が CPU/Memory に応じて最大3まで自動スケール)
+  # leader election (Redis SETNX, TTL=30s) により1Podのみがシミュレーションを実行。
+  # 追加Podは HTTP/WS の読み込みサービング + フェイルオーバー待機として機能。
+  # VersionConflictError (楽観的ロック) が書き込み競合を防止。
+  # Socket.IO Redis Streams adapter により全Pod間でイベントを配信。
+  # 詳細: packages/server/src/cluster/leader-election.ts
   # -----------------------------------------------------------------------
   replicas: 1
   selector:

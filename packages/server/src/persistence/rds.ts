@@ -55,7 +55,7 @@ export class RdsPersistence {
   constructor(connectionString: string) {
     this.pool = new PgPool({
       connectionString,
-      max: 20,
+      max: 8,  // 3 pods × 8 = 24 connections (pgBouncer pool上限内)
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
       // TCP keepalive: detects dead connections early during RDS Multi-AZ failover
