@@ -218,7 +218,9 @@ export class AgentController {
   resetApiState(newCognition: AgentCognition): void {
     this.cognition = newCognition;
     this.apiExhausted = false;
+    this.apiAuthDead = false;  // A new key may be valid — clear the 401/403 dead flag
     this.consecutiveApiFailures = 0;
+    this.apiRecoveryTimer = 0;
     this.state = 'idle';
     console.log(`[Agent] ${this.agent.config.name} API key updated — resuming`);
     this.broadcaster.agentAction(this.agent.id, 'API key updated — resuming', '\u2705');
