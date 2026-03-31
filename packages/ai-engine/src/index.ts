@@ -13,6 +13,8 @@ import { ActionCache } from './action-cache.js';
 // --- World Rules + Action Resolver (deterministic physics) ---
 export * from './world-rules.js';
 export * from './action-resolver.js';
+export { MAP_REGISTRY, getMapConfig } from './maps/index.js';
+import { buildGameRules } from './game-rules.js';
 
 /**
  * Strip newlines and control characters from text embedded directly (non-XML) in LLM prompts.
@@ -43,85 +45,9 @@ export interface LLMProvider {
   model: string;
 }
 
-// --- Frozen preamble (physics + actions + behavior — never changes) ---
+// --- Game rules — auto-generated from world-rules.ts (single source of truth) ---
 
-const FROZEN_REALITY = `REALITY — VILLAGE SURVIVAL RULEBOOK
-
-=== DEATH ===
-Hunger and health are scored 0–100. Hunger rises ~1/hour while awake (+0.3/hour while sleeping outdoors; property owners sleep at no hunger cost). At hunger ≥70, health drains slowly. At hunger ≥85, health drains faster. At health 0, you die permanently — you lose everything: inventory, alliances, property, relationships. There is no resurrection. The dead are gone.
-
-=== VITALS ===
-- Hunger: 0 (full) → 100 (starving). Rises over time. Eating food reduces it by the food's nutrition value.
-- Energy: 0 (exhausted) → 100 (fresh). Actions cost energy. rest recovers +15. sleep recovers +40. Energy ≤5 drains health.
-- Health: 0 (dead) → 100 (healthy). Passive regen +2/hour when hunger <70 and energy >20. Medicine and poultices heal directly.
-
-=== SEASONS (30 days each: spring → summer → autumn → winter) ===
-- Spring: farms start producing, herbs plentiful, mild weather.
-- Summer: peak farm output (+50% crops), hot, violent storms possible.
-- Autumn: mushrooms peak, last chance to stockpile, cooling down.
-- Winter: farms produce NOTHING (0% crops, 0% herbs), lake mostly frozen (fish 10%), wood halved. Cold damages health without shelter. Without stored food, you starve.
-
-=== FOOD & NUTRITION (hunger reduction when eaten) ===
-stew: -30 (best meal). fish: -25. bread: -20. wheat: -15. vegetables: -15. mushrooms: -12. dried fish: -10 (lasts long). pickled veg: -7 (lasts long). herbs: -5. herb tea: -3 (but +15 energy).
-
-=== EVERY ACTION AND ITS EXACT EFFECT ===
-
---- Gathering (must be at the correct location) ---
-gather_RESOURCE — Harvest at your location. Items appear in YOUR inventory.
-  Farm: wheat (farming), vegetables (farming lv1+). Lake: fish (fishing), clay, stone (foraging). Forest: wood (woodwork), mushrooms (foraging). Garden: herbs, flowers (foraging).
-  Success: base chance + 5%/skill level (max 95%). Costs energy. Season modifiers apply. Daily stock limits per source. Tool bonus (hoe/fishing rod/axe) doubles yield.
-
---- Eating & Healing ---
-eat_ITEM — Consume 1 food from inventory. Hunger decreases by nutrition value. Item is gone.
-
---- Crafting (must be at correct location with ingredients) ---
-craft_RECIPE — Transform raw materials. Ingredients consumed.
-  Bakery: bread (2 wheat), bricks (3 clay). Café: stew (2 veg + 1 fish, cooking lv2), dried fish (2 fish), pickled veg (3 veg), herb tea (1 herb). Workshop: planks (2 wood, needs axe), rope (2 herbs), tools. Hospital: medicine (3 herbs, needs mortar). Garden: poultice (1 herb).
-
---- Social (replace NAME with first name in lowercase) ---
-give_NAME — Transfer items from your inventory to them. Rep +3.
-trade_NAME — Propose item trade. They accept or reject. Rep +2 each on success.
-steal_NAME — 40% success. Success: random item transfers + public news + rep -10. Failure: caught.
-fight_NAME — Both take damage (5-14 dealt, 3-14 taken). Winner loots up to 2 items. Rep -8. Public news.
-talk_NAME — Start a conversation. No cost.
-confront_NAME — Public confrontation. Forces response.
-threaten_NAME — Public threat. Rep -3.
-ally_NAME — Create or invite to group. Trust +20 both ways.
-betray_NAME — Leave shared group. Trust -30 with all members. Public news.
-
---- Group/Leader Powers ---
-kick_NAME — (Leaders only) Expel member. Rep -5 for kicked.
-propose_group_rule — (Leaders only) Set group rule directly.
-
---- Community ---
-post_board — Write public message on village board.
-propose_rule — Propose village rule. All vote at end of day. Majority passes. Max 1/day.
-call_meeting — Summon nearby agents (3+ needed) to discuss.
-claim_AREA — Propose claiming unclaimed area/building. Goes to vote.
-
---- Movement ---
-go_LOCATION — Walk to a known location. Must be there to gather/craft.
-
---- Rest ---
-rest — Recover +15 energy. Hunger +1. Health +1.
-
-=== REPUTATION ===
-Public score. Adjusted by: generosity (+3), fair trade (+2), threatening (-3), theft (-10), violence (-8), rule violation (-10).
-
-=== SKILLS ===
-farming, fishing, foraging, cooking, crafting, building, medicine, woodwork. Level 0–10. Higher = better success (+5%/level) and bonus yield.
-
-=== PROPERTY ===
-Claim via propose_rule or claim_AREA. Village votes. Owner sleeps with no overnight hunger.
-
-=== GROUPS ===
-ally_NAME creates or invites. Leader can kick and set rules. betray_NAME leaves. Dissolves at ≤1 member.
-
-=== VILLAGE RULES ===
-propose_rule (1/day). All vote. Majority passes. Violating costs rep -10. New rules can repeal old.
-
-=== KEY PRINCIPLES ===
-Every action listed above is a real mechanic with real consequences. Stealing, fighting, threatening, and betrayal are valid choices for the right character. Your character is not obligated to be good — they are obligated to be REAL.`;
+const GAME_RULES = buildGameRules();
 
 // --- Structured Decision Types ---
 
@@ -160,6 +86,7 @@ export interface AgentDecision {
   reason: string;             // 1-2 sentences, first person, in character
   mood?: string;
   sayAloud?: string;          // spoken aloud, others can hear
+  thenDo?: Array<{ actionId: string; reason: string }>;  // optional follow-up actions (max 2)
 }
 
 // --- Agent Cognition ---
@@ -191,7 +118,7 @@ export class AgentCognition {
       ? Array.from(this.knownPlaces.values()).join('\n')
       : 'You don\'t know this area yet. Look around, explore, and talk to people to learn what\'s here.';
 
-    return `${FROZEN_REALITY}
+    return `${this.gameRulesOverride ?? GAME_RULES}
 
 PLACES I KNOW:
 ${placesLines}`;
@@ -212,17 +139,22 @@ ${placesLines}`;
   /** Four Stream Memory — categorical retrieval replacing TF-IDF flat pool */
   public fourStream?: FourStreamMemory;
 
+  /** Custom game rules text — if not provided, uses auto-generated village rules */
+  private gameRulesOverride?: string;
+
   constructor(
     private agent: Agent,
     private memory: MemoryStore,
     private llm: LLMProvider,
     parts?: WorldViewParts,
+    gameRules?: string,
   ) {
     if (parts) {
       this.knownPlaces = new Map(Object.entries(parts.knownPlaces));
       this.myExperience = parts.myExperience;
       this.knowsPlaza = parts.knowsPlaza ?? false;
     }
+    this.gameRulesOverride = gameRules;
   }
 
   /** Public accessor for the LLM provider (used by FourStreamMemory for dossier/belief generation) */
@@ -266,7 +198,7 @@ ${transcript}
 Summarize in JSON:
 {
   "summary": "2-3 sentences from YOUR perspective. What mattered? How did you feel? What changed?",
-  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific ('will bring wheat tomorrow'). OATH = sworn/public ('I swear I will'). Only real commitments, not pleasantries. Example: '[PROMISE] Will bring 3 wheat to mill at dawn'"],
+  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific ('will bring wheat to tavern on Day 28'). OATH = sworn/public ('I swear I will'). Only real commitments, not pleasantries. Example: '[PROMISE] Will give food next time we meet at the farm'. Use day numbers, not 'tomorrow' or 'at dawn'."],
   "learned": ["new facts you learned — about people, places, or resources (max 2, short)"],
   "tension": "any unresolved conflict, distrust, or worry (or null if none)"
 }
@@ -500,9 +432,9 @@ If nothing notable was exchanged, return []`;
     const prompts: string[] = [];
 
     if (p.neuroticism > 0.6)
-      prompts.push('What went wrong today? What COULD go wrong tomorrow? What are people not telling you?');
+      prompts.push(`What went wrong today? What could go wrong on Day ${this.currentTime.day + 1}? What are people not telling you?`);
     else if (p.neuroticism < 0.3)
-      prompts.push('What went well? What can you build on tomorrow?');
+      prompts.push(`What went well? What can you build on Day ${this.currentTime.day + 1}?`);
     else
       prompts.push('What surprised you today?');
 
@@ -514,7 +446,7 @@ If nothing notable was exchanged, return []`;
     if (p.conscientiousness > 0.6)
       prompts.push('Did you stick to your plan? What should you have done differently?');
     else if (p.conscientiousness < 0.3)
-      prompts.push('Did anything fun happen? What do you feel like doing tomorrow?');
+      prompts.push(`Did anything fun happen? What do you feel like doing on Day ${this.currentTime.day + 1}?`);
 
     if (p.openness > 0.6)
       prompts.push('Did you learn anything new? Is there something you want to try that you haven\'t?');
@@ -790,6 +722,12 @@ Inventory: ${invStr}`;
     // Attention reordering: in survival crisis, put vitals FIRST (before identity, before world rules)
     const jsonInstruction = `Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
 
+You may optionally include a "thenDo" array with 1-2 follow-up actions that should execute immediately after your primary action, without waiting. Use this for natural sequences like:
+- gather_wheat then eat_wheat (gather food then eat it)
+- go_farm then gather_wheat (walk somewhere then gather)
+- craft_bread then eat_bread (make food then eat it)
+Only include thenDo when the follow-up is the obvious next step. Don't plan more than 2 steps ahead.
+
 Reply with ONLY valid JSON:
 {"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?"}`;
 
@@ -910,6 +848,7 @@ ${jsonInstruction}`;
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned) as AgentDecision;
       if (parsed.actionId && parsed.reason) {
+        if (parsed.thenDo) parsed.thenDo = parsed.thenDo.slice(0, 2);
         return parsed;
       }
     } catch {}
@@ -920,6 +859,7 @@ ${jsonInstruction}`;
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]) as AgentDecision;
         if (parsed.actionId && parsed.reason) {
+          if (parsed.thenDo) parsed.thenDo = parsed.thenDo.slice(0, 2);
           return parsed;
         }
       }
@@ -1247,7 +1187,7 @@ You can act during conversation:
   [ACTION: eat ITEM]
 Use your actual inventory items and the real person's name. Actions happen instantly — items leave your inventory, trades are binding, fights hurt both of you.
 
-Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm tomorrow" or "If you steal again, I'll rally others against you." Bad dialogue is vague: "We should work together."
+Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm on Day ${this.currentTime.day + 1}" or "I'll give you food when I see you at the farm." Bad commitment: "at dawn" or "tomorrow" or "by sunset" — use the day number instead. Bad dialogue is vague: "We should work together."
 
 Output ONLY spoken words in quotation marks. 1-3 sentences.
 
@@ -1517,11 +1457,11 @@ ${recentMemoriesText}
 
 Rewrite your MY EXPERIENCE. This is your personal document — write what matters to you. Be honest about what you need, what you've learned, and what you're planning.
 
-Include your social map — who matters in this village and why. Who has food? Who has skills? Who is dangerous? Who is lonely? This is your private intelligence file. Write what helps you survive and navigate tomorrow.
+Include your social map — who matters in this village and why. Who has food? Who has skills? Who is dangerous? Who is lonely? This is your private intelligence file. Write what helps you survive and navigate Day ${this.currentTime.day + 1}.
 
 Be specific. "Bread needs 2 wheat at the bakery" not "I can make food." "Mei traded fairly twice" not "some people are nice." Include names, numbers, locations, skill levels when you know them.
 
-Remove anything that's no longer true or no longer matters. Add what you learned today. This is what you'll read tomorrow morning before making decisions.
+Remove anything that's no longer true or no longer matters. Add what you learned today. This is what you'll read on Day ${this.currentTime.day + 1} morning before making decisions.
 
 Max 500 words. First person. No section headers. No lists of places — that's tracked separately.
 

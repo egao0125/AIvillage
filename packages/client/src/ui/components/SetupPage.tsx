@@ -17,6 +17,7 @@ interface CreatedAgent {
 
 interface SetupPageProps {
   onEnter: () => void;
+  onBack?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ Example:
 // Component
 // ---------------------------------------------------------------------------
 
-export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
+export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
   // --- Auth state ---
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -412,6 +413,33 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
           zIndex: 1,
         }}
       >
+        {/* ── Back to Maps ──────────────────────────────────── */}
+        {onBack && (
+          <button
+            onClick={onBack}
+            style={{
+              position: 'absolute',
+              top: 20,
+              left: 24,
+              padding: '6px 14px',
+              background: 'transparent',
+              border: `1px solid ${COLORS.border}`,
+              borderRadius: 4,
+              cursor: 'pointer',
+              color: COLORS.textDim,
+              fontFamily: FONTS.pixel,
+              fontSize: '7px',
+              letterSpacing: 1,
+              zIndex: 10,
+              transition: 'border-color .2s, color .2s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = COLORS.accent; e.currentTarget.style.color = COLORS.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.textDim; }}
+          >
+            &larr; MAPS
+          </button>
+        )}
+
         {/* ── Header ──────────────────────────────────────────── */}
         <div style={{ textAlign: 'center', animation: 'slideIn 0.6s ease-out' }}>
           <h1

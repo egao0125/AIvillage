@@ -7,6 +7,9 @@
 export { EventBus } from './event-bus.js';
 export type { SimEvent } from './events.js';
 
+// --- Map Config ---
+export type { MapConfig, MapAction } from './map-config.js';
+
 // --- Agent ---
 
 export interface AgentPersonality {
@@ -648,6 +651,9 @@ export interface BoardPost {
   ruleStatus?: 'proposed' | 'passed' | 'rejected' | 'repealed';
   claimTarget?: { type: 'area' | 'building'; id: string };  // if this is a property claim vote
   comments?: { agentId: string; agentName: string; content: string; timestamp: number }[];
+  ruleAction?: string;      // structured: what specific action the rule requires/prohibits
+  ruleAppliesTo?: string;   // structured: who the rule applies to
+  ruleConsequence?: string; // structured: what happens on violation
 }
 
 export interface WorldSnapshot {

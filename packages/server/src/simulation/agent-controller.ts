@@ -1,4 +1,4 @@
-import type { Agent, BoardPost, DriveState, GameTime, Institution, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Institution, MapConfig, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
@@ -78,10 +78,13 @@ export class AgentController {
   private postConvWaitTimer: number = 0;
   private lastObligationText: string = '';
   private obligationCooldown: number = 0;
+  private actionQueue: Array<{ actionId: string; reason: string }> = [];
 
   readonly wakeHour: number;
   readonly sleepHour: number;
   readonly homeArea: string;
+
+  private mapConfig: MapConfig;
 
   constructor(
     agent: Agent,
@@ -96,12 +99,20 @@ export class AgentController {
     // Passed by reference so new agents added after construction are visible.
     private agentCognitions?: Map<string, AgentCognition>,
     private agentControllers?: Map<string, AgentController>,
+    mapConfig?: MapConfig,
   ) {
     this.agent = agent;
     this.cognition = cognition;
     this.wakeHour = wakeHour;
     this.sleepHour = sleepHour;
     this.homeArea = homeArea;
+    // Default to village config with all systems enabled
+    this.mapConfig = mapConfig ?? {
+      id: 'village', name: 'The Village', description: '', mapSize: { width: 1024, height: 1024 },
+      spawnAreas: [], actions: [], buildGameRules: () => '', winCondition: 'none',
+      tickConfig: { decisionIdleTicks: 20 },
+      systems: { hunger: true, gathering: true, crafting: true, governance: true, property: true, combat: false, shrinkingZone: false, stealth: false, board: true },
+    };
 
     // Initialize drives and vitals if not set
     if (!this.agent.drives) {
@@ -350,10 +361,26 @@ export class AgentController {
         this.activityTimer--;
         if (this.activityTimer <= 0) {
           this.currentPerformingActivity = '';
+
+          // Check action queue before going idle
+          if (this.actionQueue.length > 0) {
+            const next = this.actionQueue.shift()!;
+            if (this.canStillExecute(next.actionId)) {
+              console.log(`[ActionQueue] ${this.agent.config.name} → queued: ${next.actionId}`);
+              this.lastTrigger = next.reason;
+              const situation = this.buildSituation(next.reason, this.lastOutcome);
+              this.lastOutcome = undefined;
+              void this.executeDecision(next as AgentDecision, situation);
+              return;
+            }
+            // Queued action no longer valid — clear queue, fall through to idle
+            console.log(`[ActionQueue] ${this.agent.config.name} → queued ${next.actionId} invalid, clearing`);
+            this.actionQueue = [];
+          }
+
           this.state = 'idle';
           this.world.updateAgentState(this.agent.id, 'idle', '');
           // Action completed → decide immediately
-          // The outcome memory is already stored, trigger is set
           if (!this.decidingInProgress && !this.apiExhausted) {
             void this.decideAndAct();
           }
@@ -629,6 +656,7 @@ export class AgentController {
     this.pendingSleep = null;
     this.activityTimer = 0;
     this.currentPerformingActivity = '';
+    this.actionQueue = [];
     this.state = 'conversing';
     this.world.updateAgentState(this.agent.id, 'active', 'conversing');
   }
@@ -989,7 +1017,11 @@ export class AgentController {
     this.agent.alive = false;
     this.agent.causeOfDeath = cause;
     this.agent.state = 'dead';
+    this.agent.currentAction = '';
     this.state = 'idle'; // Stop all controller activity
+
+    // Broadcast death state immediately to prevent stale 'resting'/'trading' on clients
+    this.world.updateAgentState(this.agent.id, 'dead', '');
 
     // Drop items — they become unclaimed
     const droppedItems = this.world.killAgent(this.agent.id, cause);
@@ -1071,6 +1103,7 @@ export class AgentController {
   }
 
   private enterSleepState(sleepArea: string): void {
+    this.actionQueue = [];
     this.state = 'sleeping';
     this.world.updateAgentState(this.agent.id, 'sleeping', '');
     this.broadcaster.agentAction(this.agent.id, 'sleeping', '\u{1F634}');
@@ -1644,12 +1677,17 @@ export class AgentController {
     }
     const propertyInfo = lines.join('\n');
 
-    // Build village rules from passed board posts
+    // Build village rules from passed board posts — structured format when available
     let villageRules: string | undefined;
     const passedRules = this.world.getActiveBoard()
       .filter(p => p.type === 'rule' && p.ruleStatus === 'passed');
     if (passedRules.length > 0) {
-      villageRules = passedRules.map((r, i) => `${i + 1}. ${r.content}`).join('\n');
+      villageRules = passedRules.map((r, i) => {
+        if (r.ruleAction && r.ruleConsequence) {
+          return `${i + 1}. ${r.ruleAction}\n   Applies to: ${r.ruleAppliesTo || 'Everyone'}\n   Consequence: ${r.ruleConsequence}`;
+        }
+        return `${i + 1}. ${r.content}`;
+      }).join('\n\n');
     }
 
     // Build group info from Institution membership
@@ -1706,9 +1744,16 @@ export class AgentController {
       propertyInfo,
       villageRules,
       allAgentLocations,
-      allReputations: (this.world.reputation ?? [])
-        .filter(r => r.fromAgentId === 'system' && r.score !== 0)
-        .map(r => ({ id: r.toAgentId, score: r.score })),
+      allReputations: (() => {
+        // Aggregate ALL reputation entries per agent (system + per-agent from conversations)
+        const repByAgent = new Map<string, number>();
+        for (const r of this.world.reputation ?? []) {
+          repByAgent.set(r.toAgentId, (repByAgent.get(r.toAgentId) ?? 0) + r.score);
+        }
+        return [...repByAgent.entries()]
+          .filter(([, score]) => score !== 0)
+          .map(([id, score]) => ({ id, score }));
+      })(),
       villageHistory: this.world.getTopVillageMemory(5) || undefined,
     };
   }
@@ -3341,6 +3386,9 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
     // --- Propose Rule ---
     if (actionId === 'propose_rule') {
       let ruleContent: string;
+      let ruleAction: string | undefined;
+      let ruleAppliesTo: string | undefined;
+      let ruleConsequence: string | undefined;
       try {
         const identity = this.cognition.identityBlock;
         const rulePrompt = `${identity}
@@ -3349,19 +3397,32 @@ You decided to propose a rule for the village.
 
 Your reason: ${decision.reason}
 
-Write the ACTUAL RULE you would propose. This is a public proposal — other villagers will read and vote on it. Not your inner thoughts — what you actually write down. Stay in character.
+Write a rule that other villagers will vote on. The rule MUST follow this exact format:
 
-Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
+RULE: [What specific action is required or prohibited]
+APPLIES TO: [Who — everyone, property owners, group members, etc.]
+CONSEQUENCE: [What happens to violators — reputation loss, exile vote, food penalty, etc.]
+
+The rule must be about actions that actually exist in this village: gathering, eating, giving, stealing, fighting, trading, trespassing, hoarding, sharing. Don't write rules about things people can't actually do or check.
+
+Write ONLY the rule in the format above. Stay in character.`;
         ruleContent = await this.cognition.llmProvider.complete(
-          `You are ${this.agent.config.name}. Write only the proposed rule. No preamble, no quotes.`,
+          `You are ${this.agent.config.name}. Write only the proposed rule in RULE/APPLIES TO/CONSEQUENCE format. No preamble, no quotes.`,
           rulePrompt,
         );
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
-        ruleContent = this.ensureCompleteSentence(ruleContent);
-        if (ruleContent.length < 3 || ruleContent.length > 300) {
+        if (ruleContent.length < 3 || ruleContent.length > 500) {
           console.warn(`[ProposeRule] ${this.agent.config.name} content length out of range (${ruleContent.length}), using reason`);
           ruleContent = this.truncateAtSentence(decision.reason, 200);
         }
+
+        // Parse structured rule fields
+        const ruleMatch = ruleContent.match(/RULE:\s*(.+?)(?=\nAPPLIES TO:)/is);
+        const appliesMatch = ruleContent.match(/APPLIES TO:\s*(.+?)(?=\nCONSEQUENCE:)/is);
+        const conseqMatch = ruleContent.match(/CONSEQUENCE:\s*(.+?)$/is);
+        ruleAction = ruleMatch?.[1]?.trim();
+        ruleAppliesTo = appliesMatch?.[1]?.trim() || 'Everyone';
+        ruleConsequence = conseqMatch?.[1]?.trim() || 'Reputation loss';
       } catch (err) {
         console.error(`[ProposeRule] ${this.agent.config.name} LLM call failed:`, err);
         ruleContent = this.truncateAtSentence(decision.reason, 200);
@@ -3373,11 +3434,14 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
         authorName: this.agent.config.name,
         type: 'rule' as const,
         channel: 'all' as const,
-        content: ruleContent,
+        content: ruleAction || ruleContent,
         timestamp: Date.now(),
         day: this.world.time.day,
         votes: [] as { agentId: string; vote: 'like' | 'dislike' }[],
         ruleStatus: 'proposed' as const,
+        ruleAction,
+        ruleAppliesTo,
+        ruleConsequence,
       };
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
@@ -3611,6 +3675,16 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       this.handleApiSuccess();
       console.log(`[Decision] ${this.agent.config.name} → ${decision.actionId} | ${decision.reason.slice(0, 120)}`);
 
+      // Queue follow-up actions if present (filter out entries missing actionId)
+      if (decision.thenDo?.length) {
+        this.actionQueue = decision.thenDo
+          .filter(a => a.actionId && typeof a.actionId === 'string')
+          .slice(0, 2);
+        if (this.actionQueue.length > 0) {
+          console.log(`[ActionQueue] ${this.agent.config.name} queued ${this.actionQueue.length} follow-ups: ${this.actionQueue.map(a => a.actionId).join(' → ')}`);
+        }
+      }
+
       // Guard: agent may have entered a conversation while awaiting LLM
       if (this.state === 'conversing') return;
 
@@ -3633,6 +3707,42 @@ Keep it to 1-2 sentences. Write ONLY the rule text, nothing else.`;
       groups[key] = (groups[key] || 0) + 1;
     }
     return Object.entries(groups).map(([resource, qty]) => ({ resource, qty }));
+  }
+
+  /** Validate whether a queued action is still executable given current world state */
+  private canStillExecute(actionId: string): boolean {
+    if (!this.agent.alive || !actionId) return false;
+    // Eat: still have the food?
+    if (actionId.startsWith('eat_')) {
+      const food = actionId.replace('eat_', '');
+      return this.agent.inventory.some(
+        i => i.name.toLowerCase().replace(/\s+/g, '_') === food
+      );
+    }
+    // Give: still have items and target nearby?
+    if (actionId.startsWith('give_')) {
+      const firstName = actionId.replace('give_', '');
+      const target = this.findNearbyByFirstName(firstName);
+      return !!target && this.agent.inventory.length > 0;
+    }
+    // Craft: still have inputs?
+    if (actionId.startsWith('craft_')) {
+      const recipeId = actionId.replace('craft_', '');
+      const recipe = RECIPES.find(r => r.id === recipeId);
+      if (!recipe) return false;
+      const inv = this.buildInventoryForResolver();
+      return recipe.inputs.every(inp => {
+        const have = inv.find(i => i.resource === inp.resource);
+        return have && have.qty >= inp.qty;
+      });
+    }
+    // Talk: target nearby?
+    if (actionId.startsWith('talk_')) {
+      const firstName = actionId.replace('talk_', '');
+      return !!this.findNearbyByFirstName(firstName);
+    }
+    // Go/gather/rest: always valid
+    return true;
   }
 
   /** Helper: build skills map for action-resolver's AgentState */
