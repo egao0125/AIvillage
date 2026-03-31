@@ -745,17 +745,10 @@ export class SimulationEngine {
       });
     };
 
-    if (this.persistence) {
-      // Await save + seed so memories exist in RDS before first decide()
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
-        .then(() => seedMemories())
-        .catch(err => {
-          console.error('[Persistence] Save after addAgent failed:', err);
-          return seedMemories(); // still seed in-memory even if DB fails
-        });
-    } else {
-      void seedMemories();
-    }
+    // Save then seed — memories.agent_id FK requires agents row to exist first.
+    // saveAllFireAndForget keeps worldStateVersion in sync so the next periodic save
+    // does not trigger a spurious VersionConflictError.
+    this.saveAllFireAndForget('addAgent', seedMemories);
 
     this.refreshNameMaps();
     return agent;
@@ -844,11 +837,7 @@ export class SimulationEngine {
 
     console.log(`[Engine] Agent suspended: ${agent.config.name}`);
 
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after suspend failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('suspendAgent');
 
     return true;
   }
@@ -906,11 +895,7 @@ export class SimulationEngine {
 
     console.log(`[Engine] Agent resumed: ${agent.config.name}`);
 
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after resume failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('resumeAgent');
 
     return true;
   }
@@ -1067,11 +1052,7 @@ export class SimulationEngine {
 
     this.refreshNameMaps();
 
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after resurrect failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('resurrectAgent');
 
     return true;
   }
@@ -1150,19 +1131,26 @@ export class SimulationEngine {
       this.decisionInterval = null;
     }
 
+    // Capture leadership status BEFORE release() sets _isLeader=false.
+    // Follower Pods must NOT write world state — they hold a stale in-memory copy and
+    // would silently overwrite the leader's authoritative state.
+    const wasLeader = this.leaderElection.isLeader;
+
     // Release leader lock before closing DB so the next Pod can acquire immediately.
     // destroy() also stops heartbeat + retry timers.
     await this.leaderElection.release();
     this.leaderElection.destroy();
 
     if (this.persistence) {
-      try {
-        // Best-effort final save with unconditional upsert (no expectedVersion)
-        // so a leadership transition immediately before shutdown cannot cause data loss.
-        await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
-        console.log('[Engine] Final state saved to RDS');
-      } catch (err) {
-        console.error('[Engine] Final save failed:', err);
+      if (wasLeader) {
+        try {
+          // Unconditional upsert (no expectedVersion): safe on graceful shutdown because
+          // release() ran first, so the new leader has not yet started writing.
+          await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+          console.log('[Engine] Final state saved to RDS');
+        } catch (err) {
+          console.error('[Engine] Final save failed:', err);
+        }
       }
       try {
         await this.persistence.pool.end();
@@ -2334,12 +2322,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       this.resumeAgent(agentId);
     }
 
-    // Save to persistence
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after API key update failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('updateAgentApiKey');
 
     console.log(`[Engine] API key updated for ${agent.config.name} (model: ${newModel})`);
     return true;
@@ -2500,7 +2483,8 @@ Answer with ONLY one word: "support" or "oppose".`,
     // 4. Save fresh state to RDS
     if (this.persistence) {
       try {
-        await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+        const newVersion = await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+        this.worldStateVersion = newVersion;
         console.log('[FreshStart] Fresh state saved to RDS');
       } catch (err) {
         console.error('[FreshStart] Save failed:', err);
@@ -2550,6 +2534,33 @@ Answer with ONLY one word: "support" or "oppose".`,
   /** True when this Pod holds the Redis leader lock (or Redis is not configured). */
   get isLeader(): boolean {
     return this.leaderElection.isLeader;
+  }
+
+  /**
+   * Fire-and-forget save that keeps worldStateVersion in sync after unconditional upserts.
+   *
+   * Every saveAll() call (addAgent, suspend, resume, resurrect, apikey update) increments
+   * the version column in DB via unconditional upsert. If we don't mirror that increment
+   * in this.worldStateVersion, the next periodic save (save_requested) would present a
+   * stale expectedVersion → VersionConflictError → unnecessary reload loop.
+   *
+   * @param label  Short descriptor for error log context.
+   * @param then   Optional async continuation (e.g. seedMemories).
+   */
+  private saveAllFireAndForget(label: string, then?: () => Promise<void>): void {
+    if (!this.persistence) {
+      if (then) void then();
+      return;
+    }
+    void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
+      .then((newVersion: number) => {
+        this.worldStateVersion = newVersion;
+        if (then) return then();
+      })
+      .catch((err: unknown) => {
+        console.error(`[Persistence] Save after ${label} failed:`, (err as Error).message);
+        if (then) void then(); // still run continuation (e.g. seed memories in-memory)
+      });
   }
 
   /**

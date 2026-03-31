@@ -137,6 +137,21 @@ if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
 app.use(createAuthRouter());
 app.use('/api', optionalAuth());
 
+// Follower-guard: simulation state mutations must only execute on the leader Pod.
+// Auth endpoints (login, logout, refresh) are excluded — they use their own DB (Cognito)
+// and must remain available on all Pods.
+// GET requests are allowed on followers (they serve reads from their in-memory / Redis state).
+app.use('/api/agents', (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !engine.isLeader) {
+    res.status(503).json({
+      error: 'Leader election in progress — please retry',
+      retryAfterMs: 5_000,
+    });
+    return;
+  }
+  next();
+});
+
 app.use(createRouter(engine));
 
 // Catch unmatched /api/* routes before the SPA catch-all so they return JSON, not HTML.
@@ -356,12 +371,20 @@ io.on('connection', (socket) => {
 
   socket.on('dev:step', (token: unknown) => {
     if (!isDevAuthorized(token)) return;
+    if (!engine.isLeader) {
+      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot step' });
+      return;
+    }
     engine.singleTick();
     io.emit('world:snapshot', engine.getSnapshot());
   });
 
   socket.on('dev:reset-vitals', (token: unknown) => {
     if (!isDevAuthorized(token)) return;
+    if (!engine.isLeader) {
+      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot reset vitals' });
+      return;
+    }
     const snapshot = engine.getSnapshot();
     for (const agent of snapshot.agents) {
       engine.resetAgentVitals(agent.id);
@@ -371,6 +394,10 @@ io.on('connection', (socket) => {
 
   socket.on('dev:fresh-start', async (token: unknown) => {
     if (!isDevAuthorized(token)) return;
+    if (!engine.isLeader) {
+      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot fresh-start' });
+      return;
+    }
     console.log('[Server] Fresh start requested');
     try {
       await engine.freshStart();
