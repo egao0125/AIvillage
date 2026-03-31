@@ -1,7 +1,7 @@
 # ─── Stage 1: build ──────────────────────────────────────────────────────────
 # Full install (devDeps included) + compile TypeScript + Vite client bundle.
 # Nothing from this stage reaches production except compiled artifacts.
-FROM node:22-slim AS builder
+FROM node:22.12.0-slim AS builder
 
 # Use corepack (ships with Node 16+) to avoid an extra npm install -g
 ENV PNPM_HOME="/pnpm"
@@ -29,7 +29,7 @@ RUN pnpm --filter @ai-village/shared build && \
 
 # ─── Stage 2: production runtime ─────────────────────────────────────────────
 # Lean image: only production deps, compiled JS, no source, no build tools.
-FROM node:22-slim AS runner
+FROM node:22.12.0-slim AS runner
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"

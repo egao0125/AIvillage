@@ -3,6 +3,7 @@ import { gameStore } from '../core/GameStore';
 import { eventBus } from '../core/EventBus';
 import type {
   Agent,
+  AgentConfig,
   BoardPost,
   GameTime,
   WorldSnapshot,
@@ -308,7 +309,7 @@ export function connectSocket(): Socket {
   });
 
   // --- Infra 6: Viewport catch-up ---
-  socket.on('viewport:catchup', (data: { agents: Array<{ id: string; position: { x: number; y: number }; state: string; currentAction: string; mood: string; config: any }> }) => {
+  socket.on('viewport:catchup', (data: { agents: Array<{ id: string; position: { x: number; y: number }; state: string; currentAction: string; mood: string; config: AgentConfig }> }) => {
     for (const agent of data.agents) {
       gameStore.moveAgent(agent.id, agent.position);
       gameStore.updateAgentAction(agent.id, agent.currentAction);

@@ -38,6 +38,19 @@ module "vpc" {
   enable_dns_support     = true
 
   # ---------------------------------------------------------------------------
+  # VPC Flow Logs — network traffic audit trail
+  # Ref: CIS AWS Foundations Benchmark 2.9, AWS Well-Architected SEC 7
+  # Logs to CloudWatch for real-time alerting capability.
+  # KMS-encrypted log group using the existing Secrets Manager CMK.
+  # ---------------------------------------------------------------------------
+  enable_flow_log                              = true
+  flow_log_destination_type                   = "cloud-watch-logs"
+  create_flow_log_cloudwatch_log_group         = true
+  create_flow_log_cloudwatch_iam_role          = true
+  flow_log_max_aggregation_interval           = 60
+  flow_log_cloudwatch_log_group_kms_key_id    = aws_kms_key.secrets_manager.arn
+
+  # ---------------------------------------------------------------------------
   # Subnet tags required by AWS Load Balancer Controller:
   #   public  → internet-facing ALBs
   #   private → internal ALBs (not used yet, but tagged for future use)
