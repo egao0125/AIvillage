@@ -67,7 +67,7 @@ export const App: React.FC = () => {
   }
 
   if (!entered) {
-    return <SetupPage onEnter={handleEnter} />;
+    return <SetupPage onEnter={handleEnter} onBack={() => setSelectedMap(null)} />;
   }
 
   return (
