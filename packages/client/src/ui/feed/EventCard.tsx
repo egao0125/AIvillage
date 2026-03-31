@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { VillageEvent } from './types';
 import type { ChatEntry } from '../../core/GameStore';
 import { ConversationExpander } from './ConversationExpander';
+import { ReactionsExpander, getReactionCount } from './ReactionsExpander';
 import { COLORS, FONTS } from '../styles';
 
 const TRUNCATE_LENGTH = 140;
@@ -19,8 +20,10 @@ interface EventCardProps {
 
 export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
   const [showConversation, setShowConversation] = useState(false);
+  const [showReactions, setShowReactions] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
+  const reactionCount = getReactionCount(event);
   const isLong = event.headline.length > TRUNCATE_LENGTH;
   const displayText = isLong && !expanded
     ? event.headline.slice(0, TRUNCATE_LENGTH) + '...'
@@ -57,7 +60,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         >
           {event.type.replace('_', ' ')}
         </span>
-        {event.author && (
+        {event.author && event.author.id !== 'system' && (
           <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.textDim }}>
             by <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{event.author.name}</span>
           </span>
@@ -99,6 +102,27 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
           Day {event.day}
         </span>
       </div>
+
+      {/* Reactions expander */}
+      {reactionCount > 0 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowReactions(prev => !prev); }}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: COLORS.accent,
+            fontFamily: FONTS.body,
+            fontSize: '11px',
+            cursor: 'pointer',
+            padding: 0,
+            marginTop: 4,
+            display: 'block',
+          }}
+        >
+          {showReactions ? `▾ Hide reactions` : `▸ ${reactionCount} reaction${reactionCount === 1 ? '' : 's'}`}
+        </button>
+      )}
+      {showReactions && <ReactionsExpander event={event} />}
 
       {/* Conversation expander */}
       {event.sourceConversationId && (
