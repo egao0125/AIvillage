@@ -48,7 +48,8 @@ module "vpc" {
   create_flow_log_cloudwatch_log_group         = true
   create_flow_log_cloudwatch_iam_role          = true
   flow_log_max_aggregation_interval           = 60
-  flow_log_cloudwatch_log_group_kms_key_id    = aws_kms_key.secrets_manager.arn
+  # KMS not applied here: CW Logs service principal needs explicit key policy grant.
+  # VPC Flow Logs contain network metadata (IPs/ports) — not payload — acceptable without CMK.
 
   # ---------------------------------------------------------------------------
   # Subnet tags required by AWS Load Balancer Controller:

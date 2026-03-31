@@ -3,10 +3,11 @@
 # Nothing from this stage reaches production except compiled artifacts.
 FROM node:22.12.0-slim AS builder
 
-# Use corepack (ships with Node 16+) to avoid an extra npm install -g
+# Install pnpm via npm — more reliable than corepack in pinned base images
+# (corepack key rotation can break builds when pnpm signing keys are updated)
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN npm install -g pnpm@9 --no-fund --no-audit
 
 WORKDIR /app
 
@@ -34,8 +35,8 @@ FROM node:22.12.0-slim AS runner
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 
-# Create non-root user before installing anything
-RUN corepack enable && corepack prepare pnpm@9 --activate && \
+# Install pnpm and create non-root user
+RUN npm install -g pnpm@9 --no-fund --no-audit && \
     groupadd --gid 1001 appgroup && \
     useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
 
