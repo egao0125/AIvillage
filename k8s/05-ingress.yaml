@@ -16,13 +16,16 @@ metadata:
     # Avoids double-hop through kube-proxy (better latency for Socket.IO).
     alb.ingress.kubernetes.io/target-type: ip
 
-    # Listen on both HTTP and HTTPS; redirect HTTP → HTTPS.
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-    alb.ingress.kubernetes.io/ssl-redirect: "443"
-
-    # ACM certificate for TLS. Replace with the ARN from AWS Certificate Manager.
-    # Get ARN: aws acm list-certificates --region <REGION>
-    alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERTIFICATE_ARN
+    # HTTP-only until ACM certificate and domain are provisioned.
+    # To enable HTTPS:
+    #   1. Request ACM cert: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS
+    #   2. Replace REPLACE_WITH_ACM_CERTIFICATE_ARN below with the cert ARN
+    #   3. Replace aivillage.example.com with the real domain
+    #   4. Uncomment the listen-ports/ssl-redirect/certificate-arn lines and remove HTTP-only line
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERTIFICATE_ARN
 
     # Increase idle timeout to 120 s for long-lived Socket.IO WebSocket connections.
     # ALB default is 60 s; connections are silently dropped without this.
