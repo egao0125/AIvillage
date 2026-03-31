@@ -24,13 +24,19 @@ export const CharacterPage: React.FC = () => {
     setArcSummary(null);
     setTimeline([]);
 
+    // AbortController cancels in-flight requests when agentId changes rapidly
+    // (user clicks different agents), preventing stale responses from overwriting
+    // the correct agent's data.
+    const controller = new AbortController();
+    const { signal } = controller;
+
     // Fetch timeline and arc summary in parallel
     Promise.all([
-      fetch(`${API_BASE}/api/agents/${agentId}/timeline?limit=50`).then(r => {
+      fetch(`${API_BASE}/api/agents/${agentId}/timeline?limit=50`, { signal }).then(r => {
         if (!r.ok) throw new Error(`Timeline fetch failed: ${r.status}`);
         return r.json();
       }),
-      fetch(`${API_BASE}/api/agents/${agentId}/arc-summary`).then(r => {
+      fetch(`${API_BASE}/api/agents/${agentId}/arc-summary`, { signal }).then(r => {
         if (!r.ok) throw new Error(`Arc summary fetch failed: ${r.status}`);
         return r.json();
       }),
@@ -38,12 +44,15 @@ export const CharacterPage: React.FC = () => {
       setTimeline(timelineData);
       setArcSummary(arcData.summary || null);
     }).catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === 'AbortError') return; // cancelled — not an error
       const message = err instanceof Error ? err.message : String(err);
       console.warn('[CharacterPage] Failed to load agent data:', message);
       setHasError(true);
     }).finally(() => {
       setLoading(false);
     });
+
+    return () => controller.abort(); // cancel on agentId change or unmount
   }, [agentId]);
 
   if (!agentId || !agent) return null;

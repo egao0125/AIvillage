@@ -181,6 +181,10 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 
 // Spectator comment rate limit: 1 per 10 seconds per socket
 const spectatorLastComment: Map<string, number> = new Map();
+// Recap request rate limit: 1 per 60 seconds per socket (prevents unbounded LLM cost).
+// Global scope (not per-connection local) so the disconnect handler can clean it up
+// reliably, and so a single socket cannot re-create the Map by reconnecting.
+const recapLastRequest: Map<string, number> = new Map();
 // On-demand thought generation: one interval per watching socket
 const watchIntervals: Map<string, { interval: NodeJS.Timeout; agentId: string }> = new Map();
 // Rate limit agent:watch-thoughts switches to prevent LLM cost amplification:
@@ -296,7 +300,6 @@ io.on('connection', (socket) => {
   // Recap request — generate a catch-up recap for returning viewers.
   // Rate limit: 1 request per 60s per socket to prevent unbounded LLM cost.
   // (OWASP API4: Unrestricted Resource Consumption; NIST SP 800-53 SC-5)
-  const recapLastRequest = new Map<string, number>();
   socket.on('recap:request', async (data: { sinceDay: number }) => {
     // Reject non-number, NaN, Infinity, and non-positive values.
     // Without Number.isFinite(): sinceDay=Infinity or sinceDay=-9999 would bypass

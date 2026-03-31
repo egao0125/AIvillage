@@ -159,9 +159,12 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: authEmail.trim(), password: authPassword }),
       });
-      const data = await res.json();
+      // Parse JSON after status check — avoids unhandled throw if server returns
+      // a non-JSON body on error (e.g. HTML 502 from proxy, empty 5xx from ALB).
+      let data: { token?: string; user?: { id: string; email: string }; error?: string } = {};
+      try { data = await res.json(); } catch { /* non-JSON body — fall through */ }
       if (!res.ok) {
-        setError(data.error || 'Authentication failed');
+        setError(data.error || `Authentication failed (${res.status})`);
         setAuthLoading(false);
         return;
       }
@@ -169,7 +172,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
         setToken(data.token);
         if (data.user?.id) setUserId(data.user.id);
         if (data.user?.email) setEmail(data.user.email);
-        setUser(data.user);
+        setUser(data.user ?? null);
       } else {
         // Signup succeeded but no token — switch to login
         setAuthMode('login');
@@ -198,6 +201,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
   };
 
   const handleAddAgent = async () => {
+    if (addingAgent) return; // prevent double-submit while request is in flight
     if (!name.trim()) {
       setError('Give your agent a name');
       nameInputRef.current?.focus();
@@ -244,9 +248,10 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter }) => {
           speechPattern: speechPattern.trim() || undefined,
         }),
       });
-      const data = await res.json();
+      let data: { agent?: { id: string }; error?: string } = {};
+      try { data = await res.json(); } catch { /* non-JSON body */ }
       if (!res.ok) {
-        setError(data.error || 'Failed to create agent');
+        setError(data.error || `Failed to create agent (${res.status})`);
         setAddingAgent(false);
         return;
       }
