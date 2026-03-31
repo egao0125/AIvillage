@@ -20,3 +20,11 @@ node_max_size      = 3
 node_desired_size  = 2
 
 redis_node_type = "cache.t3.micro"
+
+# ---- Domain & HTTPS ----
+# domain_name    = "aivillage.example.com"  # your domain
+# hosted_zone_id = "Z1234567890ABCDEF"      # Route53 Hosted Zone ID
+# alb_dns_name   = ""                       # filled after first deploy (kubectl get ingress)
+
+# ---- EKS API access ----
+eks_public_access_cidrs = ["YOUR_VPN_OR_OFFICE_CIDR/32"]

@@ -106,6 +106,24 @@ variable "eks_public_access_cidrs" {
   }
 }
 
+variable "domain_name" {
+  description = "Primary domain for the application (e.g. aivillage.example.com). Used for ACM cert + Route53."
+  type        = string
+  default     = ""
+}
+
+variable "hosted_zone_id" {
+  description = "Route53 Hosted Zone ID for domain_name. Leave empty to skip DNS record creation."
+  type        = string
+  default     = ""
+}
+
+variable "alb_dns_name" {
+  description = "ALB DNS name from kubectl get ingress (populated after first deploy, used for Route53 CNAME)."
+  type        = string
+  default     = ""
+}
+
 variable "rds_instance_class" {
   description = "RDS instance class"
   type        = string

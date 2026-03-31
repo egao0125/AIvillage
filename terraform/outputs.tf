@@ -103,3 +103,21 @@ output "kms_ecr_key_arn" {
   value       = aws_kms_key.ecr.arn
   sensitive   = true
 }
+
+output "acm_certificate_arn" {
+  description = "ACM certificate ARN — paste into k8s/05-ingress.yaml or set HTTPS_CERT_ARN in CI/CD secrets"
+  value       = var.domain_name != "" ? aws_acm_certificate.app.arn : "domain_name not set — skipped"
+}
+
+output "next_steps" {
+  description = "Post-apply checklist"
+  value       = <<-EOT
+    1. kubectl config:   ${format("aws eks update-kubeconfig --region %s --name %s --profile %s", var.aws_region, var.cluster_name, var.aws_profile)}
+    2. Secrets Manager:  run scripts/setup-secrets.sh to populate real values
+    3. ACM cert ARN:     terraform output -raw acm_certificate_arn
+    4. WAF ARN:          terraform output -raw waf_web_acl_arn
+    5. k8s deploy:       kubectl apply -f k8s/
+    6. ALB hostname:     kubectl get ingress -n ai-village
+    7. Route53 CNAME:    terraform apply -var alb_dns_name=<ALB_HOSTNAME>
+  EOT
+}

@@ -180,3 +180,146 @@ resource "aws_iam_policy" "app_secrets" {
 
   tags = var.tags
 }
+
+# ---------------------------------------------------------------------------
+# GitHub Actions — OIDC-based deployment role
+#
+# Allows GitHub Actions to assume an IAM role without storing long-lived
+# AWS credentials as GitHub secrets. (AWS Well-Architected SEC 2 / NIST IA-5)
+#
+# Setup:
+#   1. terraform apply creates this role
+#   2. Add role ARN to GitHub secret AWS_DEPLOY_ROLE_ARN
+#   3. GitHub Actions workflow uses aws-actions/configure-aws-credentials@v4
+#      with role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+# ---------------------------------------------------------------------------
+
+data "aws_iam_openid_connect_provider" "github" {
+  # GitHub's OIDC provider — registered by this resource.
+  # Each AWS account needs only one OIDC provider per issuer URL.
+  url = "https://token.actions.githubusercontent.com"
+}
+
+resource "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+
+  client_id_list = ["sts.amazonaws.com"]
+
+  # GitHub's OIDC thumbprint (stable; GitHub rotates certs but thumbprint stays).
+  # Verified from: https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+
+  tags = merge(var.tags, { Name = "github-actions-oidc" })
+
+  lifecycle {
+    # Only create if it doesn't already exist in the account.
+    ignore_changes = [thumbprint_list]
+  }
+}
+
+# IAM role assumed by GitHub Actions during deploy
+resource "aws_iam_role" "github_deploy" {
+  name        = "${var.cluster_name}-github-deploy"
+  description = "Assumed by GitHub Actions via OIDC for CI/CD deployments"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            # Restrict to this repository — prevents other repos from assuming this role.
+            # Update OWNER/REPO to your actual GitHub org/user and repo name.
+            "token.actions.githubusercontent.com:sub" = "repo:*:ref:refs/heads/main"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+# Permissions needed by the deploy role
+resource "aws_iam_role_policy" "github_deploy" {
+  name = "${var.cluster_name}-github-deploy-policy"
+  role = aws_iam_role.github_deploy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ECRAuthToken"
+        Effect = "Allow"
+        Action = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRPushPull"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:DescribeRepositories",
+          "ecr:ListImages",
+        ]
+        Resource = aws_ecr_repository.ai_village.arn
+      },
+      {
+        Sid    = "EKSDescribe"
+        Effect = "Allow"
+        Action = [
+          "eks:DescribeCluster",
+          "eks:ListClusters",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "TerraformStateRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+        ]
+        Resource = [
+          "arn:aws:s3:::ai-village-terraform-state-${data.aws_caller_identity.current.account_id}",
+          "arn:aws:s3:::ai-village-terraform-state-${data.aws_caller_identity.current.account_id}/*",
+          "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/ai-village-terraform-locks",
+        ]
+      },
+      {
+        Sid    = "TerraformOutputsRead"
+        Effect = "Allow"
+        Action = [
+          "acm:DescribeCertificate",
+          "acm:ListCertificates",
+          "wafv2:GetWebACL",
+          "wafv2:ListWebACLs",
+          "kms:DescribeKey",
+        ]
+        Resource = "*"
+      },
+    ]
+  })
+}
+
+output "github_deploy_role_arn" {
+  description = "IAM role ARN for GitHub Actions — set as AWS_DEPLOY_ROLE_ARN in GitHub secrets"
+  value       = aws_iam_role.github_deploy.arn
+}

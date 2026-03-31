@@ -79,7 +79,7 @@ resource "aws_securityhub_standards_subscription" "cis" {
 # GuardDuty → SecurityHub integration: funnel GuardDuty findings into SecurityHub
 # so operators have a single pane of glass for all security findings.
 resource "aws_securityhub_finding_aggregator" "this" {
-  linking_mode = "NO_LINKING"  # single-region deployment
+  linking_mode = "NO_REGIONS"  # single-region deployment — no cross-region aggregation
 
   depends_on = [aws_securityhub_account.this]
 }

@@ -30,15 +30,14 @@ terraform {
 
   # ---------------------------------------------------------------------------
   # Remote state backend — S3 + DynamoDB locking.
-  # Uncomment AFTER running the one-time bootstrap in bootstrap/README.md.
-  #
-  # terraform init -reconfigure
+  # One-time bootstrap: cd terraform/bootstrap && terraform init && terraform apply
+  # Then migrate:       cd .. && terraform init -reconfigure
   # ---------------------------------------------------------------------------
-  # backend "s3" {
-  #   bucket         = "ai-village-terraform-state-<AWS_ACCOUNT_ID>"
-  #   key            = "infra/eks/terraform.tfstate"
-  #   region         = var.aws_region          # variables not allowed in backend
-  #   encrypt        = true
-  #   dynamodb_table = "ai-village-terraform-locks"
-  # }
+  backend "s3" {
+    bucket         = "ai-village-terraform-state-053442321898"
+    key            = "infra/eks/terraform.tfstate"
+    region         = "ap-northeast-1"
+    encrypt        = true
+    dynamodb_table = "ai-village-terraform-locks"
+  }
 }

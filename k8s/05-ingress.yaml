@@ -16,35 +16,26 @@ metadata:
     # Avoids double-hop through kube-proxy (better latency for Socket.IO).
     alb.ingress.kubernetes.io/target-type: ip
 
-    # HTTP-only until ACM certificate and domain are provisioned.
-    # To enable HTTPS:
-    #   1. Request ACM cert: aws acm request-certificate --domain-name <DOMAIN> --validation-method DNS
-    #   2. Replace REPLACE_WITH_ACM_CERTIFICATE_ARN below with the cert ARN
-    #   3. Replace aivillage.example.com with the real domain
-    #   4. Uncomment the listen-ports/ssl-redirect/certificate-arn lines and remove HTTP-only line
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
-    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-    # alb.ingress.kubernetes.io/ssl-redirect: "443"
-    # alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERTIFICATE_ARN
+    # HTTPS + HTTP→HTTPS redirect (443 terminates TLS at ALB).
+    # ACM cert ARN: terraform output -raw acm_certificate_arn
+    # CI/CD injects this automatically on deploy.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERTIFICATE_ARN
 
-    # WAFv2 Web ACL — protects against OWASP Top 10, bad IPs, Log4Shell, SSRF.
-    # Set the ARN from: terraform output waf_web_acl_arn
-    # (CIS AWS Foundations Benchmark 6.7 / NIST SP 800-53 SC-5, SI-3)
+    # WAFv2 Web ACL: terraform output -raw waf_web_acl_arn
+    # (CIS AWS 6.7 / NIST SP 800-53 SC-5, SI-3)
     alb.ingress.kubernetes.io/wafv2-web-acl-arn: REPLACE_WITH_WAF_WEB_ACL_ARN
 
-    # Increase idle timeout to 120 s for long-lived Socket.IO WebSocket connections.
-    # ALB default is 60 s; connections are silently dropped without this.
+    # 120 s idle timeout for long-lived Socket.IO WebSocket connections.
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
 
-    # -----------------------------------------------------------------------
-    # Sticky sessions — uncomment when replicas > 1.
-    # Socket.IO HTTP long-polling requires all requests from the same client
-    # to reach the same pod. WebSocket does not need stickiness once upgraded.
-    # -----------------------------------------------------------------------
-    # alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=86400
+    # Sticky sessions for Socket.IO HTTP long-polling fallback (required when replicas > 1).
+    alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=86400
+
 spec:
   rules:
-    - host: aivillage.example.com   # replace with actual domain
+    - host: REPLACE_WITH_DOMAIN   # your domain — set domain_name in terraform.tfvars
       http:
         paths:
           - path: /
