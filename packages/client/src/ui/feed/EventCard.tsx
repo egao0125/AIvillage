@@ -3,6 +3,7 @@ import type { VillageEvent } from './types';
 import type { ChatEntry } from '../../core/GameStore';
 import { ConversationExpander } from './ConversationExpander';
 import { ReactionsExpander, getReactionCount } from './ReactionsExpander';
+import { gameStore } from '../../core/GameStore';
 import { COLORS, FONTS } from '../styles';
 
 const TRUNCATE_LENGTH = 140;
@@ -65,7 +66,10 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         </span>
         {event.author && event.author.id !== 'system' && (
           <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.textDim }}>
-            by <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{event.author.name}</span>
+            by <span
+              onClick={(e) => { e.stopPropagation(); gameStore.openAgentDetail(event.author!.id); }}
+              style={{ color: COLORS.accent, fontWeight: 'bold', cursor: 'pointer' }}
+            >{event.author.name}</span>
           </span>
         )}
         {statusStyle && (
