@@ -140,22 +140,11 @@ export const WatchView: React.FC = () => {
         </button>
       )}
 
-      {/* Narrative bar — inline at bottom */}
-      <div style={{
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        right: feedWidth,
-        zIndex: 15,
-        transition: 'right 0.25s ease',
-      }}>
-        <NarrativeBar inline />
-      </div>
+      {/* Narrative bar — bottom overlay, avoids feed panel */}
+      <NarrativeBar sidebarWidth={feedWidth} />
 
-      {/* Spectator chat — bottom-left */}
-      <div style={{ position: 'absolute', bottom: 8, left: 8, zIndex: 20 }}>
-        <SpectatorChat inline />
-      </div>
+      {/* Spectator chat — floating bottom-left */}
+      <SpectatorChat />
 
       {/* Add agent button */}
       <button
