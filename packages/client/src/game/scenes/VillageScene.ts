@@ -501,6 +501,7 @@ export class VillageScene extends Phaser.Scene {
 
     this.selectedAgentId = agentId;
     gameStore.selectAgent(agentId);
+    gameStore.inspectAgent(agentId);
 
     const sprite = this.agentSprites.get(agentId);
     if (sprite) {
