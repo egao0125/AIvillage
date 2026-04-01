@@ -9,6 +9,7 @@ import { WatchView } from './WatchView';
 import { SetupPage } from '../components/SetupPage';
 import { MapSelectPage } from '../components/MapSelectPage';
 import { AgentCreator } from '../components/AgentCreator';
+import { InspectView } from './InspectView';
 import { COLORS, FONTS } from '../styles';
 
 const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
@@ -123,7 +124,7 @@ export const AppShell: React.FC = () => {
         }}
       />
       {activeMode === 'watch' && <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />}
-      {activeMode === 'inspect' && <Placeholder mode="inspect" />}
+      {activeMode === 'inspect' && <InspectView />}
       {activeMode === 'analyze' && <Placeholder mode="analyze" />}
       <TopNav
         onChangeMap={handleChangeMap}
