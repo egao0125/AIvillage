@@ -3,10 +3,12 @@ import Phaser from 'phaser';
 import { createGameConfig } from '../../game/config';
 import { useActiveMode } from '../../core/hooks';
 import { connectSocket } from '../../network/socket';
+import { clearToken } from '../../utils/auth';
 import { TopNav } from './TopNav';
 import { WatchView } from './WatchView';
 import { SetupPage } from '../components/SetupPage';
 import { MapSelectPage } from '../components/MapSelectPage';
+import { AgentCreator } from '../components/AgentCreator';
 import { COLORS, FONTS } from '../styles';
 
 const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
@@ -31,6 +33,7 @@ const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
 export const AppShell: React.FC = () => {
   const [selectedMap, setSelectedMap] = useState<string | null>(() => sessionStorage.getItem('ai-village-map'));
   const [entered, setEntered] = useState(() => sessionStorage.getItem('ai-village-entered') === 'true');
+  const [agentCreatorOpen, setAgentCreatorOpen] = useState(false);
   const activeMode = useActiveMode();
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
@@ -56,6 +59,21 @@ export const AppShell: React.FC = () => {
   };
 
   const handleBackToMaps = () => {
+    sessionStorage.removeItem('ai-village-entered');
+    sessionStorage.removeItem('ai-village-map');
+    setEntered(false);
+    setSelectedMap(null);
+  };
+
+  const handleChangeMap = () => {
+    sessionStorage.removeItem('ai-village-entered');
+    sessionStorage.removeItem('ai-village-map');
+    setEntered(false);
+    setSelectedMap(null);
+  };
+
+  const handleLogout = () => {
+    clearToken();
     sessionStorage.removeItem('ai-village-entered');
     sessionStorage.removeItem('ai-village-map');
     setEntered(false);
@@ -107,7 +125,12 @@ export const AppShell: React.FC = () => {
       {activeMode === 'watch' && <WatchView />}
       {activeMode === 'inspect' && <Placeholder mode="inspect" />}
       {activeMode === 'analyze' && <Placeholder mode="analyze" />}
-      <TopNav />
+      <TopNav
+        onOpenAgentCreator={() => setAgentCreatorOpen(true)}
+        onChangeMap={handleChangeMap}
+        onLogout={handleLogout}
+      />
+      <AgentCreator open={agentCreatorOpen} onClose={() => setAgentCreatorOpen(false)} />
     </div>
   );
 };
