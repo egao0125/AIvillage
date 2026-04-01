@@ -8,14 +8,14 @@ metadata:
     app.kubernetes.io/name: ai-village
 spec:
   # -----------------------------------------------------------------------
-  # replicas: 1 (HPA が CPU/Memory に応じて最大3まで自動スケール)
+  # replicas: 2 (HPA が CPU/Memory に応じて最大3まで自動スケール)
   # leader election (Redis SETNX, TTL=30s) により1Podのみがシミュレーションを実行。
   # 追加Podは HTTP/WS の読み込みサービング + フェイルオーバー待機として機能。
   # VersionConflictError (楽観的ロック) が書き込み競合を防止。
   # Socket.IO Redis Streams adapter により全Pod間でイベントを配信。
   # 詳細: packages/server/src/cluster/leader-election.ts
   # -----------------------------------------------------------------------
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: ai-village
@@ -47,7 +47,7 @@ spec:
         - name: ai-village
           # Replace with: terraform output ecr_repository_url
           # Format: <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ai-village:<TAG>
-          image: 053442321898.dkr.ecr.us-east-1.amazonaws.com/ai-village:36093d9
+          image: 053442321898.dkr.ecr.us-east-1.amazonaws.com/ai-village:f03d272
           # IfNotPresent: safe with immutable ECR tags (commit SHA / semver).
           # "Always" re-pulls on every Pod restart — triggers ECR rate limits at scale
           # and blocks startup if ECR is unreachable. ECR IMMUTABLE tag policy already
