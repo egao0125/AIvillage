@@ -71,7 +71,7 @@ export const AppShell: React.FC = () => {
   // Init Phaser once entered
   useEffect(() => {
     if (entered && gameContainerRef.current && !gameRef.current) {
-      const config = createGameConfig('game-container');
+      const config = createGameConfig('game-container', selectedMap || undefined);
       gameRef.current = new Phaser.Game(config);
     }
 
