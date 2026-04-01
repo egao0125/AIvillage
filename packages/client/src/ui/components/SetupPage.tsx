@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { COLORS, FONTS } from '../styles';
 import { nameToColor, hexToString } from '../../utils/color';
-import { getToken, setToken, clearToken, authHeaders, setUserId } from '../../utils/auth';
+import { getToken, setToken, clearToken, authHeaders, setUserId, setEmail } from '../../utils/auth';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,6 +123,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
       // Load existing agents
       try {
         const res = await fetch('/api/config/status');
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
         const data = await res.json();
         if (data.agents && data.agents.length > 0) {
           setCreatedAgents(
@@ -159,16 +160,20 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: authEmail.trim(), password: authPassword }),
       });
-      const data = await res.json();
+      // Parse JSON after status check — avoids unhandled throw if server returns
+      // a non-JSON body on error (e.g. HTML 502 from proxy, empty 5xx from ALB).
+      let data: { token?: string; user?: { id: string; email: string }; error?: string } = {};
+      try { data = await res.json(); } catch { /* non-JSON body — fall through */ }
       if (!res.ok) {
-        setError(data.error || 'Authentication failed');
+        setError(data.error || `Authentication failed (${res.status})`);
         setAuthLoading(false);
         return;
       }
       if (data.token) {
         setToken(data.token);
         if (data.user?.id) setUserId(data.user.id);
-        setUser(data.user);
+        if (data.user?.email) setEmail(data.user.email);
+        setUser(data.user ?? null);
       } else {
         // Signup succeeded but no token — switch to login
         setAuthMode('login');
@@ -181,7 +186,15 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+    } catch {
+      // Best-effort: clear local state even if server call fails
+    }
     clearToken();
     setUser(null);
     setAuthEmail('');
@@ -189,6 +202,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
   };
 
   const handleAddAgent = async () => {
+    if (addingAgent) return; // prevent double-submit while request is in flight
     if (!name.trim()) {
       setError('Give your agent a name');
       nameInputRef.current?.focus();
@@ -235,9 +249,10 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
           speechPattern: speechPattern.trim() || undefined,
         }),
       });
-      const data = await res.json();
+      let data: { agent?: { id: string }; error?: string } = {};
+      try { data = await res.json(); } catch { /* non-JSON body */ }
       if (!res.ok) {
-        setError(data.error || 'Failed to create agent');
+        setError(data.error || `Failed to create agent (${res.status})`);
         setAddingAgent(false);
         return;
       }
@@ -768,7 +783,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                           max={100}
                           step={1}
                           value={personality[key]}
-                          onChange={(e) => setPersonality(prev => ({ ...prev, [key]: parseInt(e.target.value) }))}
+                          onChange={(e) => setPersonality(prev => ({ ...prev, [key]: Math.min(100, Math.max(0, parseInt(e.target.value) || 0)) }))}
                           style={{ flex: 1, accentColor: ACCENT }}
                         />
                         <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM, width: 70 }}>{high}</span>

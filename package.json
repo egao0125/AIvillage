@@ -12,9 +12,23 @@
     "test": "pnpm run --recursive test",
     "spawn": "pnpm --filter @ai-village/server spawn"
   },
-  "keywords": ["ai", "agents", "simulation", "generative-agents", "pixel-art", "mmo"],
+  "keywords": [
+    "ai",
+    "agents",
+    "simulation",
+    "generative-agents",
+    "pixel-art",
+    "mmo"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "path-to-regexp@<0.1.13": "0.1.13",
+      "picomatch@>=4.0.0 <4.0.4": "4.0.4",
+      "esbuild@<=0.24.2": "0.25.0"
+    }
   }
 }

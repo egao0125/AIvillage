@@ -1,0 +1,42 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ai-village
+  namespace: ai-village
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ai-village
+  # -----------------------------------------------------------------------
+  # maxReplicas: 3 — leader election (Redis SETNX) により1Podがシミュレーションを担当。
+  # 残りのPodはHTTP/WS読み込みサービング + リーダーフェイルオーバー待機。
+  # Socket.IO Redis Streams adapter により全Pod間でイベントを配信。
+  # 書き込みエンドポイント (POST /api/agents等) はリーダーPodのみ受け付け。
+  # 詳細: packages/server/src/cluster/leader-election.ts
+  # -----------------------------------------------------------------------
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      # Never scale below 1 replica; wait 5 min before scaling down to avoid flapping.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60

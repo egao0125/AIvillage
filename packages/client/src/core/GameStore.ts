@@ -395,7 +395,7 @@ class GameStore {
     const agent = this.state.agents.get(agentId);
     if (!agent) return;
     const newAgents = new Map(this.state.agents);
-    newAgents.set(agentId, { ...agent, alive: false, causeOfDeath: cause, state: 'dead' as any });
+    newAgents.set(agentId, { ...agent, alive: false, causeOfDeath: cause, state: 'dead' });
     this.state = { ...this.state, agents: newAgents };
     this.notify();
   }

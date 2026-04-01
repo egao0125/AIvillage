@@ -89,7 +89,7 @@ export class ActionPipeline {
           gold: actor.currency,
         });
         console.log(`[Social] ${actorName} creative action: ${JSON.stringify(ops)}`);
-        return this.applyResolvedOps(actorId, actorName, ops, cognition);
+        return this.applyResolvedOps(actorId, actorName, ops, cognition, cognitions, requestConversation);
       } catch (err) {
         console.error(`[Social] ${actorName} creative resolveAction failed:`, (err as Error).message);
         // Fall through to normal classification path
@@ -127,7 +127,7 @@ export class ActionPipeline {
           gold: actor.currency,
         });
         console.log(`[Social] ${actorName} open-ended action: ${JSON.stringify(ops)}`);
-        const result = this.applyResolvedOps(actorId, actorName, ops, cognition);
+        const result = this.applyResolvedOps(actorId, actorName, ops, cognition, cognitions, requestConversation);
         return result;
       } catch (err) {
         console.error(`[Social] ${actorName} resolveAction failed:`, (err as Error).message);
@@ -178,6 +178,8 @@ export class ActionPipeline {
     actorName: string,
     ops: { op: string; [key: string]: any }[],
     cognition: AgentCognition,
+    cognitions?: Map<string, AgentCognition>,
+    requestConversation?: (initiatorId: string, targetId: string) => boolean,
   ): string {
     const actor = this.world.getAgent(actorId);
     if (!actor || ops.length === 0) return 'FAILED: Could not resolve action.';
@@ -189,7 +191,7 @@ export class ActionPipeline {
 
     const descriptions: string[] = [];
     for (const op of ops) {
-      this.executeOp(actorId, actorName, op, cognition);
+      this.executeOp(actorId, actorName, op, cognition, cognitions, requestConversation);
       if (op.op === 'observe') {
         descriptions.push(op.observation || op.content || 'Observed surroundings.');
       } else if (op.op === 'create') {
@@ -247,7 +249,7 @@ export class ActionPipeline {
               id: crypto.randomUUID(), agentId: actorId, type: 'observation',
               content: 'I already posted about this on the village board recently.',
               importance: 5, timestamp: Date.now(), relatedAgentIds: [],
-            });
+            }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
             break;
           }
 
@@ -369,7 +371,7 @@ export class ActionPipeline {
           id: crypto.randomUUID(), agentId: actorId, type: 'plan',
           content: `I created a ${type}: ${JSON.stringify(data).slice(0, 100)}`,
           importance: 7, timestamp: Date.now(), relatedAgentIds: [],
-        });
+        }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
         break;
       }
 
@@ -475,7 +477,7 @@ export class ActionPipeline {
             id: crypto.randomUUID(), agentId: actorId, type: 'observation',
             content: `FAILED: Couldn't find ${!fromAgent ? fromName : toName} nearby to transfer ${op.item || 'gold'}.`,
             importance: 7, timestamp: Date.now(), relatedAgentIds: [],
-          });
+          }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
           break;
         }
 
@@ -485,7 +487,7 @@ export class ActionPipeline {
             id: crypto.randomUUID(), agentId: actorId, type: 'observation',
             content: `FAILED: I can't just take things from ${fromAgent.config.name} — I need to negotiate with them in a conversation.`,
             importance: 7, timestamp: Date.now(), relatedAgentIds: [fromAgent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
           break;
         }
 
@@ -511,7 +513,7 @@ export class ActionPipeline {
                 id: crypto.randomUUID(), agentId: actorId, type: 'observation',
                 content: `FAILED: I tried to give ${item.name} to ${toAgent.config.name} but they can't carry any more items.`,
                 importance: 7, timestamp: Date.now(), relatedAgentIds: [toAgent.id],
-              });
+              }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
               break;
             }
             this.broadcaster.agentInventory(fromAgent.id, fromAgent.inventory);
@@ -522,7 +524,7 @@ export class ActionPipeline {
               id: crypto.randomUUID(), agentId: actorId, type: 'observation',
               content: `FAILED: I don't have ${op.item || 'that item'} in my inventory.`,
               importance: 7, timestamp: Date.now(), relatedAgentIds: [],
-            });
+            }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
           }
         }
 
@@ -533,7 +535,9 @@ export class ActionPipeline {
             id: crypto.randomUUID(), agentId: toAgent.id, type: 'observation',
             content: `${fromAgent.config.name} ${what === 'gold' ? `gave me ${op.amount} gold` : `gave me ${op.item}`}`,
             importance: 7, timestamp: Date.now(), relatedAgentIds: [fromAgent.id],
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+            console.warn(`[Pipeline] addMemory failed for recipient ${toAgent.id}:`, (err as Error).message);
+          });
         }
         break;
       }
@@ -556,14 +560,14 @@ export class ActionPipeline {
               id: crypto.randomUUID(), agentId: actorId, type: 'observation',
               content: `FAILED: I tried to talk to ${target.config.name} but they were busy or unavailable.`,
               importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id],
-            });
+            }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
           }
         } else {
           void cognition.addMemory({
             id: crypto.randomUUID(), agentId: actorId, type: 'observation',
             content: 'FAILED: I wanted to talk to someone but nobody was around.',
             importance: 6, timestamp: Date.now(), relatedAgentIds: [],
-          });
+          }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
         }
         break;
       }
@@ -579,7 +583,7 @@ export class ActionPipeline {
           id: crypto.randomUUID(), agentId: actorId, type: 'observation',
           content: `I tried to ${op.op}: ${JSON.stringify(op)}`,
           importance: 4, timestamp: Date.now(), relatedAgentIds: [],
-        });
+        }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
         break;
       }
     }
@@ -814,7 +818,9 @@ export class ActionPipeline {
             id: crypto.randomUUID(), agentId: trade.fromAgentId, type: 'observation',
             content: `${actorName} accepted my trade. I gave ${trade.offering.map(i => `${i.qty} ${i.resource}`).join(', ')} and received ${trade.requesting.map(i => `${i.qty} ${i.resource}`).join(', ')}.`,
             importance: 7, timestamp: Date.now(), relatedAgentIds: [actorId],
-          }).catch(() => {});
+          }).catch((err: unknown) => {
+            console.warn(`[Pipeline] addMemory failed for proposer ${trade.fromAgentId}:`, (err as Error).message);
+          });
         }
       } else if (outcome.type === 'trade_reject' && outcome.tradeProposal) {
         this.world.pendingTrades.delete(outcome.tradeProposal.id);
@@ -989,7 +995,7 @@ export class ActionPipeline {
         importance: 6,
         timestamp: Date.now(),
         relatedAgentIds: [],
-      });
+      }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
       // Not broadcast — feeds the next plan/think cycle
       return;
     }
@@ -1032,7 +1038,7 @@ export class ActionPipeline {
         timestamp: Date.now(),
         relatedAgentIds: hearers.map(a => a.id),
         actionSuccess: true,
-      });
+      }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
 
       // Broadcast to feed (not status) — speech acts go to chat feed
       this.broadcastToFeed(actorId, outcome.description.slice(0, 80));
@@ -1052,13 +1058,15 @@ export class ActionPipeline {
             importance: 5,
             timestamp: Date.now(),
             relatedAgentIds: [actorId],
-          });
+          }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
 
           // Trigger immediate think() — witness reacts in real-time
           void witnessCognition.think(
             `${actorName} just said: "${rawText}"`,
             `You are at ${this.world.getAreaAt(witness.position)?.id ?? 'somewhere'}. ${actorName} is nearby.`,
-          ).catch(() => {});
+          ).catch((err: unknown) => {
+            console.warn(`[Pipeline] witness think failed for ${witness.id}:`, (err as Error).message);
+          });
         }
       }
 
@@ -1111,7 +1119,7 @@ export class ActionPipeline {
               importance: outcome.type === 'steal' || outcome.type === 'fight' ? 9 : 7,
               timestamp: Date.now(),
               relatedAgentIds: [actorId],
-            });
+            }).catch((err: unknown) => { console.warn('[Pipeline] addLinkedMemory failed:', (err as Error).message); });
           }
         }
 
@@ -1125,7 +1133,7 @@ export class ActionPipeline {
             importance: 9,
             timestamp: Date.now(),
             relatedAgentIds: [actorId],
-          });
+          }).catch((err: unknown) => { console.warn('[Pipeline] addLinkedMemory failed:', (err as Error).message); });
         }
 
         // Event emission for witnesses
@@ -1183,7 +1191,7 @@ export class ActionPipeline {
                   importance: 9,
                   timestamp: Date.now(),
                   relatedAgentIds: [actorId],
-                });
+                }).catch((err: unknown) => { console.warn('[Pipeline] addLinkedMemory failed:', (err as Error).message); });
               }
             }
             break;
@@ -1270,7 +1278,7 @@ export class ActionPipeline {
       timestamp: Date.now(),
       relatedAgentIds: [],
       actionSuccess: outcome.success,
-    });
+    }).catch((err: unknown) => { console.warn('[Pipeline] addMemory failed:', (err as Error).message); });
 
     // Deferred actions removed — the refactored architecture uses atomic decisions via decide().
   }

@@ -1,0 +1,16 @@
+---
+# aqua — CLI tool version manager
+# https://aquaproj.github.io/
+#
+# Install all tools: aqua install
+# Update versions:   aqua update
+
+registries:
+  - type: standard
+    ref: v4.280.0
+
+packages:
+  - name: hashicorp/terraform@v1.7.5
+  # aws-cli: installed via brew (aqua pkg has macOS arm64 compatibility issues)
+  - name: kubernetes/kubectl@v1.29.3
+  - name: helm/helm@v3.14.3
