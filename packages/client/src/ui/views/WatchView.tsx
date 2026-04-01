@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { COLORS, FONTS } from '../styles';
-import { SetupPage } from '../components/SetupPage';
 import { SpectatorChat } from '../components/SpectatorChat';
 import { NarrativeBar } from '../components/NarrativeBar';
 import { AgentRoster } from '../components/AgentRoster';
@@ -17,7 +16,6 @@ const DEV_TOOLS_ENABLED = true;
 
 export const WatchView: React.FC = () => {
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
-  const [showSetup, setShowSetup] = useState(false);
 
   const characterPageAgentId = useCharacterPageAgentId();
   const activeRecap = useActiveRecap();
@@ -108,37 +106,10 @@ export const WatchView: React.FC = () => {
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat />
 
-      {/* Add agent button — next to overlay pills */}
-      <button
-        onClick={() => setShowSetup(true)}
-        style={{
-          position: 'absolute',
-          top: 48,
-          left: 260,
-          padding: '5px 12px',
-          background: COLORS.bg,
-          border: `1px solid ${COLORS.border}`,
-          borderRadius: 4,
-          cursor: 'pointer',
-          color: COLORS.textDim,
-          fontFamily: FONTS.pixel,
-          fontSize: '8px',
-          letterSpacing: 0.5,
-          zIndex: 20,
-        }}
-      >
-        + AGENT
-      </button>
-
       {/* Overlays — kept as-is */}
       {characterPageAgentId && <CharacterPage />}
       {activeRecap && <RecapOverlay />}
       {socialViewOpen && <SocialView />}
-      {showSetup && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 100, overflowY: 'auto' }}>
-          <SetupPage onEnter={() => setShowSetup(false)} />
-        </div>
-      )}
       {DEV_TOOLS_ENABLED && <DevPanel />}
     </div>
   );
