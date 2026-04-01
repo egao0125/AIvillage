@@ -70,6 +70,7 @@ export const DevPanel: React.FC = () => {
         border: '1px solid #444',
         cursor: 'grab',
         userSelect: 'none',
+        pointerEvents: 'auto',
       }}
     >
       <span style={{ color: '#888', fontSize: 11, fontFamily: 'monospace', marginRight: 4 }}>DEV</span>
