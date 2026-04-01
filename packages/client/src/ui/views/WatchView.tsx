@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import { createGameConfig } from '../../game/config';
 import { COLORS, FONTS } from '../styles';
-import { TopNav } from './TopNav';
 import { SetupPage } from '../components/SetupPage';
 import { SpectatorChat } from '../components/SpectatorChat';
 import { NarrativeBar } from '../components/NarrativeBar';
@@ -62,10 +61,7 @@ export const WatchView: React.FC = () => {
         style={{ width: '100%', height: '100%' }}
       />
 
-      {/* Top nav with mode selector */}
-      <TopNav />
-
-      {/* Overlay buttons on canvas */}
+      {/* Overlay buttons on canvas — below TopNav bar */}
       <AgentRoster />
       <VillageInfo />
 
@@ -146,14 +142,14 @@ export const WatchView: React.FC = () => {
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat />
 
-      {/* Add agent button */}
+      {/* Add agent button — next to overlay pills */}
       <button
         onClick={() => setShowSetup(true)}
         style={{
           position: 'absolute',
-          top: 14,
-          left: 200,
-          padding: '6px 14px',
+          top: 48,
+          left: 260,
+          padding: '5px 12px',
           background: COLORS.bg,
           border: `1px solid ${COLORS.border}`,
           borderRadius: 4,
@@ -161,11 +157,11 @@ export const WatchView: React.FC = () => {
           color: COLORS.textDim,
           fontFamily: FONTS.pixel,
           fontSize: '8px',
-          letterSpacing: 1,
-          zIndex: 10,
+          letterSpacing: 0.5,
+          zIndex: 20,
         }}
       >
-        + ADD AGENT
+        + AGENT
       </button>
 
       {/* Overlays — kept as-is */}
