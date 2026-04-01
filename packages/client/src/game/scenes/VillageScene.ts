@@ -32,6 +32,7 @@ const TILE_TEXTURE_MAP: Record<number, string> = {
 export class VillageScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSprite> = new Map();
   private selectedAgentId: string | null = null;
+  private agentClickedThisFrame = false;
   private dayNightOverlay!: Phaser.GameObjects.Rectangle;
   private conversationGraphics!: Phaser.GameObjects.Graphics;
   private cleanupFns: (() => void)[] = [];
@@ -371,13 +372,17 @@ export class VillageScene extends Phaser.Scene {
 
     // Click background to deselect agent
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
-      // Only deselect on short clicks (not drags), left button, no game object hit
+      // Skip if an agent was clicked in this same event cycle
+      if (this.agentClickedThisFrame) {
+        this.agentClickedThisFrame = false;
+        return;
+      }
+      // Only deselect on short clicks (not drags), left button
       if (pointer.button !== 0) return;
       const dx = Math.abs(pointer.x - pointer.downX);
       const dy = Math.abs(pointer.y - pointer.downY);
       if (dx > 5 || dy > 5) return; // was a drag, not a click
-      const hitObjects = this.input.hitTestPointer(pointer);
-      if (hitObjects.length === 0 && this.selectedAgentId) {
+      if (this.selectedAgentId) {
         const prev = this.agentSprites.get(this.selectedAgentId);
         if (prev) prev.setSelected(false);
         this.selectedAgentId = null;
@@ -503,6 +508,8 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private selectAgent(agentId: string): void {
+    this.agentClickedThisFrame = true;
+
     // Deselect previous
     if (this.selectedAgentId) {
       const prev = this.agentSprites.get(this.selectedAgentId);
