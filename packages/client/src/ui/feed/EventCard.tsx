@@ -34,6 +34,8 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
   return (
     <div
       onClick={() => { if (isExpandable) setExpanded(prev => !prev); }}
+      onMouseEnter={e => { if (isExpandable) e.currentTarget.style.background = COLORS.bgHover; }}
+      onMouseLeave={e => { e.currentTarget.style.background = COLORS.bgCard; }}
       style={{
         margin: '6px 10px',
         padding: '12px 14px',
@@ -41,6 +43,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         borderRadius: 8,
         border: `1px solid ${COLORS.border}`,
         cursor: isExpandable ? 'pointer' : undefined,
+        transition: 'background 0.15s ease',
       }}
     >
       {/* Header: icon + type badge + "by author" ... status flag (top right) */}

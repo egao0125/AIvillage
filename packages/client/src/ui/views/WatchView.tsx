@@ -32,7 +32,7 @@ export const WatchView: React.FC = () => {
       {/* Event Feed panel — right side */}
       <div style={{
         position: 'absolute',
-        top: 0,
+        top: 40,
         right: 0,
         bottom: 0,
         width: feedWidth,
@@ -79,7 +79,7 @@ export const WatchView: React.FC = () => {
           style={{
             position: 'absolute',
             right: 0,
-            top: 70,
+            top: 50,
             pointerEvents: 'auto',
             width: 24,
             height: 48,
