@@ -66,7 +66,7 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
   };
 
   return (
-    <div style={inline ? { position: 'relative' } : undefined}>
+    <div style={inline ? { position: 'relative', pointerEvents: 'auto' } : { pointerEvents: 'auto' }}>
       {/* Chat button — bottom-left */}
       <button
         onClick={toggleOpen}
