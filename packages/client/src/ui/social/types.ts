@@ -14,6 +14,9 @@ export interface SocialNode {
   mentalModels: MentalModel[];
   ledgerEntries: SocialLedgerEntry[];
   institutionIds: string[];
+  // Set by useSocialGraph when a search query is active; nodes not matching the
+  // query are marked as dimmed so SocialView can render them at reduced opacity.
+  _dimmed?: boolean;
 }
 
 export interface SocialEdge {

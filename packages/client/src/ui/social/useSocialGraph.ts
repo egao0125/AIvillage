@@ -173,7 +173,7 @@ export function useSocialGraph(filter: SocialFilter = DEFAULT_FILTER) {
         ...n,
         // Mark non-matching nodes so they can be dimmed
         _dimmed: !matchingIds.has(n.id),
-      })) as any;
+      }));
     }
 
     return { nodes: filteredNodes, edges };

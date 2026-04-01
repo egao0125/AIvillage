@@ -2,23 +2,34 @@
   "name": "@ai-village/server",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "lint": "eslint src/",
-    "spawn": "tsx src/cli/spawn.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@ai-village/ai-engine": "workspace:*",
     "@ai-village/shared": "workspace:*",
-    "@supabase/supabase-js": "^2.99.3",
+    "@aws-sdk/client-cognito-identity-provider": "^3.540.0",
+    "@socket.io/redis-streams-adapter": "^0.2.2",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.10.1",
+    "jose": "^5.2.0",
+    "pg": "^8.11.3",
     "socket.io": "^4.7.0"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.0",
+    "@types/pg": "^8.11.0",
+    "socket.io-client": "^4.8.3",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.9"
   }
 }

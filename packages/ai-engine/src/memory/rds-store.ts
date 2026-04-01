@@ -1,7 +1,9 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type pg from 'pg';
 import type { Memory } from '@ai-village/shared';
 import { TFIDFEmbedder } from './embeddings.js';
 import { diversifyResults } from './diversity.js';
+
+type Pool = pg.Pool;
 
 interface MemoryStore {
   add(memory: Memory): Promise<void>;
@@ -13,11 +15,11 @@ interface MemoryStore {
   getById(agentId: string, memoryId: string): Promise<Memory | undefined>;
 }
 
-export class SupabaseMemoryStore implements MemoryStore {
+export class RdsMemoryStore implements MemoryStore {
   private embedders: Map<string, TFIDFEmbedder> = new Map();
   private bootstrapped: Set<string> = new Set();
 
-  constructor(private supabase: SupabaseClient) {}
+  constructor(private pool: Pool) {}
 
   private getEmbedder(agentId: string): TFIDFEmbedder {
     if (!this.embedders.has(agentId)) {
@@ -34,63 +36,73 @@ export class SupabaseMemoryStore implements MemoryStore {
     const embedder = this.getEmbedder(agentId);
     if (this.bootstrapped.has(agentId)) return embedder;
 
-    const { data } = await this.supabase
-      .from('memories')
-      .select('content')
-      .eq('agent_id', agentId)
-      .order('timestamp', { ascending: false })
-      .limit(200);
+    const result = await this.pool.query<{ content: string }>(
+      `SELECT content FROM memories WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT 200`,
+      [agentId],
+    );
 
-    if (data) {
-      for (const row of data) {
-        embedder.addDocument(row.content as string);
-      }
+    for (const row of result.rows) {
+      embedder.addDocument(row.content);
     }
     this.bootstrapped.add(agentId);
     return embedder;
   }
 
   async add(memory: Memory): Promise<void> {
-    // Build embedding (don't persist to Supabase — recomputed on load)
+    // Build embedding (not persisted — recomputed on load)
     const embedder = this.getEmbedder(memory.agentId);
     embedder.addDocument(memory.content);
     memory.embedding = embedder.embed(memory.content);
 
     try {
-      const { error } = await this.supabase.from('memories').upsert({
-        id: memory.id,
-        agent_id: memory.agentId,
-        type: memory.type,
-        content: memory.content,
-        importance: memory.importance,
-        timestamp: memory.timestamp,
-        related_agent_ids: memory.relatedAgentIds ?? [],
-        visibility: memory.visibility ?? 'private',
-        emotional_valence: memory.emotionalValence ?? 0,
-        // Fix 2/3: Persist causal chain fields
-        caused_by: memory.causedBy ?? null,
-        led_to: memory.ledTo ?? null,
-      });
-      if (error) {
-        console.error(`[SupabaseMemoryStore] add() error for ${memory.agentId}: ${error.message}`);
-      }
+      await this.pool.query(
+        `INSERT INTO memories (id, agent_id, type, content, importance, timestamp, related_agent_ids, visibility, emotional_valence, caused_by, led_to)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (id) DO UPDATE SET
+           content = EXCLUDED.content,
+           importance = EXCLUDED.importance,
+           timestamp = EXCLUDED.timestamp,
+           related_agent_ids = EXCLUDED.related_agent_ids,
+           visibility = EXCLUDED.visibility,
+           emotional_valence = EXCLUDED.emotional_valence,
+           caused_by = EXCLUDED.caused_by,
+           led_to = EXCLUDED.led_to`,
+        [
+          memory.id,
+          memory.agentId,
+          memory.type,
+          memory.content,
+          memory.importance,
+          memory.timestamp,
+          memory.relatedAgentIds ?? [],
+          memory.visibility ?? 'private',
+          memory.emotionalValence ?? 0,
+          memory.causedBy ?? null,
+          memory.ledTo ?? null,
+        ],
+      );
     } catch (err) {
-      console.error('[SupabaseMemoryStore] add() failed:', err);
+      console.error('[RdsMemoryStore] add() failed:', (err as Error).message);
       // Don't throw — memory failure shouldn't crash the simulation
     }
   }
 
   async retrieve(agentId: string, query: string, limit = 10): Promise<Memory[]> {
-    // Fetch extra candidates to score locally (same strategy as InMemoryStore)
-    const fetchLimit = limit * 5;
-    const { data, error } = await this.supabase
-      .from('memories')
-      .select('*')
-      .eq('agent_id', agentId)
-      .order('timestamp', { ascending: false })
-      .limit(fetchLimit);
+    // Cap fetchLimit to prevent runaway queries on large memory tables (OOM / pool exhaustion).
+    // limit*5 gives enough candidates for TF-IDF re-ranking; 1000 is a hard safety ceiling.
+    const fetchLimit = Math.min(limit * 5, 1_000);
+    let result: { rows: Record<string, unknown>[] };
+    try {
+      result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT $2`,
+        [agentId, fetchLimit],
+      );
+    } catch (err) {
+      console.error('[RdsMemoryStore] retrieve() failed:', (err as Error).message);
+      return [];
+    }
 
-    if (error || !data || data.length === 0) return [];
+    if (result.rows.length === 0) return [];
 
     // Bootstrap embedder lazily
     const embedder = await this.bootstrapEmbedder(agentId);
@@ -99,7 +111,7 @@ export class SupabaseMemoryStore implements MemoryStore {
     const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
     const now = Date.now();
 
-    const scored = data.map(row => {
+    const scored = result.rows.map(row => {
       const memory = this.rowToMemory(row);
 
       // Compute embedding on the fly (not persisted)
@@ -143,64 +155,75 @@ export class SupabaseMemoryStore implements MemoryStore {
   }
 
   async getRecent(agentId: string, limit = 20): Promise<Memory[]> {
-    const { data, error } = await this.supabase
-      .from('memories')
-      .select('*')
-      .eq('agent_id', agentId)
-      .order('timestamp', { ascending: false })
-      .limit(limit);
-
-    if (error || !data) return [];
-    return data.map(row => this.rowToMemory(row));
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT $2`,
+        [agentId, limit],
+      );
+      return result.rows.map(row => this.rowToMemory(row));
+    } catch (err) {
+      console.error('[RdsMemoryStore] getRecent() failed:', (err as Error).message);
+      return [];
+    }
   }
 
   async getByImportance(agentId: string, minImportance: number): Promise<Memory[]> {
-    const { data, error } = await this.supabase
-      .from('memories')
-      .select('*')
-      .eq('agent_id', agentId)
-      .gte('importance', minImportance)
-      .order('importance', { ascending: false });
-
-    if (error || !data) return [];
-    return data.map(row => this.rowToMemory(row));
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 AND importance >= $2 ORDER BY importance DESC`,
+        [agentId, minImportance],
+      );
+      return result.rows.map(row => this.rowToMemory(row));
+    } catch (err) {
+      console.error('[RdsMemoryStore] getByImportance() failed:', (err as Error).message);
+      return [];
+    }
   }
 
   async getOlderThan(agentId: string, timestamp: number): Promise<Memory[]> {
-    const { data, error } = await this.supabase
-      .from('memories')
-      .select('*')
-      .eq('agent_id', agentId)
-      .lt('timestamp', timestamp)
-      .order('timestamp', { ascending: false });
-
-    if (error || !data) return [];
-    return data.map(row => this.rowToMemory(row));
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE agent_id = $1 AND timestamp < $2 ORDER BY timestamp DESC`,
+        [agentId, timestamp],
+      );
+      return result.rows.map(row => this.rowToMemory(row));
+    } catch (err) {
+      console.error('[RdsMemoryStore] getOlderThan() failed:', (err as Error).message);
+      return [];
+    }
   }
 
   async removeBatch(ids: string[]): Promise<void> {
     if (ids.length === 0) return;
     try {
-      // Supabase .in() supports up to ~300 IDs; batch if needed
-      const batchSize = 200;
-      for (let i = 0; i < ids.length; i += batchSize) {
-        const batch = ids.slice(i, i + batchSize);
-        await this.supabase.from('memories').delete().in('id', batch);
-      }
+      await this.pool.query(`DELETE FROM memories WHERE id = ANY($1::uuid[])`, [ids]);
     } catch (err) {
-      console.error('[SupabaseMemoryStore] removeBatch() failed:', err);
+      console.error('[RdsMemoryStore] removeBatch() failed:', (err as Error).message);
     }
   }
 
+  /**
+   * Release in-memory state for a removed agent.
+   * Call this when an agent is permanently deleted so the TF-IDF embedder
+   * and bootstrap flag for that agent are freed from memory.
+   */
+  cleanup(agentId: string): void {
+    this.embedders.delete(agentId);
+    this.bootstrapped.delete(agentId);
+  }
+
   async getById(agentId: string, memoryId: string): Promise<Memory | undefined> {
-    const { data, error } = await this.supabase
-      .from('memories')
-      .select('*')
-      .eq('id', memoryId)
-      .eq('agent_id', agentId)
-      .single();
-    if (error || !data) return undefined;
-    return this.rowToMemory(data as Record<string, unknown>);
+    try {
+      const result = await this.pool.query<Record<string, unknown>>(
+        `SELECT * FROM memories WHERE id = $1 AND agent_id = $2`,
+        [memoryId, agentId],
+      );
+      if (result.rows.length === 0) return undefined;
+      return this.rowToMemory(result.rows[0]);
+    } catch (err) {
+      console.error('[RdsMemoryStore] getById() failed:', (err as Error).message);
+      return undefined;
+    }
   }
 
   private rowToMemory(row: Record<string, unknown>): Memory {
@@ -210,12 +233,13 @@ export class SupabaseMemoryStore implements MemoryStore {
       type: row.type as Memory['type'],
       content: row.content as string,
       importance: row.importance as number,
-      timestamp: row.timestamp as number,
+      timestamp: typeof row.timestamp === 'bigint'
+        ? Number(row.timestamp)
+        : row.timestamp as number,
       relatedAgentIds: (row.related_agent_ids as string[]) ?? [],
       visibility: (row.visibility as Memory['visibility']) ?? 'private',
       emotionalValence: (row.emotional_valence as number) ?? 0,
       isCore: (row.importance as number) >= 9,
-      // Fix 2/3: Restore causal chain fields
       causedBy: (row.caused_by as string) ?? undefined,
       ledTo: (row.led_to as string[]) ?? undefined,
     };
