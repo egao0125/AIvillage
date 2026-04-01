@@ -38,7 +38,7 @@ export const LocationDetail: React.FC<{ locationId: string }> = ({ locationId })
           <span style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>Owner: </span>
           <span
             style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.accent, cursor: 'pointer' }}
-            onClick={() => gameStore.inspectAgent(owner.id)}
+            onClick={() => gameStore.drillToAgent(owner.id)}
           >
             {owner.config.name}
           </span>

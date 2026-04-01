@@ -60,6 +60,7 @@ export interface InspectTarget {
   type: 'agent' | 'relationship' | 'event' | 'location' | 'institution';
   id: string;
   secondaryId?: string;
+  drillDown?: boolean;
 }
 
 export interface ChatEntry {
@@ -604,6 +605,22 @@ class GameStore {
 
   inspect(target: InspectTarget): void {
     this.state = { ...this.state, activeMode: 'inspect', inspectTarget: target };
+    this.notify();
+  }
+
+  /** Drill-down navigation from within the ContextPanel — builds breadcrumbs */
+  drillToAgent(agentId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'agent', id: agentId, drillDown: true } };
+    this.notify();
+  }
+
+  drillToRelationship(agentId: string, secondaryId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'relationship', id: agentId, secondaryId, drillDown: true } };
+    this.notify();
+  }
+
+  drillToInstitution(institutionId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'institution', id: institutionId, drillDown: true } };
     this.notify();
   }
 

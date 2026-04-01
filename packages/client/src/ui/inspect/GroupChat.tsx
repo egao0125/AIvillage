@@ -100,7 +100,7 @@ export const GroupChat: React.FC<{ institutionId: string; memberIds: string[] }>
                       <div key={msg.id} style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.text }}>
                         <span
                           style={{ color: hexToString(nameToColor(msg.agentName)), cursor: 'pointer', fontWeight: 'bold' }}
-                          onClick={() => gameStore.inspectAgent(msg.agentId)}
+                          onClick={() => gameStore.drillToAgent(msg.agentId)}
                         >
                           {msg.agentName}:
                         </span>{' '}
