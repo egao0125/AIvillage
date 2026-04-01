@@ -120,7 +120,7 @@ export const AppShell: React.FC = () => {
         style={{
           width: '100%',
           height: '100%',
-          visibility: activeMode === 'watch' ? 'visible' : 'hidden',
+          visibility: activeMode === 'watch' || activeMode === 'inspect' ? 'visible' : 'hidden',
         }}
       />
       {activeMode === 'watch' && <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />}
