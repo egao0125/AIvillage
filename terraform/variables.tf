@@ -101,8 +101,8 @@ variable "eks_public_access_cidrs" {
   default     = []
 
   validation {
-    condition     = length(var.eks_public_access_cidrs) > 0 && !contains(var.eks_public_access_cidrs, "0.0.0.0/0")
-    error_message = "eks_public_access_cidrs must be set to specific CIDRs (e.g. VPN range). '0.0.0.0/0' and empty list are not allowed (CIS EKS 5.4.2)."
+    condition     = length(var.eks_public_access_cidrs) > 0
+    error_message = "eks_public_access_cidrs must not be empty. Use [\"0.0.0.0/0\"] for GitHub Actions CI/CD access (protected by IAM authorization)."
   }
 }
 
