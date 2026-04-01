@@ -149,7 +149,8 @@ jobs:
       - name: Inject Ingress ARNs from Terraform outputs
         working-directory: terraform
         run: |
-          terraform init -input=false
+          # aws_profile="" disables profile lookup; CI uses env var credentials from OIDC
+          terraform init -input=false -var 'aws_profile='
           CERT_ARN=$(terraform output -raw acm_certificate_arn 2>/dev/null || echo "")
           WAF_ARN=$(terraform output -raw waf_web_acl_arn 2>/dev/null || echo "")
           DOMAIN=$(terraform output -json 2>/dev/null | jq -r '.domain_name.value // empty' || echo "")
