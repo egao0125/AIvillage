@@ -31,6 +31,8 @@ export const AgentDetail: React.FC<{ agentId: string }> = ({ agentId }) => {
       <Divider />
       <CharacterArc agentId={agentId} />
       <Divider />
+      <AgentStats agent={agent} />
+      <Divider />
       <Relationships agent={agent} />
       <Divider />
 
@@ -94,8 +96,6 @@ export const AgentDetail: React.FC<{ agentId: string }> = ({ agentId }) => {
         )}
       </div>
 
-      <Divider />
-      <AgentStats agent={agent} />
     </div>
   );
 };
