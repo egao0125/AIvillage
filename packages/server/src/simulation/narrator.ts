@@ -29,8 +29,8 @@ export class VillageNarrator {
 
     this.lastNarrateMinute = totalMinutes;
 
-    // Drain events for this narration
-    const events = this.eventLog.splice(0);
+    // Snapshot events — do NOT drain yet; restore on LLM failure so events aren't lost
+    const events = this.eventLog.slice();
     const eventDump = events.map(e => e.text).join('\n');
 
     // Collect agent moods
@@ -51,6 +51,8 @@ Narrate what's been happening:`;
 
     try {
       const content = await this.llm.complete(systemPrompt, userPrompt);
+      // LLM succeeded — now drain the events we just narrated
+      this.eventLog.splice(0, events.length);
 
       // Extract agent names referenced in the narrative
       const referencedAgentIds: string[] = [];

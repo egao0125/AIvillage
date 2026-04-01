@@ -1,8 +1,8 @@
-import type { Agent, BoardPost, DriveState, GameTime, Institution, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Institution, MapConfig, Position, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
-import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
+import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, getMapWidth, getMapHeight } from '../map/map-provider.js';
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -48,7 +48,6 @@ export class AgentController {
   idleTimer: number = 0;
   private planningInProgress: boolean = false;
   private reflectingInProgress: boolean = false;
-  private currentAreaId: string | null = null; // track where the agent is performing
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
@@ -85,6 +84,8 @@ export class AgentController {
   readonly sleepHour: number;
   readonly homeArea: string;
 
+  private mapConfig: MapConfig;
+
   constructor(
     agent: Agent,
     cognition: AgentCognition,
@@ -94,12 +95,24 @@ export class AgentController {
     sleepHour: number,
     homeArea: string = 'plaza',
     private soloActionExecutor?: SoloActionExecutor,
+    // Shared engine maps — required for cross-agent memory/controller operations.
+    // Passed by reference so new agents added after construction are visible.
+    private agentCognitions?: Map<string, AgentCognition>,
+    private agentControllers?: Map<string, AgentController>,
+    mapConfig?: MapConfig,
   ) {
     this.agent = agent;
     this.cognition = cognition;
     this.wakeHour = wakeHour;
     this.sleepHour = sleepHour;
     this.homeArea = homeArea;
+    // Default to village config with all systems enabled
+    this.mapConfig = mapConfig ?? {
+      id: 'village', name: 'The Village', description: '', mapSize: { width: 1024, height: 1024 },
+      spawnAreas: [], actions: [], buildGameRules: () => '', winCondition: 'none',
+      tickConfig: { decisionIdleTicks: 20 },
+      systems: { hunger: true, gathering: true, crafting: true, governance: true, property: true, combat: false, shrinkingZone: false, stealth: false, board: true },
+    };
 
     // Initialize drives and vitals if not set
     if (!this.agent.drives) {
@@ -129,7 +142,7 @@ export class AgentController {
 
   /** Add a consequence concern to another agent by ID */
   private addConsequenceToAgent(agentId: string, text: string, cat: 'threat' | 'commitment' | 'unresolved', ids: string[]): void {
-    const cog = (this.world as any).cognitions?.get?.(agentId);
+    const cog = this.agentCognitions?.get(agentId);
     cog?.fourStream?.addConcern({
       id: crypto.randomUUID(),
       content: text,
@@ -210,13 +223,15 @@ export class AgentController {
       importance: 2,
       timestamp: Date.now(),
       relatedAgentIds: [],
-    });
+    }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
   }
 
   resetApiState(newCognition: AgentCognition): void {
     this.cognition = newCognition;
     this.apiExhausted = false;
+    this.apiAuthDead = false;  // A new key may be valid — clear the 401/403 dead flag
     this.consecutiveApiFailures = 0;
+    this.apiRecoveryTimer = 0;
     this.state = 'idle';
     console.log(`[Agent] ${this.agent.config.name} API key updated — resuming`);
     this.broadcaster.agentAction(this.agent.id, 'API key updated — resuming', '\u2705');
@@ -427,7 +442,7 @@ export class AgentController {
         !this.postConversationPending) {
       this.importanceAccum = 0;
       this.lastBeliefTick = this.world.time.totalMinutes;
-      void this.cognition.fourStream.generateBeliefs(this.cognition.llmProvider);
+      void this.cognition.fourStream.generateBeliefs(this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] generateBeliefs failed:', (err as Error).message); });
     }
 
     // Log transition memories when state changes (zero LLM cost)
@@ -549,7 +564,7 @@ export class AgentController {
 
 
   startMoveTo(target: Position): void {
-    const path = findPath(this.agent.position, target, getWalkable, MAP_WIDTH, MAP_HEIGHT);
+    const path = findPath(this.agent.position, target, getWalkable, getMapWidth(), getMapHeight());
 
     if (path.length <= 1) {
       // Already there or no path found — go idle so decideAndAct picks up
@@ -883,7 +898,7 @@ export class AgentController {
         content: `I'm getting ${hungerBand === 2 ? 'very hungry' : 'hungry'}. Hunger: ${Math.round(v.hunger)}/100.`,
         importance: hungerBand === 2 ? 7 : 5,
         timestamp: Date.now(), relatedAgentIds: [],
-      });
+      }).catch((err: unknown) => { console.warn('[Controller] vitals addMemory failed:', (err as Error).message); });
     }
     if (energyBand > this.lastEnergyBand) {
       const vitalsMemId = crypto.randomUUID();
@@ -892,7 +907,7 @@ export class AgentController {
         content: `I'm ${energyBand === 2 ? 'completely exhausted' : 'getting tired'}. Energy: ${Math.round(v.energy)}/100.`,
         importance: energyBand === 2 ? 7 : 5,
         timestamp: Date.now(), relatedAgentIds: [],
-      });
+      }).catch((err: unknown) => { console.warn('[Controller] vitals addMemory failed:', (err as Error).message); });
     }
     if (healthBand > this.lastHealthBand) {
       const vitalsMemId = crypto.randomUUID();
@@ -901,7 +916,7 @@ export class AgentController {
         content: `I'm ${healthBand === 2 ? 'critically injured' : 'hurt and need care'}. Health: ${Math.round(v.health)}/100.`,
         importance: healthBand === 2 ? 8 : 6,
         timestamp: Date.now(), relatedAgentIds: [],
-      });
+      }).catch((err: unknown) => { console.warn('[Controller] vitals addMemory failed:', (err as Error).message); });
     }
 
     // Four Stream: add vitals as concerns at threshold crossings
@@ -1002,7 +1017,11 @@ export class AgentController {
     this.agent.alive = false;
     this.agent.causeOfDeath = cause;
     this.agent.state = 'dead';
+    this.agent.currentAction = '';
     this.state = 'idle'; // Stop all controller activity
+
+    // Broadcast death state immediately to prevent stale 'resting'/'trading' on clients
+    this.world.updateAgentState(this.agent.id, 'dead', '');
 
     // Drop items — they become unclaimed
     const droppedItems = this.world.killAgent(this.agent.id, cause);
@@ -1045,7 +1064,7 @@ export class AgentController {
     // Clean up dossiers: collapse dead agent's entry for all living agents
     for (const [id, agent] of this.world.agents) {
       if (id === this.agent.id || agent.alive === false) continue;
-      const cog = (this.world as any).cognitions?.get?.(id);
+      const cog = this.agentCognitions?.get(id);
       const dossier = cog?.fourStream?.getDossier(this.agent.id);
       if (dossier) {
         dossier.summary = `Died of ${cause} on day ${this.world.time.day}.`;
@@ -1098,7 +1117,7 @@ export class AgentController {
       importance: 3,
       timestamp: Date.now(),
       relatedAgentIds: [],
-    });
+    }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
   }
 
   private nameHash(areas: readonly string[]): string {
@@ -1131,7 +1150,7 @@ export class AgentController {
       importance: 3,
       timestamp: Date.now(),
       relatedAgentIds: [],
-    });
+    }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
 
     if (this.decisionQueue) {
       this.decisionQueue.enqueue({
@@ -1160,7 +1179,7 @@ export class AgentController {
     for (const c of commitments) {
       const weightLabel = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'PROMISE' : 'casual';
       const daysLeft = c.expiresDay - this.world.time.day;
-      const urgency = daysLeft <= 0 ? ' OVERDUE' : daysLeft === 0 ? ' due today' : '';
+      const urgency = daysLeft < 0 ? ' OVERDUE' : daysLeft === 0 ? ' due today' : '';
       lines.push(`- [${weightLabel}${urgency}] ${c.content} (to ${c.targetName})`);
     }
 
@@ -1725,9 +1744,16 @@ export class AgentController {
       propertyInfo,
       villageRules,
       allAgentLocations,
-      allReputations: (this.world.reputation ?? [])
-        .filter(r => r.fromAgentId === 'system' && r.score !== 0)
-        .map(r => ({ id: r.toAgentId, score: r.score })),
+      allReputations: (() => {
+        // Aggregate ALL reputation entries per agent (system + per-agent from conversations)
+        const repByAgent = new Map<string, number>();
+        for (const r of this.world.reputation ?? []) {
+          repByAgent.set(r.toAgentId, (repByAgent.get(r.toAgentId) ?? 0) + r.score);
+        }
+        return [...repByAgent.entries()]
+          .filter(([, score]) => score !== 0)
+          .map(([id, score]) => ({ id, score }));
+      })(),
       villageHistory: this.world.getTopVillageMemory(5) || undefined,
     };
   }
@@ -1752,7 +1778,7 @@ export class AgentController {
       const text = c.content.toLowerCase();
       const weightLabel = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'PROMISE' : 'casual promise';
       const daysLeft = c.expiresDay - this.world.time.day;
-      const urgency = daysLeft <= 0 ? ' OVERDUE!' : daysLeft === 0 ? ' Due TODAY!' : '';
+      const urgency = daysLeft < 0 ? ' OVERDUE!' : daysLeft === 0 ? ' Due TODAY!' : '';
 
       // Check if promised items are involved
       if (c.itemsPromised && c.itemsPromised.length > 0) {
@@ -1941,7 +1967,7 @@ export class AgentController {
       importance: outcomeImportance,
       timestamp: Date.now(),
       relatedAgentIds: [],
-    });
+    }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
     // Four Stream: accumulate importance for belief generation
     this.importanceAccum += outcomeImportance;
 
@@ -2144,7 +2170,7 @@ export class AgentController {
       // Adjust trust: target trusts giver more
       this.adjustTrust(target, this.agent, 10);
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider);
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       this.adjustReputation(this.agent.id, +3, 'Generosity');
 
@@ -2262,7 +2288,7 @@ export class AgentController {
       this.lastTrigger = outcome.description;
       // Dossier update
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       // PUBLIC: trade post if successful
       if (outcome.success) {
@@ -2306,15 +2332,15 @@ export class AgentController {
         id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
         content: `I threatened ${target.config.name}: ${threatText}`,
         importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
-      });
+      }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
 
-      const targetCog = (this.world as any).cognitions?.get?.(target.id);
+      const targetCog = this.agentCognitions?.get(target.id);
       if (targetCog) {
         void targetCog.addMemory({
           id: crypto.randomUUID(), agentId: target.id, type: 'observation',
           content: `${this.agent.config.name} threatened me: ${threatText}`,
           importance: 9, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
-        });
+        }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         if (targetCog.fourStream) {
           targetCog.fourStream.addConcern({
             id: crypto.randomUUID(),
@@ -2330,10 +2356,10 @@ export class AgentController {
 
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name,
-          `I threatened ${target.config.name}: ${threatText}`, this.cognition.llmProvider);
+          `I threatened ${target.config.name}: ${threatText}`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
 
-      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      const targetCtrl = this.agentControllers?.get(target.id);
       if (targetCtrl) {
         targetCtrl.lastTrigger = `${this.agent.config.name} just threatened you: "${threatText}". What do you do?`;
         targetCtrl.idleTimer = 7;
@@ -2382,30 +2408,30 @@ export class AgentController {
       }
       const confrontText = decision.sayAloud || decision.reason;
       // Memory for confronter
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I confronted ${target.config.name}: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] });
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I confronted ${target.config.name}: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       // Memory for target
-      const targetCognition = (this.world as any).cognitions?.get?.(target.id);
+      const targetCognition = this.agentCognitions?.get(target.id);
       if (targetCognition) {
-        void targetCognition.addMemory({ id: crypto.randomUUID(), agentId: target.id, type: 'action_outcome', content: `${this.agent.config.name} confronted me: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id] });
+        void targetCognition.addMemory({ id: crypto.randomUUID(), agentId: target.id, type: 'action_outcome', content: `${this.agent.config.name} confronted me: ${confrontText}`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       }
       // Witness memories for all nearby
       const nearbyAll = this.world.getNearbyAgents(this.agent.position, 5).filter(a => a.id !== this.agent.id && a.id !== target.id);
       for (const witness of nearbyAll) {
-        const wCog = (this.world as any).cognitions?.get?.(witness.id);
+        const wCog = this.agentCognitions?.get(witness.id);
         if (wCog) {
-          void wCog.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `I saw ${this.agent.config.name} confront ${target.config.name}: "${confrontText}"`, importance: 5, timestamp: Date.now(), relatedAgentIds: [this.agent.id, target.id] });
+          void wCog.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `I saw ${this.agent.config.name} confront ${target.config.name}: "${confrontText}"`, importance: 5, timestamp: Date.now(), relatedAgentIds: [this.agent.id, target.id] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
       }
       this.adjustTrust(target, this.agent, -15);
       this.adjustTrust(this.agent, target, -15);
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I confronted ${target.config.name}: ${confrontText}`, this.cognition.llmProvider);
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I confronted ${target.config.name}: ${confrontText}`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       // Force target to react
-      const targetCtrl = (this.world as any).controllers?.get?.(target.id);
+      const targetCtrl = this.agentControllers?.get(target.id);
       if (targetCtrl) {
         targetCtrl.lastTrigger = `${this.agent.config.name} just confronted you: "${confrontText}". How do you respond?`;
-        targetCtrl.idleTimer = targetCtrl.idleThreshold;
+        targetCtrl.idleTimer = 20; // trigger decision on next tick (threshold is 20)
       }
       // PUBLIC: news post for confrontation
       const confrontPost: BoardPost = {
@@ -2464,7 +2490,7 @@ export class AgentController {
       this.lastOutcome = outcome.description;
       this.lastTrigger = outcome.description;
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       // PUBLIC: news post + all agents get memory
       const stealPost: BoardPost = {
@@ -2482,7 +2508,7 @@ export class AgentController {
       if (this.bus) this.bus.emit({ type: 'board_post_created', post: stealPost });
       for (const [id] of this.world.agents) {
         if (id === this.agent.id) continue;
-        const cog = (this.world as any).cognitions?.get?.(id);
+        const cog = this.agentCognitions?.get(id);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(),
@@ -2492,7 +2518,7 @@ export class AgentController {
             importance: 8,
             timestamp: Date.now(),
             relatedAgentIds: [this.agent.id, target.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
       }
       // Consequence concerns: thief fears retaliation, victim feels threatened
@@ -2500,7 +2526,7 @@ export class AgentController {
         `I stole from ${target.config.name}. They may retaliate.`,
         'threat', [target.id]
       );
-      const vCog = (this.world as any).cognitions?.get?.(target.id);
+      const vCog = this.agentCognitions?.get(target.id);
       vCog?.fourStream?.addConcern({
         id: crypto.randomUUID(),
         content: `${this.agent.config.name} stole from me. Guard my food. Consider confronting.`,
@@ -2567,7 +2593,7 @@ export class AgentController {
         }
 
         // Target gets a memory of being attacked
-        const targetCog = (this as any).world?.cognitions?.get?.(outcome.targetAgentId);
+        const targetCog = this.agentCognitions?.get(outcome.targetAgentId);
         if (targetCog) {
           void targetCog.addMemory({
             id: crypto.randomUUID(),
@@ -2577,11 +2603,11 @@ export class AgentController {
             importance: 9,
             timestamp: Date.now(),
             relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
 
         // Force target to react immediately
-        const targetCtrl = (this.world as any).controllers?.get?.(outcome.targetAgentId) as AgentController | undefined;
+        const targetCtrl = this.agentControllers?.get(outcome.targetAgentId) as AgentController | undefined;
         if (targetCtrl && targetAgent) {
           targetCtrl.lastTrigger = this.agent.config.name + ' just attacked you! Health: ' + Math.round(targetAgent.vitals?.health ?? 0) + '/100. What do you do?';
           targetCtrl.idleTimer = 7;
@@ -2592,7 +2618,7 @@ export class AgentController {
       const witnesses = this.world.getNearbyAgents(this.agent.position, 5)
         .filter(a => a.id !== this.agent.id && a.id !== target.id && a.alive !== false);
       for (const w of witnesses) {
-        const wCog = (this as any).world?.cognitions?.get?.(w.id);
+        const wCog = this.agentCognitions?.get(w.id);
         if (wCog) {
           void wCog.addMemory({
             id: crypto.randomUUID(),
@@ -2602,10 +2628,10 @@ export class AgentController {
             importance: 8,
             timestamp: Date.now(),
             relatedAgentIds: [this.agent.id, target.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
         // Force witnesses to react
-        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        const wCtrl = this.agentControllers?.get(w.id) as AgentController | undefined;
         if (wCtrl) {
           wCtrl.lastTrigger = this.agent.config.name + ' just attacked ' + target.config.name + ' right in front of you! What do you do?';
           wCtrl.idleTimer = 7;
@@ -2617,9 +2643,9 @@ export class AgentController {
       this.adjustTrust(target, this.agent, -40);
       // Contextual witness trust — witnesses who already distrusted the target see justice, not violence
       for (const w of witnesses) {
-        const wCtrl = (this.world as any).controllers?.get?.(w.id) as AgentController | undefined;
+        const wCtrl = this.agentControllers?.get(w.id) as AgentController | undefined;
         if (wCtrl) {
-          const wDossier = ((this.world as any).cognitions?.get?.(w.id))
+          const wDossier = (this.agentCognitions?.get(w.id))
             ?.fourStream?.getDossier?.(target.id);
           const wTrustTarget = wDossier?.trust ?? 0;
           if (wTrustTarget < -20) {
@@ -2631,7 +2657,7 @@ export class AgentController {
         }
       }
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider);
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
 
       // Emit fight event for engine-level handling
@@ -2763,14 +2789,14 @@ export class AgentController {
           id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
           content: `I invited ${target.config.name} to join ${myGroup.name}. They're now a member.`,
           importance: 7, timestamp: Date.now(), relatedAgentIds: [target.id],
-        });
-        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
+        const targetCog = this.agentCognitions?.get(target.id);
         if (targetCog) {
           void targetCog.addMemory({
             id: crypto.randomUUID(), agentId: target.id, type: 'observation',
             content: `${this.agent.config.name} invited me to join ${myGroup.name}. I'm now a member.`,
             importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
           if (targetCog.fourStream) {
             targetCog.fourStream.addConcern({
               id: crypto.randomUUID(),
@@ -2785,7 +2811,7 @@ export class AgentController {
         this.adjustTrust(this.agent, target, 15);
         this.adjustTrust(target, this.agent, 15);
         if (this.cognition.fourStream) {
-          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `${target.config.name} joined ${myGroup.name}.`, this.cognition.llmProvider);
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `${target.config.name} joined ${myGroup.name}.`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
         }
 
         const newsPost: BoardPost = {
@@ -2818,7 +2844,8 @@ export class AgentController {
           if (groupName.length < 3 || groupName.length > 40) {
             groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
           }
-        } catch {
+        } catch (err) {
+          console.warn(`[AgentController] Group name LLM failed for ${this.agent.config.name}:`, (err as Error).message);
           groupName = `${this.agent.config.name.split(' ')[0]} & ${target.config.name.split(' ')[0]}'s Alliance`;
         }
 
@@ -2845,14 +2872,14 @@ export class AgentController {
           id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome',
           content: `I founded ${groupName} with ${target.config.name}. ${decision.reason}`,
           importance: 8, timestamp: Date.now(), relatedAgentIds: [target.id],
-        });
-        const targetCog = (this.world as any).cognitions?.get?.(target.id);
+        }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
+        const targetCog = this.agentCognitions?.get(target.id);
         if (targetCog) {
           void targetCog.addMemory({
             id: crypto.randomUUID(), agentId: target.id, type: 'observation',
             content: `${this.agent.config.name} and I founded ${groupName}. ${decision.reason}`,
             importance: 8, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
         if (this.cognition.fourStream) {
           this.cognition.fourStream.addConcern({
@@ -2873,7 +2900,7 @@ export class AgentController {
         this.adjustTrust(this.agent, target, 20);
         this.adjustTrust(target, this.agent, 20);
         if (this.cognition.fourStream) {
-          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `We founded ${groupName} together.`, this.cognition.llmProvider);
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `We founded ${groupName} together.`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
         }
 
         const newsPost: BoardPost = {
@@ -2947,17 +2974,17 @@ export class AgentController {
         content: `I left ${group.name}.`,
         importance: 8, timestamp: Date.now(),
         relatedAgentIds: group.members.map(m => m.agentId),
-      });
+      }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
 
       for (const member of group.members) {
         if (member.agentId === this.agent.id) continue;
-        const memberCog = (this.world as any).cognitions?.get?.(member.agentId);
+        const memberCog = this.agentCognitions?.get(member.agentId);
         if (memberCog) {
           void memberCog.addMemory({
             id: crypto.randomUUID(), agentId: member.agentId, type: 'observation',
             content: `${this.agent.config.name} left ${group.name}.${group.dissolved ? ' The group has dissolved.' : ''}`,
             importance: 8, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
           if (memberCog.fourStream) {
             memberCog.fourStream.addConcern({
               id: crypto.randomUUID(),
@@ -2971,7 +2998,7 @@ export class AgentController {
 
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name,
-          `I left ${group.name}.`, this.cognition.llmProvider);
+          `I left ${group.name}.`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
 
       const betrayPost: BoardPost = {
@@ -3027,7 +3054,7 @@ export class AgentController {
         this.bus.emit({ type: 'board_post_created', post });
 
       }
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${areaName}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${areaName}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       this.lastOutcome = `You proposed claiming ${areaName}. The village will vote on it.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
@@ -3068,7 +3095,7 @@ export class AgentController {
         this.bus.emit({ type: 'board_post_created', post });
 
       }
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${building.name}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed claiming ${building.name}. The village will vote.`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       this.lastOutcome = `You proposed claiming ${building.name}. The village will vote on it.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
@@ -3088,7 +3115,7 @@ export class AgentController {
         }
       }
       for (const witness of nearbyAll) {
-        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `${this.agent.config.name} publicly accused ${accused?.config.name ?? 'someone'}: "${accusation.slice(0, 80)}"`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id, ...(accused ? [accused.id] : [])] });
+        void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: witness.id, type: 'observation', content: `${this.agent.config.name} publicly accused ${accused?.config.name ?? 'someone'}: "${accusation.slice(0, 80)}"`, importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id, ...(accused ? [accused.id] : [])] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       }
       const post = {
         id: crypto.randomUUID(),
@@ -3110,7 +3137,7 @@ export class AgentController {
         this.adjustReputation(accused.id, -3, 'Publicly accused');
         this.adjustReputation(this.agent.id, -2, 'Made accusation');
 
-        const accusedCog = (this.world as any).cognitions?.get?.(accused.id);
+        const accusedCog = this.agentCognitions?.get(accused.id);
         if (accusedCog?.fourStream) {
           accusedCog.fourStream.addConcern({
             id: crypto.randomUUID(),
@@ -3190,7 +3217,7 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
       this.world.addBoardPost(post);
       this.broadcaster.boardPost(post);
       if (this.bus) this.bus.emit({ type: 'board_post_created', post });
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I posted on the village board: "${content.slice(0, 80)}"`, importance: 4, timestamp: Date.now(), relatedAgentIds: [] });
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I posted on the village board: "${content.slice(0, 80)}"`, importance: 4, timestamp: Date.now(), relatedAgentIds: [] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       this.lastOutcome = `You posted on the village board.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
@@ -3243,7 +3270,7 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
 
       for (const member of group.members) {
         if (member.agentId === this.agent.id) continue;
-        const cog = (this.world as any).cognitions?.get?.(member.agentId);
+        const cog = this.agentCognitions?.get(member.agentId);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(),
@@ -3253,7 +3280,7 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
             importance: 5,
             timestamp: Date.now(),
             relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
       }
 
@@ -3265,7 +3292,7 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
         importance: 4,
         timestamp: Date.now(),
         relatedAgentIds: group.members.map(m => m.agentId).filter(id => id !== this.agent.id),
-      });
+      }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
 
       this.lastOutcome = `You posted in ${group.name}.`;
       this.lastTrigger = this.lastOutcome;
@@ -3303,11 +3330,11 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
         content: `I called a meeting about: ${meetingTopic}. ${names} were present.`,
         importance: 6, timestamp: Date.now(),
         relatedAgentIds: nearbyAll.map(a => a.id),
-      });
+      }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
 
       // All nearby agents get notified and forced to react
       for (const a of nearbyAll) {
-        const cog = (this.world as any).cognitions?.get?.(a.id);
+        const cog = this.agentCognitions?.get(a.id);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(), agentId: a.id,
@@ -3315,9 +3342,9 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
             content: `${this.agent.config.name} called a meeting about: "${meetingTopic}". ${names} are here.`,
             importance: 6, timestamp: Date.now(),
             relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
-        const ctrl = (this.world as any).controllers?.get?.(a.id) as AgentController | undefined;
+        const ctrl = this.agentControllers?.get(a.id) as AgentController | undefined;
         if (ctrl) {
           ctrl.lastTrigger = `${this.agent.config.name} called a meeting: "${meetingTopic}". Respond to their topic.`;
           ctrl.idleTimer = 7;
@@ -3426,7 +3453,7 @@ Write ONLY the rule in the format above. Stay in character.`;
       // All agents get a memory about the proposed rule
       for (const [id, agent] of this.world.agents) {
         if (id === this.agent.id || agent.alive === false) continue;
-        const cog = (this.world as any).cognitions?.get?.(id);
+        const cog = this.agentCognitions?.get(id);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(),
@@ -3436,11 +3463,11 @@ Write ONLY the rule in the format above. Stay in character.`;
             importance: 7,
             timestamp: Date.now(),
             relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         }
       }
 
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed a rule: "${ruleContent.slice(0, 80)}"`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] });
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I proposed a rule: "${ruleContent.slice(0, 80)}"`, importance: 6, timestamp: Date.now(), relatedAgentIds: [] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       this.lastOutcome = `You proposed a rule for the village.`;
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
@@ -3468,7 +3495,8 @@ Write ONLY the rule in the format above. Stay in character.`;
         if (ruleContent.length < 3 || ruleContent.length > 200) {
           ruleContent = decision.reason.slice(0, 150);
         }
-      } catch {
+      } catch (err) {
+        console.warn(`[AgentController] Rule content LLM failed for ${this.agent.config.name}:`, (err as Error).message);
         ruleContent = decision.reason.slice(0, 150);
       }
 
@@ -3477,7 +3505,7 @@ Write ONLY the rule in the format above. Stay in character.`;
 
       // Notify all members with memory + permanent concern
       for (const member of group.members) {
-        const cog = (this.world as any).cognitions?.get?.(member.agentId);
+        const cog = this.agentCognitions?.get(member.agentId);
         if (cog) {
           void cog.addMemory({
             id: crypto.randomUUID(), agentId: member.agentId,
@@ -3485,7 +3513,7 @@ Write ONLY the rule in the format above. Stay in character.`;
             content: `${this.agent.config.name} set a rule for ${group.name}: "${ruleContent}"`,
             importance: 7, timestamp: Date.now(),
             relatedAgentIds: [this.agent.id],
-          });
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
           cog.fourStream?.addConcern({
             id: crypto.randomUUID(),
             content: `${group.name} rule: ${ruleContent}`,
@@ -3556,8 +3584,8 @@ Write ONLY the rule in the format above. Stay in character.`;
         content: `I kicked ${targetName} out of ${group.name}.`,
         importance: 8, timestamp: Date.now(),
         relatedAgentIds: [targetMember.agentId],
-      });
-      const targetCog = (this.world as any).cognitions?.get?.(targetMember.agentId);
+      }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
+      const targetCog = this.agentCognitions?.get(targetMember.agentId);
       if (targetCog) {
         void targetCog.addMemory({
           id: crypto.randomUUID(), agentId: targetMember.agentId,
@@ -3565,7 +3593,7 @@ Write ONLY the rule in the format above. Stay in character.`;
           content: `${this.agent.config.name} kicked me out of ${group.name}!`,
           importance: 9, timestamp: Date.now(),
           relatedAgentIds: [this.agent.id],
-        });
+        }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
         targetCog.fourStream?.addConcern({
           id: crypto.randomUUID(),
           content: `I was expelled from ${group.name} by ${this.agent.config.name}. I need a new group or revenge.`,
@@ -3610,7 +3638,7 @@ Write ONLY the rule in the format above. Stay in character.`;
       const energy = this.agent.vitals?.energy ?? 50;
       this.activityTimer = energy < 20 ? 60 : energy < 40 ? 40 : 20;
       this.world.updateAgentState(this.agent.id, 'active', 'resting');
-      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] });
+      void this.cognition.addMemory({ id: crypto.randomUUID(), agentId: this.agent.id, type: 'action_outcome', content: `I rested to recover energy.`, importance: 2, timestamp: Date.now(), relatedAgentIds: [] }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
       this.broadcaster.agentAction(this.agent.id, `resting — "${shortReason}"`);
       return;
     }
@@ -3647,10 +3675,14 @@ Write ONLY the rule in the format above. Stay in character.`;
       this.handleApiSuccess();
       console.log(`[Decision] ${this.agent.config.name} → ${decision.actionId} | ${decision.reason.slice(0, 120)}`);
 
-      // Queue follow-up actions if present
+      // Queue follow-up actions if present (filter out entries missing actionId)
       if (decision.thenDo?.length) {
-        this.actionQueue = decision.thenDo.slice(0, 2);
-        console.log(`[ActionQueue] ${this.agent.config.name} queued ${this.actionQueue.length} follow-ups: ${this.actionQueue.map(a => a.actionId).join(' → ')}`);
+        this.actionQueue = decision.thenDo
+          .filter(a => a.actionId && typeof a.actionId === 'string')
+          .slice(0, 2);
+        if (this.actionQueue.length > 0) {
+          console.log(`[ActionQueue] ${this.agent.config.name} queued ${this.actionQueue.length} follow-ups: ${this.actionQueue.map(a => a.actionId).join(' → ')}`);
+        }
       }
 
       // Guard: agent may have entered a conversation while awaiting LLM
@@ -3679,7 +3711,7 @@ Write ONLY the rule in the format above. Stay in character.`;
 
   /** Validate whether a queued action is still executable given current world state */
   private canStillExecute(actionId: string): boolean {
-    if (!this.agent.alive) return false;
+    if (!this.agent.alive || !actionId) return false;
     // Eat: still have the food?
     if (actionId.startsWith('eat_')) {
       const food = actionId.replace('eat_', '');

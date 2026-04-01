@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-village
+  namespace: ai-village
+  labels:
+    app: ai-village
+    app.kubernetes.io/name: ai-village
+spec:
+  # -----------------------------------------------------------------------
+  # replicas: 2 (HPA が CPU/Memory に応じて最大3まで自動スケール)
+  # leader election (Redis SETNX, TTL=30s) により1Podのみがシミュレーションを実行。
+  # 追加Podは HTTP/WS の読み込みサービング + フェイルオーバー待機として機能。
+  # VersionConflictError (楽観的ロック) が書き込み競合を防止。
+  # Socket.IO Redis Streams adapter により全Pod間でイベントを配信。
+  # 詳細: packages/server/src/cluster/leader-election.ts
+  # -----------------------------------------------------------------------
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ai-village
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never kill old pod before new pod is Ready
+      maxSurge: 1         # spin up one extra pod during rollout
+  template:
+    metadata:
+      labels:
+        app: ai-village
+    spec:
+      serviceAccountName: ai-village
+
+      # Mirror the non-root user created in Dockerfile (UID/GID 1001)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # 120 s matches fly.toml kill_timeout — gives SIGTERM handler time to save state
+      terminationGracePeriodSeconds: 120
+
+      containers:
+        - name: ai-village
+          # Replace with: terraform output ecr_repository_url
+          # Format: <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ai-village:<TAG>
+          image: 053442321898.dkr.ecr.us-east-1.amazonaws.com/ai-village:f03d272
+          # IfNotPresent: safe with immutable ECR tags (commit SHA / semver).
+          # "Always" re-pulls on every Pod restart — triggers ECR rate limits at scale
+          # and blocks startup if ECR is unreachable. ECR IMMUTABLE tag policy already
+          # enforces that a given tag can never point to a different image.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: ai-village-config
+            - secretRef:
+                name: ai-village-secret
+
+          env:
+            # Override DB_HOST (from secret = real RDS hostname) to point to pgBouncer.
+            # In Kubernetes, explicit env[] entries take precedence over envFrom values.
+            # pgBouncer connects to RDS; app pods only talk to pgBouncer (see 11-pgbouncer.yaml).
+            - name: DB_HOST
+              value: "pgbouncer"
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          # Startup: protect liveness from firing during slow DB init (up to 5min).
+          # failureThreshold * periodSeconds = max startup window.
+          startupProbe:
+            httpGet:
+              path: /api/ready
+              port: 8080
+            failureThreshold: 30   # 30 × 10s = 5 min max wait (covers RDS cold start)
+            periodSeconds: 10
+            timeoutSeconds: 5
+
+          # Liveness: restart pod if the Node.js process hangs (NOT tied to DB).
+          # DB outage alone must not restart the pod — restart loops make DB recovery worse.
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 30   # matches Dockerfile HEALTHCHECK --start-period
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # Readiness: remove pod from Service when DB is unreachable.
+          # Uses /api/ready (SELECT 1 DB check) so traffic stops on DB failover,
+          # but the pod stays alive and auto-recovers when DB comes back.
+          readinessProbe:
+            httpGet:
+              path: /api/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Wait for ALB target deregistration before SIGTERM reaches the process.
+          # ALB default deregistration delay is 300s (typically shortened to ~30s).
+          # 15s sleep ensures in-flight requests complete after pod leaves the
+          # Service endpoint — per Google SRE / AWS Well-Architected best practices.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          # readOnlyRootFilesystem: true requires explicit writable mounts.
+          # Node.js and native modules need /tmp for temp file operations.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}   # tmpfs in-memory scratch space — cleared on pod restart

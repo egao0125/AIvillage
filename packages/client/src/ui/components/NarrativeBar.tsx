@@ -5,9 +5,10 @@ import { FONTS } from '../styles';
 
 interface NarrativeBarProps {
   sidebarWidth?: number;
+  inline?: boolean;
 }
 
-export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500 }) => {
+export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500, inline = false }) => {
   const narratives = useNarratives();
   const agents = useAgents();
   const [displayedText, setDisplayedText] = useState('');
@@ -84,13 +85,18 @@ export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500 }
 
   return (
     <div
-      style={{
+      style={inline ? {
+        width: '100%',
+        zIndex: 15,
+        pointerEvents: 'auto',
+      } : {
         position: 'absolute',
         bottom: 0,
         left: 0,
         width: `calc(100% - ${sidebarWidth}px)`,
         transition: 'width 0.25s ease',
         zIndex: 15,
+        pointerEvents: 'auto',
       }}
     >
       {/* Expanded history */}

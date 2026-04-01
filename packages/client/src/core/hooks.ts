@@ -1,5 +1,5 @@
-import { useSyncExternalStore } from 'react';
-import { gameStore, type ChatEntry, type ThoughtEntry, type ActionLogEntry } from './GameStore';
+import { useMemo, useSyncExternalStore } from 'react';
+import { gameStore, type ChatEntry, type ThoughtEntry, type ActionLogEntry, type InspectTarget } from './GameStore';
 import type {
   Agent,
   BoardPost,
@@ -17,6 +17,8 @@ import type {
   Recap,
   VillageMemoryEntry,
 } from '@ai-village/shared';
+import { synthesizeEvents } from '../ui/feed/eventSynthesis';
+import type { VillageEvent } from '../ui/feed/types';
 
 export function useAgents(): Agent[] {
   const state = useSyncExternalStore(
@@ -143,13 +145,6 @@ export function useStorylines(): Storyline[] {
   );
 }
 
-export function useCharacterPageAgentId(): string | null {
-  return useSyncExternalStore(
-    (cb) => gameStore.subscribe(cb),
-    () => gameStore.getState().characterPageAgentId
-  );
-}
-
 export function useActiveRecap(): Recap | null {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
@@ -164,17 +159,55 @@ export function useWeeklySummary(): string | null {
   );
 }
 
-export function useSocialViewOpen(): boolean {
-  return useSyncExternalStore(
-    (cb) => gameStore.subscribe(cb),
-    () => gameStore.getState().socialViewOpen
-  );
-}
-
 export function useVillageMemory(): VillageMemoryEntry[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().villageMemory
+  );
+}
+
+export function useAgentsMap(): Map<string, Agent> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().agents
+  );
+}
+
+export function useEventFeed(): VillageEvent[] {
+  const board = useBoard();
+  const artifacts = useArtifacts();
+  const buildings = useBuildings();
+  const technologies = useTechnologies();
+  const elections = useElections();
+  const villageMemory = useVillageMemory();
+  const agentsMap = useAgentsMap();
+  const institutions = useInstitutions();
+
+  return useMemo(
+    () => synthesizeEvents(board, artifacts, buildings, technologies, elections, villageMemory, agentsMap, institutions),
+    [board, artifacts, buildings, technologies, elections, villageMemory, agentsMap, institutions]
+  );
+}
+
+export function useAgentEvents(agentId: string): VillageEvent[] {
+  const allEvents = useEventFeed();
+  return useMemo(
+    () => allEvents.filter(e => e.agentIds.includes(agentId)),
+    [allEvents, agentId]
+  );
+}
+
+export function useInspectTarget(): InspectTarget | null {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().inspectTarget
+  );
+}
+
+export function useActiveMode(): 'watch' | 'analyze' {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().activeMode
   );
 }
 

@@ -1,5 +1,5 @@
 import type { Position } from '@ai-village/shared';
-import { AREAS, getAreaEntrance } from '../map/village.js';
+import { getAreas, getAreaEntrance } from '../map/map-provider.js';
 import type { World } from './world.js';
 
 export interface ParsedAction {
@@ -66,7 +66,8 @@ function resolveAreaId(name: string): string | undefined {
   const lower = name.toLowerCase().trim();
 
   // Direct match by area ID
-  const directMatch = AREAS.find(a => a.id === lower);
+  const areas = getAreas();
+  const directMatch = areas.find(a => a.id === lower);
   if (directMatch) return directMatch.id;
 
   // Check aliases
@@ -75,7 +76,7 @@ function resolveAreaId(name: string): string | undefined {
   }
 
   // Fuzzy match by area name
-  const fuzzy = AREAS.find(a => a.name.toLowerCase().includes(lower));
+  const fuzzy = areas.find(a => a.name.toLowerCase().includes(lower));
   if (fuzzy) return fuzzy.id;
 
   return undefined;
@@ -97,7 +98,8 @@ export function parseAction(raw: string, world: World): ParsedAction {
     // Strip markdown code fences if present
     const cleaned = raw.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
     parsed = JSON.parse(cleaned);
-  } catch {
+  } catch (err) {
+    console.warn('[Actions] Failed to parse LLM action JSON:', (err as Error).message);
     return { type: 'idle', activity: 'thinking', duration: 5 };
   }
 

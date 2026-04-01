@@ -13,7 +13,14 @@ export const RecapOverlay: React.FC = () => {
   const dismiss = () => {
     gameStore.setActiveRecap(null);
     const time = gameStore.getState().time;
-    localStorage.setItem('ai-village-last-seen-day', String(time.day));
+    try {
+      // Use sessionStorage (tab-scoped) — consistent with socket.ts which reads
+      // from sessionStorage. localStorage would persist across sessions but
+      // socket.ts would never read it, so the recap would re-show on next visit.
+      sessionStorage.setItem('ai-village-last-seen-day', String(time.day));
+    } catch {
+      // sessionStorage may be unavailable in private browsing mode
+    }
   };
 
   // Highlight agent names in text

@@ -32,6 +32,7 @@ const TILE_TEXTURE_MAP: Record<number, string> = {
 export class VillageScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSprite> = new Map();
   private selectedAgentId: string | null = null;
+  private agentClickedThisFrame = false;
   private dayNightOverlay!: Phaser.GameObjects.Rectangle;
   private conversationGraphics!: Phaser.GameObjects.Graphics;
   private cleanupFns: (() => void)[] = [];
@@ -369,6 +370,28 @@ export class VillageScene extends Phaser.Scene {
       }
     });
 
+    // Click background to deselect agent
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      // Skip if an agent was clicked in this same event cycle
+      if (this.agentClickedThisFrame) {
+        this.agentClickedThisFrame = false;
+        return;
+      }
+      // Only deselect on short clicks (not drags), left button
+      if (pointer.button !== 0) return;
+      const dx = Math.abs(pointer.x - pointer.downX);
+      const dy = Math.abs(pointer.y - pointer.downY);
+      if (dx > 5 || dy > 5) return; // was a drag, not a click
+      if (this.selectedAgentId) {
+        const prev = this.agentSprites.get(this.selectedAgentId);
+        if (prev) prev.setSelected(false);
+        this.selectedAgentId = null;
+        gameStore.selectAgent(null);
+        gameStore.closeDetail();
+        this.cameras.main.stopFollow();
+      }
+    });
+
     // Scroll to zoom — free range from 0.5x to 5x
     this.input.on(
       'wheel',
@@ -464,6 +487,7 @@ export class VillageScene extends Phaser.Scene {
       agent.position.y
     );
     if (agent.currentAction) agentSprite.setAction(agent.currentAction);
+    if (agent.mood) agentSprite.setMood(agent.mood);
     this.agentSprites.set(agent.id, agentSprite);
   }
 
@@ -484,6 +508,8 @@ export class VillageScene extends Phaser.Scene {
   }
 
   private selectAgent(agentId: string): void {
+    this.agentClickedThisFrame = true;
+
     // Deselect previous
     if (this.selectedAgentId) {
       const prev = this.agentSprites.get(this.selectedAgentId);
@@ -494,12 +520,14 @@ export class VillageScene extends Phaser.Scene {
     if (this.selectedAgentId === agentId) {
       this.selectedAgentId = null;
       gameStore.selectAgent(null);
+      gameStore.closeDetail();
       this.cameras.main.stopFollow();
       return;
     }
 
     this.selectedAgentId = agentId;
     gameStore.selectAgent(agentId);
+    gameStore.openAgentDetail(agentId);
 
     const sprite = this.agentSprites.get(agentId);
     if (sprite) {

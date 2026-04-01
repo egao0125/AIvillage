@@ -7,6 +7,9 @@
 export { EventBus } from './event-bus.js';
 export type { SimEvent } from './events.js';
 
+// --- Map Config ---
+export type { MapConfig, MapAction } from './map-config.js';
+
 // --- Agent ---
 
 export interface AgentPersonality {
@@ -55,6 +58,7 @@ export interface Agent {
   createdAt: number;
   joinedDay?: number;   // game day when agent was added
   ownerId: string;
+  mapId: string;       // which map this agent belongs to ('village', 'battle_royale')
   mood: Mood;
   inventory: Item[];
   skills: Skill[];

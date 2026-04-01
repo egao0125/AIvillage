@@ -12,9 +12,10 @@ interface SpectatorMessage {
 
 interface SpectatorChatProps {
   onOpenChange?: (open: boolean) => void;
+  inline?: boolean;
 }
 
-export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange }) => {
+export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inline = false }) => {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<SpectatorMessage[]>([]);
   const [input, setInput] = useState('');
@@ -65,14 +66,14 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange }) =>
   };
 
   return (
-    <>
-      {/* Floating chat button — bottom-left */}
+    <div style={inline ? { position: 'relative' } : undefined}>
+      {/* Chat button — bottom-left */}
       <button
         onClick={toggleOpen}
         style={{
-          position: 'fixed',
-          bottom: 20,
-          left: 20,
+          position: inline ? 'relative' as const : 'fixed' as const,
+          bottom: inline ? undefined : 20,
+          left: inline ? undefined : 20,
           width: 48,
           height: 48,
           borderRadius: '50%',
@@ -113,9 +114,9 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange }) =>
       {open && (
         <div
           style={{
-            position: 'fixed',
-            bottom: 80,
-            left: 20,
+            position: inline ? 'absolute' as const : 'fixed' as const,
+            bottom: inline ? 56 : 80,
+            left: inline ? 0 : 20,
             width: 300,
             height: 400,
             background: COLORS.bg,
@@ -235,6 +236,6 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange }) =>
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 };

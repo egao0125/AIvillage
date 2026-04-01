@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-village-config
+  namespace: ai-village
+data:
+  PORT: "8080"
+  NODE_ENV: "production"
+  # Comma-separated list of allowed CORS origins.
+  # REPLACE with your actual domain before applying (also update 05-ingress.yaml).
+  # Example: https://aivillage.example.com,https://www.aivillage.example.com
+  ALLOWED_ORIGINS: "https://ai-village.net"
+  # Maximum number of agents allowed per simulation instance.
+  MAX_AGENTS: "20"
+  # SSL mode for the app→pgBouncer connection (intra-cluster, no TLS needed).
+  # pgBouncer handles TLS for pgBouncer→RDS (PGBOUNCER_SERVER_TLS_SSLMODE=verify-full).
+  # Change to "verify-full" only if app connects directly to RDS (bypassing pgBouncer).
+  DB_SSLMODE: "disable"
+  COGNITO_REGION: "us-east-1"
+  # Replace with: terraform output cognito_user_pool_id
+  COGNITO_USER_POOL_ID: "us-east-1_LSh6e5TIf"
+  # Replace with: terraform output cognito_client_id
+  COGNITO_CLIENT_ID: "4b825c3un7ce5mcfdr9qvfqget"

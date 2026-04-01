@@ -46,12 +46,19 @@ interface GameState {
   technologies: Technology[];
   narratives: NarrativeEntry[];
   storylines: Storyline[];
-  characterPageAgentId: string | null;
   activeRecap: Recap | null;
   weeklySummary: string | null;
   villageMemory: VillageMemoryEntry[];
   actionLog: Map<string, ActionLogEntry[]>;
-  socialViewOpen: boolean;
+  activeMode: 'watch' | 'analyze';
+  inspectTarget: InspectTarget | null;
+}
+
+export interface InspectTarget {
+  type: 'agent' | 'relationship' | 'event' | 'location' | 'institution';
+  id: string;
+  secondaryId?: string;
+  drillDown?: boolean;
 }
 
 export interface ChatEntry {
@@ -91,12 +98,12 @@ class GameStore {
     technologies: [],
     narratives: [],
     storylines: [],
-    characterPageAgentId: null,
     activeRecap: null,
     weeklySummary: null,
     villageMemory: [],
     actionLog: new Map(),
-    socialViewOpen: false,
+    activeMode: 'watch',
+    inspectTarget: null,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -395,7 +402,7 @@ class GameStore {
     const agent = this.state.agents.get(agentId);
     if (!agent) return;
     const newAgents = new Map(this.state.agents);
-    newAgents.set(agentId, { ...agent, alive: false, causeOfDeath: cause, state: 'dead' as any });
+    newAgents.set(agentId, { ...agent, alive: false, causeOfDeath: cause, state: 'dead' });
     this.state = { ...this.state, agents: newAgents };
     this.notify();
   }
@@ -521,18 +528,6 @@ class GameStore {
     this.notify();
   }
 
-  // --- Character Page ---
-
-  openCharacterPage(agentId: string): void {
-    this.state = { ...this.state, characterPageAgentId: agentId };
-    this.notify();
-  }
-
-  closeCharacterPage(): void {
-    this.state = { ...this.state, characterPageAgentId: null };
-    this.notify();
-  }
-
   // --- Recap ---
 
   setActiveRecap(recap: Recap | null): void {
@@ -564,15 +559,41 @@ class GameStore {
     this.notify();
   }
 
-  // --- Social View ---
+  // --- View Mode ---
 
-  openSocialView(): void {
-    this.state = { ...this.state, socialViewOpen: true };
+  setMode(mode: 'watch' | 'analyze'): void {
+    this.state = { ...this.state, activeMode: mode, inspectTarget: null };
     this.notify();
   }
 
-  closeSocialView(): void {
-    this.state = { ...this.state, socialViewOpen: false };
+  openAgentDetail(agentId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'agent', id: agentId } };
+    this.notify();
+  }
+
+  openDetail(target: InspectTarget): void {
+    this.state = { ...this.state, inspectTarget: target };
+    this.notify();
+  }
+
+  closeDetail(): void {
+    this.state = { ...this.state, inspectTarget: null };
+    this.notify();
+  }
+
+  /** Drill-down navigation from within the ContextPanel — builds breadcrumbs */
+  drillToAgentDetail(agentId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'agent', id: agentId, drillDown: true } };
+    this.notify();
+  }
+
+  drillToRelationshipDetail(agentId: string, secondaryId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'relationship', id: agentId, secondaryId, drillDown: true } };
+    this.notify();
+  }
+
+  drillToInstitutionDetail(institutionId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'institution', id: institutionId, drillDown: true } };
     this.notify();
   }
 
@@ -583,3 +604,6 @@ class GameStore {
 }
 
 export const gameStore = new GameStore();
+
+// Expose for console debugging
+(window as any).gameStore = gameStore;
