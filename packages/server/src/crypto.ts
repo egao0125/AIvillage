@@ -1,0 +1,123 @@
+/**
+ * AES-256-GCM encryption for sensitive values (API keys) stored in the database.
+ *
+ * Encrypted format: "<iv_hex>:<tag_hex>:<ciphertext_hex>"
+ *   - IV:         12 random bytes (96 bits), unique per encryption
+ *                 NIST SP 800-38D §8.2 recommends 96-bit IV for GCM — it is used
+ *                 directly as the counter block without GHASH pre-processing.
+ *   - Tag:        16 bytes GCM authentication tag (detects tampering)
+ *   - Ciphertext: variable length
+ *
+ * Environment variable:
+ *   ENCRYPTION_KEY — 64-character hex string (32 bytes)
+ *   Generate:  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+ *
+ * Migration safety:
+ *   decryptApiKey() detects whether a stored value is in encrypted format.
+ *   If not (plaintext legacy value), it returns the value as-is.
+ *   This allows gradual migration without wiping existing data.
+ *   Existing values encrypted with the old 16-byte IV will still decrypt correctly
+ *   because Node.js/OpenSSL reads the IV length from the stored hex, not this constant.
+ */
+
+import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+
+const ALGO = 'aes-256-gcm';
+const IV_LEN = 12;   // bytes — 96 bits, NIST SP 800-38D §8.2 recommended size for GCM
+const TAG_LEN = 16;  // bytes
+
+// Matches "<hex>:<hex>:<hex>" — our encrypted format.
+// Rejects plaintext API keys (sk-ant-..., sk-...) which don't contain colons.
+const ENCRYPTED_RE = /^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/i;
+
+// Cache the parsed key so we don't run the regex + Buffer.from on every encrypt/decrypt call.
+// 'unchecked' = not yet loaded; null = key absent/invalid; Buffer = ready key.
+let _cachedKey: Buffer | null | 'unchecked' = 'unchecked';
+
+function loadKey(): Buffer | null {
+  if (_cachedKey !== 'unchecked') return _cachedKey;
+  const hex = process.env.ENCRYPTION_KEY;
+  if (!hex) { _cachedKey = null; return null; }
+  if (!/^[0-9a-f]{64}$/i.test(hex)) {
+    console.error(
+      '[Crypto] ENCRYPTION_KEY must be exactly 64 hex characters (0-9, a-f). ' +
+      'Current value has length ' + hex.length + ' and/or contains non-hex characters. Key ignored — storing plaintext.',
+    );
+    _cachedKey = null;
+    return null;
+  }
+  _cachedKey = Buffer.from(hex, 'hex');
+  return _cachedKey;
+}
+
+/**
+ * Encrypt a plaintext API key.
+ * In production: throws if ENCRYPTION_KEY is not set (fail-secure — never store plaintext).
+ * In development: returns plaintext with a warning for convenience.
+ */
+export function encryptApiKey(plaintext: string): string {
+  const key = loadKey();
+  if (!key) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        '[Crypto] ENCRYPTION_KEY is not set. Refusing to store API key in plaintext in production. ' +
+        'Set ENCRYPTION_KEY to a 64-character hex string.',
+      );
+    }
+    console.warn('[Crypto] ENCRYPTION_KEY not set — storing API key as plaintext (development only).');
+    return plaintext;
+  }
+
+  const iv = randomBytes(IV_LEN);
+  const cipher = createCipheriv(ALGO, key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();  // always TAG_LEN bytes with aes-256-gcm
+
+  return `${iv.toString('hex')}:${tag.toString('hex')}:${ciphertext.toString('hex')}`;
+}
+
+/**
+ * Decrypt a stored API key.
+ * - If the value is in encrypted format, decrypt and return plaintext.
+ * - If the value is plaintext (legacy/migration), return as-is.
+ * - If decryption fails (wrong key, tampered data), returns '' and logs an error.
+ */
+export function decryptApiKey(stored: string): string {
+  if (!ENCRYPTED_RE.test(stored)) {
+    // Not in encrypted format — plaintext legacy value, return as-is.
+    return stored;
+  }
+
+  const key = loadKey();
+  if (!key) {
+    console.error(
+      '[Crypto] ENCRYPTION_KEY is not set but an encrypted API key was found in the database. ' +
+      'Cannot decrypt. Set ENCRYPTION_KEY to restore access.',
+    );
+    return '';
+  }
+
+  try {
+    const parts = stored.split(':');
+    if (parts.length !== 3) throw new Error('Unexpected encrypted format (expected 3 parts)');
+    const [ivHex, tagHex, ciphertextHex] = parts;
+
+    const decipher = createDecipheriv(ALGO, key, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+    const plaintext =
+      decipher.update(Buffer.from(ciphertextHex, 'hex')).toString('utf8') +
+      decipher.final('utf8');
+    return plaintext;
+  } catch (err) {
+    console.error('[Crypto] Failed to decrypt API key:', (err as Error).message);
+    return '';
+  }
+}
+
+/**
+ * Returns true if ENCRYPTION_KEY is set and valid.
+ * Used at startup to warn operators when the key is missing.
+ */
+export function isEncryptionConfigured(): boolean {
+  return loadKey() !== null;
+}

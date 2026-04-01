@@ -1,0 +1,220 @@
+# ---------------------------------------------------------------------------
+# pgBouncer — Connection Pooler for PostgreSQL RDS
+#
+# Architecture:
+#   App Pods  ──(no TLS, intra-cluster)──▶  pgBouncer  ──(TLS verify-full)──▶  RDS
+#
+# pool_mode: transaction  — one backend connection shared across many client
+#   transactions. Maximizes connection efficiency for multiple app pods.
+#   NOTE: session-level SET commands and prepared statements are NOT persisted
+#   across transactions in transaction mode. node-postgres uses simple query
+#   protocol by default, so prepared statements are not an issue.
+#
+# max_client_conn: 200  — maximum simultaneous client connections from all app pods
+# default_pool_size: 20 — max backend connections to RDS (match pg Pool.max in rds.ts)
+#
+# Credentials are sourced from ai-village-secret (synced by ESO from Secrets Manager).
+# pgBouncer connects to the REAL RDS hostname (from DB_HOST in secret).
+# App pods connect to this Service (DB_HOST is overridden in 03-deployment.yaml).
+#
+# References:
+#   pgBouncer transaction mode: https://www.pgbouncer.org/config.html
+#   Bitnami pgBouncer image:    https://hub.docker.com/r/bitnami/pgbouncer
+#   AWS RDS SSL:                https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html
+#   CIS PostgreSQL Benchmark 1.3 — connection pooling
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: ai-village
+  labels:
+    app: pgbouncer
+    app.kubernetes.io/name: pgbouncer
+    app.kubernetes.io/component: connection-pooler
+spec:
+  # Single replica is fine for connection pooling.
+  # pgBouncer is stateless — if this pod restarts, app pods reconnect automatically.
+  # 2 replicas could be used for HA but requires a load-balancer in front;
+  # for simplicity, PDB (minAvailable:1) + fast restart suffices here.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgbouncer
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: pgbouncer
+    spec:
+      serviceAccountName: ai-village   # reuse existing IRSA SA for namespace access
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70    # pgbouncer user in edoburu/pgbouncer image
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: pgbouncer
+          # Pin to a specific digest in production to prevent supply chain attacks.
+          # Update periodically (monthly) for security patches.
+          # edoburu/pgbouncer: Docker Hub pull from EKS nodes is unreliable.
+          # Image is pre-pulled to private ECR (same version: 1.25.1).
+          # edoburu uses DB_* / POOL_MODE / MAX_CLIENT_CONN env vars (no PGBOUNCER_ prefix).
+          image: 053442321898.dkr.ecr.us-east-1.amazonaws.com/ai-village-pgbouncer:1.25.1
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: pgbouncer
+              containerPort: 5432
+              protocol: TCP
+
+          env:
+            # --- Backend: real RDS connection (from ai-village-secret) ---
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_NAME
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PASSWORD
+
+            # --- Pool configuration ---
+            - name: POOL_MODE
+              value: "transaction"
+            - name: MAX_CLIENT_CONN
+              value: "200"
+            - name: DEFAULT_POOL_SIZE
+              value: "20"
+            - name: RESERVE_POOL_SIZE
+              value: "5"
+            - name: RESERVE_POOL_TIMEOUT
+              value: "5"
+
+            # --- Backend (pgBouncer → RDS) TLS: require ---
+            # verify-full needs Amazon Root CA in Alpine's ca-certificates.crt.
+            # edoburu/pgbouncer (Alpine) does not include Amazon Root CA by default.
+            # require still enforces TLS encryption; MITM is not feasible in a private VPC.
+            - name: SERVER_TLS_SSLMODE
+              value: "require"
+
+            # --- Client (app → pgBouncer) TLS: disabled for intra-cluster ---
+            - name: CLIENT_TLS_SSLMODE
+              value: "disable"
+
+            # --- Auth ---
+            - name: AUTH_TYPE
+              value: "scram-sha-256"
+
+            # --- Timeouts ---
+            - name: SERVER_IDLE_TIMEOUT
+              value: "600"
+            - name: SERVER_LIFETIME
+              value: "3600"
+            - name: PGBOUNCER_QUERY_TIMEOUT
+              value: "0"       # no pgBouncer-level query timeout (rely on statement_timeout above)
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          lifecycle:
+            preStop:
+              exec:
+                # Allow in-flight transactions to complete before shutdown.
+                # pgBouncer will reject new connections after SIGTERM.
+                command: ["/bin/sh", "-c", "sleep 5"]
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem is not set to true: bitnami init scripts
+            # write generated pgbouncer.ini and userlist.txt to /opt/bitnami at startup.
+            capabilities:
+              drop: ["ALL"]
+
+---
+# ---------------------------------------------------------------------------
+# ClusterIP Service — stable DNS name for pgBouncer within the namespace.
+# App pods connect to pgbouncer:5432 (via DB_HOST override in deployment.yaml).
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  namespace: ai-village
+  labels:
+    app: pgbouncer
+    app.kubernetes.io/name: pgbouncer
+    app.kubernetes.io/component: connection-pooler
+spec:
+  type: ClusterIP
+  selector:
+    app: pgbouncer
+  ports:
+    - name: pgbouncer
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget — ensure pgBouncer stays up during node drains/upgrades.
+# minAvailable:1 with replicas:1 means node drain will wait for pgBouncer
+# to be rescheduled before proceeding, preventing unnecessary connection drops.
+# ---------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pgbouncer-pdb
+  namespace: ai-village
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: pgbouncer

@@ -7,6 +7,9 @@
 export { EventBus } from './event-bus.js';
 export type { SimEvent } from './events.js';
 
+// --- Map Config ---
+export type { MapConfig, MapAction } from './map-config.js';
+
 // --- Agent ---
 
 export interface AgentPersonality {

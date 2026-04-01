@@ -1,0 +1,247 @@
+name: Build → ECR → Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy (defaults to commit SHA)'
+        required: false
+
+# Prevent concurrent deployments — only one deploy runs at a time
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ai-village
+  EKS_CLUSTER_NAME: ai-village
+  K8S_NAMESPACE: ai-village
+
+jobs:
+  # -----------------------------------------------------------------------
+  # 1. Test — run unit tests + TypeScript check before building
+  # -----------------------------------------------------------------------
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared packages (required for TypeScript project references)
+        run: |
+          pnpm --filter @ai-village/shared build
+          pnpm --filter @ai-village/ai-engine build
+
+      - name: TypeScript check (server)
+        run: pnpm --filter @ai-village/server exec tsc --noEmit
+
+      - name: TypeScript check (client)
+        run: pnpm --filter @ai-village/client exec tsc --noEmit
+
+      - name: TypeScript check (ai-engine)
+        run: pnpm --filter @ai-village/ai-engine exec tsc --noEmit
+
+      - name: Unit tests
+        run: pnpm --filter @ai-village/server exec vitest run
+
+  # -----------------------------------------------------------------------
+  # 2. Build + push Docker image to ECR
+  # -----------------------------------------------------------------------
+  build:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      id-token: write   # OIDC for AWS auth
+      contents: read
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+      image_uri: ${{ steps.meta.outputs.uri }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: meta
+        run: |
+          TAG="${{ github.event.inputs.image_tag || github.sha }}"
+          SHORT="${TAG:0:7}"
+          ECR_URL="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}"
+          echo "tag=${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "uri=${ECR_URL}:${SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag "${{ steps.meta.outputs.uri }}" \
+            --cache-from type=registry,ref="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:cache" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            .
+        env:
+          DOCKER_BUILDKIT: '1'
+
+      - name: Push image to ECR
+        run: docker push "${{ steps.meta.outputs.uri }}"
+
+      - name: Update image cache tag
+        run: |
+          docker tag "${{ steps.meta.outputs.uri }}" \
+            "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:cache"
+          docker push "${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:cache" || true
+
+  # -----------------------------------------------------------------------
+  # 3. Deploy to EKS
+  # -----------------------------------------------------------------------
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ env.AWS_REGION }}" \
+            --name "${{ env.EKS_CLUSTER_NAME }}"
+
+      - name: Install Terraform (for output values)
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.7"
+
+      - name: Inject Ingress ARNs from Terraform outputs
+        working-directory: terraform
+        run: |
+          # aws_profile="" disables profile lookup; CI uses env var credentials from OIDC
+          terraform init -input=false -var 'aws_profile='
+          CERT_ARN=$(terraform output -raw acm_certificate_arn 2>/dev/null || echo "")
+          WAF_ARN=$(terraform output -raw waf_web_acl_arn 2>/dev/null || echo "")
+          DOMAIN=$(terraform output -json 2>/dev/null | jq -r '.domain_name.value // empty' || echo "")
+
+          if [ -n "$CERT_ARN" ] && [ "$CERT_ARN" != "domain_name not set — skipped" ]; then
+            kubectl annotate ingress ai-village -n "${{ env.K8S_NAMESPACE }}" \
+              "alb.ingress.kubernetes.io/certificate-arn=${CERT_ARN}" --overwrite
+            echo "Cert ARN injected: ${CERT_ARN}"
+          fi
+          if [ -n "$WAF_ARN" ]; then
+            kubectl annotate ingress ai-village -n "${{ env.K8S_NAMESPACE }}" \
+              "alb.ingress.kubernetes.io/wafv2-web-acl-arn=${WAF_ARN}" --overwrite
+            echo "WAF ARN injected"
+          fi
+          if [ -n "$DOMAIN" ]; then
+            kubectl patch ingress ai-village -n "${{ env.K8S_NAMESPACE }}" \
+              --type=json -p "[{\"op\":\"replace\",\"path\":\"/spec/rules/0/host\",\"value\":\"${DOMAIN}\"}]" || true
+          fi
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+
+      - name: Run DB migrations
+        run: |
+          # Delete any previous migration job, then apply fresh
+          kubectl delete job db-migrate -n "${{ env.K8S_NAMESPACE }}" --ignore-not-found
+          kubectl apply -f k8s/08-db-migrate-job.yaml
+          # Wait up to 5 minutes for migration to complete
+          kubectl wait job/db-migrate \
+            -n "${{ env.K8S_NAMESPACE }}" \
+            --for=condition=complete \
+            --timeout=300s
+
+      - name: Deploy application
+        run: |
+          IMAGE_URI="${{ needs.build.outputs.image_uri }}"
+          IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
+
+          # Patch the deployment image atomically
+          kubectl set image deployment/ai-village \
+            ai-village="${IMAGE_URI}" \
+            -n "${{ env.K8S_NAMESPACE }}"
+
+          # Update the image tag annotation (for audit trail)
+          kubectl annotate deployment/ai-village \
+            -n "${{ env.K8S_NAMESPACE }}" \
+            deployment.kubernetes.io/image-tag="${IMAGE_TAG}" \
+            kubernetes.io/change-cause="deploy ${IMAGE_TAG} via GitHub Actions run ${{ github.run_id }}" \
+            --overwrite
+
+          # Wait for rollout (5 min timeout)
+          kubectl rollout status deployment/ai-village \
+            -n "${{ env.K8S_NAMESPACE }}" \
+            --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          # Get the ALB hostname from the Ingress status
+          ALB=$(kubectl get ingress ai-village \
+            -n "${{ env.K8S_NAMESPACE }}" \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
+          if [ -n "$ALB" ]; then
+            echo "ALB endpoint: $ALB"
+            # Health check via ALB (allow 30s for propagation)
+            for i in {1..6}; do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${ALB}/api/health" || echo "000")
+              if [ "$STATUS" = "200" ]; then
+                echo "Health check passed (HTTP 200)"
+                break
+              fi
+              echo "Attempt ${i}/6: got ${STATUS}, retrying..."
+              sleep 5
+            done
+          else
+            echo "Ingress not yet assigned — skipping ALB health check"
+          fi
+
+      - name: Update Route53 CNAME (if ALB changed)
+        run: |
+          ALB=$(kubectl get ingress ai-village \
+            -n "${{ env.K8S_NAMESPACE }}" \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
+          if [ -n "$ALB" ] && [ -n "${{ secrets.HOSTED_ZONE_ID }}" ]; then
+            # Update the ALB CNAME in terraform state if it changed
+            # (terraform apply -var alb_dns_name=... handled by separate infra pipeline)
+            echo "ALB: $ALB — update terraform.tfvars alb_dns_name if changed"
+          fi
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Deployment failed for image ${{ needs.build.outputs.image_tag }}"
+          echo "::error::Run: kubectl rollout undo deployment/ai-village -n ${{ env.K8S_NAMESPACE }}"
