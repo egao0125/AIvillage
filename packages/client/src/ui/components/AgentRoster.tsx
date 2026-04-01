@@ -5,7 +5,11 @@ import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
 import { COLORS, FONTS } from '../styles';
 
-export const AgentRoster: React.FC = () => {
+interface AgentRosterProps {
+  onAddAgent?: () => void;
+}
+
+export const AgentRoster: React.FC<AgentRosterProps> = ({ onAddAgent }) => {
   const [open, setOpen] = useState(false);
   const agents = useAgents();
   const selectedAgent = useSelectedAgent();
@@ -45,6 +49,32 @@ export const AgentRoster: React.FC = () => {
             boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
           }}
         >
+          {/* Add agent button at top */}
+          {onAddAgent && (
+            <button
+              onClick={() => { onAddAgent(); setOpen(false); }}
+              style={{
+                width: '100%',
+                padding: '12px 16px',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: `1px solid ${COLORS.border}`,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                fontFamily: FONTS.pixel,
+                fontSize: '8px',
+                color: COLORS.accent,
+                letterSpacing: 1,
+                transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              + ADD AGENT
+            </button>
+          )}
           {aliveAgents.map(agent => (
             <AgentCard
               key={agent.id}

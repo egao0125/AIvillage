@@ -122,11 +122,10 @@ export const AppShell: React.FC = () => {
           visibility: activeMode === 'watch' ? 'visible' : 'hidden',
         }}
       />
-      {activeMode === 'watch' && <WatchView />}
+      {activeMode === 'watch' && <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />}
       {activeMode === 'inspect' && <Placeholder mode="inspect" />}
       {activeMode === 'analyze' && <Placeholder mode="analyze" />}
       <TopNav
-        onOpenAgentCreator={() => setAgentCreatorOpen(true)}
         onChangeMap={handleChangeMap}
         onLogout={handleLogout}
       />
