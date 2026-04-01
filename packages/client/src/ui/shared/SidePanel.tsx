@@ -17,13 +17,14 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   children,
 }) => {
   const zIndex = position === 'stacked' ? 15 : 10;
+  const right = position === 'stacked' ? width : 0;
 
   return (
     <div
       style={{
         position: 'absolute',
         top: 0,
-        right: 0,
+        right,
         bottom: 0,
         width,
         overflowY: 'auto',
