@@ -12,7 +12,7 @@ import { ConversationManager } from './conversation/index.js';
 import { AgentController } from './agent-controller.js';
 import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
-import { AREAS } from '../map/village.js';
+import { getAreas } from '../map/map-provider.js';
 import { RdsPersistence, type ControllerData, VersionConflictError } from '../persistence/rds.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
@@ -390,7 +390,7 @@ export class SimulationEngine {
       if (this.isReloadingState) return;
 
       const expectedVersion = this.worldStateVersion;
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, expectedVersion)
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id, expectedVersion)
         .then((newVersion: number) => {
           this.worldStateVersion = newVersion;
           // Publish snapshot to Redis so follower Pods can serve getSnapshot() without RDS.
@@ -436,10 +436,11 @@ export class SimulationEngine {
 
     try {
       // Load all data in parallel
+      const mapId = this.mapConfig.id;
       const [worldStateResult, agents, controllerDataMap] = await Promise.all([
-        this.persistence.loadWorldState(),
-        this.persistence.loadAgents(),
-        this.persistence.loadAgentControllers(),
+        this.persistence.loadWorldState(mapId),
+        this.persistence.loadAgents(mapId),
+        this.persistence.loadAgentControllers(mapId),
       ]);
 
       if (worldStateResult) {
@@ -511,6 +512,8 @@ export class SimulationEngine {
 
       for (let i = 0; i < agents.length; i++) {
         const agent = agents[i];
+        // Backwards compat: tag agents loaded before map_id migration
+        if (!agent.mapId) agent.mapId = mapId;
         this.world.addAgent(agent);
 
         // Restore per-agent BYOK key from RDS only — no global fallback.
@@ -701,7 +704,7 @@ export class SimulationEngine {
           }
         }
         if (this.persistence) {
-          await this.persistence.saveAgents(this.world.agents);
+          await this.persistence.saveAgents(this.world.agents, this.mapConfig.id);
         }
         this.refreshNameMaps();
         await this.freshStart();
@@ -748,6 +751,7 @@ export class SimulationEngine {
       createdAt: Date.now(),
       joinedDay: this.world.time.day,
       ownerId: ownerId || 'anonymous',
+      mapId: this.mapConfig.id,
       mood: 'neutral',
       inventory: [],
       skills: [],
@@ -1247,7 +1251,7 @@ export class SimulationEngine {
         try {
           // Unconditional upsert (no expectedVersion): safe on graceful shutdown because
           // release() ran first, so the new leader has not yet started writing.
-          await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+          await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id);
           console.log('[Engine] Final state saved to RDS');
         } catch (err) {
           console.error('[Engine] Final save failed:', err);
@@ -1358,7 +1362,7 @@ export class SimulationEngine {
 
       const nearby = this.world.getNearbyAgents(agent.position, 5)
         .filter(a => a.id !== agentId);
-      const nearbyAreas = AREAS.filter(area => {
+      const nearbyAreas = getAreas().filter(area => {
         const cx = area.bounds.x + area.bounds.width / 2;
         const cy = area.bounds.y + area.bounds.height / 2;
         const dx = agent.position.x - cx;
@@ -2468,12 +2472,12 @@ Answer with ONLY one word: "support" or "oppose".`,
         console.error('[FreshStart] Failed to delete memories:', err);
       }
       try {
-        await this.persistence.resetWorldState();
+        await this.persistence.resetWorldState(this.mapConfig.id);
       } catch (err) {
         console.error('[FreshStart] Failed to reset world_state:', err);
       }
       try {
-        await this.persistence.deleteAllControllers();
+        await this.persistence.deleteAllControllers(this.mapConfig.id);
       } catch (err) {
         console.error('[FreshStart] Failed to delete controllers:', err);
       }
@@ -2597,7 +2601,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     // 4. Save fresh state to RDS
     if (this.persistence) {
       try {
-        const newVersion = await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+        const newVersion = await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id);
         this.worldStateVersion = newVersion;
         console.log('[FreshStart] Fresh state saved to RDS');
       } catch (err) {
@@ -2669,7 +2673,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       if (then) void then();
       return;
     }
-    void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
+    void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id)
       .then((newVersion: number) => {
         this.worldStateVersion = newVersion;
         if (then) return then();
