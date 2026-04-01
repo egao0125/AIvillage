@@ -42,6 +42,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build shared packages (required for TypeScript project references)
+        run: |
+          pnpm --filter @ai-village/shared build
+          pnpm --filter @ai-village/ai-engine build
+
       - name: TypeScript check (server)
         run: pnpm --filter @ai-village/server exec tsc --noEmit
 
