@@ -14,7 +14,11 @@ import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../.
 const EVENT_FEED_WIDTH = 380;
 const DEV_TOOLS_ENABLED = true;
 
-export const WatchView: React.FC = () => {
+interface WatchViewProps {
+  onAddAgent?: () => void;
+}
+
+export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
 
   const characterPageAgentId = useCharacterPageAgentId();
@@ -26,13 +30,13 @@ export const WatchView: React.FC = () => {
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
       {/* Overlay buttons on canvas — below TopNav bar */}
-      <AgentRoster />
+      <AgentRoster onAddAgent={onAddAgent} />
       <VillageInfo />
 
       {/* Event Feed panel — right side */}
       <div style={{
         position: 'absolute',
-        top: 40,
+        top: 0,
         right: 0,
         bottom: 0,
         width: feedWidth,
