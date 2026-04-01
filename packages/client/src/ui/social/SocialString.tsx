@@ -57,7 +57,7 @@ export const SocialStringComponent: React.FC<SocialStringProps> = ({
   edge, x1, y1, x2, y2, dimmed, hovered, sourceName, targetName, activeConversation,
   onClick, onMouseEnter, onMouseLeave,
 }) => {
-  const baseOpacity = dimmed ? 0.08 : hovered ? 1 : 0.85;
+  const baseOpacity = dimmed ? 0.05 : hovered ? 1 : 0.35;
   const convoBoost = activeConversation ? 0.15 : 0;
   const opacity = Math.min(1, baseOpacity + convoBoost);
   const strokeBoost = activeConversation ? 1.5 : 0;
