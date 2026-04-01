@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-village
+  namespace: ai-village
+spec:
+  # maxUnavailable: 1 allows node drain and cluster upgrades.
+  # With replicas: 1, this permits voluntary disruptions — the simulation
+  # saves state on SIGTERM (terminationGracePeriodSeconds: 120) and
+  # restores from RDS on restart, so brief downtime is tolerable.
+  # Rolling update protection (zero-downtime) is handled by Deployment
+  # strategy (maxUnavailable: 0, maxSurge: 1) independently of this PDB.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ai-village

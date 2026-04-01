@@ -97,7 +97,8 @@ export function parseAction(raw: string, world: World): ParsedAction {
     // Strip markdown code fences if present
     const cleaned = raw.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
     parsed = JSON.parse(cleaned);
-  } catch {
+  } catch (err) {
+    console.warn('[Actions] Failed to parse LLM action JSON:', (err as Error).message);
     return { type: 'idle', activity: 'thinking', duration: 5 };
   }
 

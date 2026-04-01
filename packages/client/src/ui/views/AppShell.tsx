@@ -6,6 +6,7 @@ import { connectSocket } from '../../network/socket';
 import { TopNav } from './TopNav';
 import { WatchView } from './WatchView';
 import { SetupPage } from '../components/SetupPage';
+import { MapSelectPage } from '../components/MapSelectPage';
 import { COLORS, FONTS } from '../styles';
 
 const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
@@ -28,15 +29,37 @@ const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
 );
 
 export const AppShell: React.FC = () => {
+  const [selectedMap, setSelectedMap] = useState<string | null>(() => sessionStorage.getItem('ai-village-map'));
   const [entered, setEntered] = useState(() => sessionStorage.getItem('ai-village-entered') === 'true');
   const activeMode = useActiveMode();
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
 
+  const handleMapSelect = async (mapId: string) => {
+    try {
+      await fetch('/api/config/map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId }),
+      });
+    } catch (e) {
+      console.warn('[MapSelect] Failed to set map config:', e);
+    }
+    sessionStorage.setItem('ai-village-map', mapId);
+    setSelectedMap(mapId);
+  };
+
   const handleEnter = () => {
     connectSocket();
     sessionStorage.setItem('ai-village-entered', 'true');
     setEntered(true);
+  };
+
+  const handleBackToMaps = () => {
+    sessionStorage.removeItem('ai-village-entered');
+    sessionStorage.removeItem('ai-village-map');
+    setEntered(false);
+    setSelectedMap(null);
   };
 
   // Reconnect socket on refresh if already entered
@@ -59,8 +82,14 @@ export const AppShell: React.FC = () => {
     };
   }, [entered]);
 
+  // Map selection screen
+  if (!selectedMap) {
+    return <MapSelectPage onSelect={handleMapSelect} />;
+  }
+
+  // Setup/agent creation screen
   if (!entered) {
-    return <SetupPage onEnter={handleEnter} />;
+    return <SetupPage onEnter={handleEnter} onBack={() => { sessionStorage.removeItem('ai-village-map'); setSelectedMap(null); }} />;
   }
 
   return (

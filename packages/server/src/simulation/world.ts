@@ -418,7 +418,7 @@ export class World {
 
   getSecretsFor(agentId: string): Secret[] {
     return this.secrets.filter(
-      s => s.holderId === agentId || s.aboutAgentId === agentId || s.sharedWith.includes(agentId),
+      s => s.holderId === agentId || s.aboutAgentId === agentId || (s.sharedWith ?? []).includes(agentId),
     );
   }
 

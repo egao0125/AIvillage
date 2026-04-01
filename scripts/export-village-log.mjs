@@ -1,71 +1,101 @@
 #!/usr/bin/env node
 /**
- * Export full AI Village log — all data from Supabase via REST API
- * No dependencies required — uses native fetch
+ * Export full AI Village log — all data from RDS PostgreSQL
+ * Uses the pg module from the monorepo workspace.
+ * Run from the repo root: node scripts/export-village-log.mjs
  */
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import pg from 'pg';
 
-// Load .env manually — no external deps
+const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Load .env manually — no external deps beyond pg
 const envPath = path.join(__dirname, '..', '.env');
 const envVars = {};
-for (const line of fs.readFileSync(envPath, 'utf-8').split('\n')) {
-  const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.+)\s*$/);
-  if (m) envVars[m[1]] = m[2];
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf-8').split('\n')) {
+    const m = line.match(/^\s*([A-Z_]+)\s*=\s*(.+)\s*$/);
+    if (m) envVars[m[1]] = m[2].trim();
+  }
 }
 
-const SUPABASE_URL = envVars.SUPABASE_URL;
-const SUPABASE_KEY = envVars.SUPABASE_SERVICE_ROLE_KEY;
+function env(key) {
+  return process.env[key] || envVars[key];
+}
 
-if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
+const DB_HOST     = env('DB_HOST');
+const DB_PORT     = env('DB_PORT') || '5432';
+const DB_NAME     = env('DB_NAME') || 'aivillage';
+const DB_USER     = env('DB_USER');
+const DB_PASSWORD = env('DB_PASSWORD');
+
+if (!DB_HOST || !DB_USER || !DB_PASSWORD) {
+  console.error('Missing required env vars: DB_HOST, DB_USER, DB_PASSWORD');
+  console.error('Set them in .env or export them before running this script.');
   process.exit(1);
 }
 
-const headers = {
-  'apikey': SUPABASE_KEY,
-  'Authorization': `Bearer ${SUPABASE_KEY}`,
-  'Content-Type': 'application/json',
-  'Prefer': 'return=representation',
-};
-
-async function query(table, params = '') {
-  const url = `${SUPABASE_URL}/rest/v1/${table}?${params}`;
-  const res = await fetch(url, { headers });
-  if (!res.ok) throw new Error(`${table}: ${res.status} ${await res.text()}`);
-  return res.json();
-}
+const pool = new Pool({
+  host: DB_HOST,
+  port: parseInt(DB_PORT, 10),
+  database: DB_NAME,
+  user: DB_USER,
+  password: DB_PASSWORD,
+  ssl: { rejectUnauthorized: true },
+  max: 3,
+  connectionTimeoutMillis: 10_000,
+});
 
 // ── Fetch all data ──────────────────────────────────────────────
 
 async function fetchAll() {
-  console.log('Fetching world state...');
-  const worldRows = await query('world_state', 'id=eq.current&select=data,updated_at');
-  const worldRow = worldRows[0] || null;
+  try {
+    console.log('Fetching world state...');
+    const worldRes = await pool.query(
+      `SELECT data, updated_at FROM world_state WHERE id = 'current'`,
+    );
+    const worldRow = worldRes.rows[0] || null;
 
-  console.log('Fetching agents...');
-  const agentRows = await query('agents', 'select=id,data,created_at,updated_at');
+    console.log('Fetching agents...');
+    const agentRes = await pool.query(
+      `SELECT id, data, updated_at FROM agents`,
+    );
+    const agentRows = agentRes.rows;
 
-  console.log('Fetching controllers...');
-  const controllerRows = await query('agent_controllers', 'select=agent_id,data,updated_at');
+    console.log('Fetching controllers...');
+    const ctrlRes = await pool.query(
+      `SELECT agent_id, data, updated_at FROM agent_controllers`,
+    );
+    const controllerRows = ctrlRes.rows;
 
-  console.log('Fetching memories (all, paginated)...');
-  let allMemories = [];
-  let offset = 0;
-  const PAGE = 1000;
-  while (true) {
-    const batch = await query('memories', `select=*&order=timestamp.asc&offset=${offset}&limit=${PAGE}`);
-    if (!batch || batch.length === 0) break;
-    allMemories.push(...batch);
-    offset += PAGE;
-    console.log(`  ...fetched ${allMemories.length} memories`);
-    if (batch.length < PAGE) break;
+    console.log('Fetching memories (all, paginated)...');
+    let allMemories = [];
+    const PAGE = 1000;
+    let offset = 0;
+    while (true) {
+      const batch = await pool.query(
+        `SELECT id, agent_id, timestamp, type, content, importance,
+                emotional_valence, related_agent_ids, is_core, created_at
+         FROM memories
+         ORDER BY timestamp ASC
+         LIMIT $1 OFFSET $2`,
+        [PAGE, offset],
+      );
+      if (batch.rows.length === 0) break;
+      allMemories.push(...batch.rows);
+      offset += PAGE;
+      console.log(`  ...fetched ${allMemories.length} memories`);
+      if (batch.rows.length < PAGE) break;
+    }
+
+    return { worldRow, agentRows, controllerRows, memories: allMemories };
+  } finally {
+    await pool.end(); // Always release connections, even on error
   }
-
-  return { worldRow, agentRows: agentRows || [], controllerRows: controllerRows || [], memories: allMemories };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -494,7 +524,8 @@ async function main() {
     console.log(`  Memories: ${data.memories.length}`);
 
     const html = buildHTML(data);
-    const outDir = '/Users/ozawaegao/Downloads';
+    // Default output directory: $EXPORT_OUT_DIR env var, or current working directory.
+    const outDir = process.env.EXPORT_OUT_DIR || process.cwd();
     const outPath = path.join(outDir, 'AI_Village_Full_Log.html');
     fs.writeFileSync(outPath, html, 'utf-8');
     console.log(`\n✅ Written to: ${outPath}`);

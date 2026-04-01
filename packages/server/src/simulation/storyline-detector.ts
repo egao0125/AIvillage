@@ -113,7 +113,9 @@ export class StorylineDetector {
     for (const conv of this.world.conversations.values()) {
       if (conv.participants.length < 2) continue;
 
-      const convDay = Math.floor((conv.startedAt - Date.now()) / (1440 * 83)) + currentDay;
+      // 83ms tick × 2 ticks/game-minute × 1440 min/day = 239 040 ms per game-day
+      const MS_PER_GAME_DAY = 83 * 2 * 1440;
+      const convDay = currentDay - Math.floor((Date.now() - conv.startedAt) / MS_PER_GAME_DAY);
       if (currentDay - convDay > 2 && conv.endedAt) continue;
 
       const key = [...conv.participants].sort().join(':');
@@ -181,7 +183,8 @@ ${eventDump}`;
         summary: String(parsed.summary || '').substring(0, 200),
         theme: validThemes.includes(parsed.theme) ? parsed.theme : 'mystery',
       };
-    } catch {
+    } catch (err) {
+      console.warn('[StorylineDetector] LLM response parse failed:', (err as Error).message);
       return { title: 'Developing Story', summary: 'A storyline is forming...', theme: 'mystery' };
     }
   }

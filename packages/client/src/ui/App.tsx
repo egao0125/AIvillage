@@ -3,11 +3,11 @@ import Phaser from 'phaser';
 import { createGameConfig } from '../game/config';
 import { Sidebar, SIDEBAR_WIDTH } from './components/Sidebar';
 import { COLORS, FONTS } from './styles';
+import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
-import { TopNav } from './views/TopNav';
+import { MapSelectPage } from './components/MapSelectPage';
 import { SpectatorChat } from './components/SpectatorChat';
 import { FeedButton } from './components/FeedButton';
-import { EventFeed } from './feed/EventFeed';
 import { NarrativeBar } from './components/NarrativeBar';
 import { CharacterPage } from './components/CharacterPage';
 import { RecapOverlay } from './components/RecapOverlay';
@@ -16,19 +16,29 @@ import { SocialView } from './social/SocialView';
 import { connectSocket } from '../network/socket';
 import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../core/hooks';
 
-const EVENT_FEED_WIDTH = 380;
-
-// Toggle dev tools — set to false to remove entirely
-const DEV_TOOLS_ENABLED = true;
+// Toggle dev tools — controlled by VITE_DEV_TOOLS_ENABLED env var (default: false)
+const DEV_TOOLS_ENABLED = import.meta.env.VITE_DEV_TOOLS_ENABLED === 'true';
 
 export const App: React.FC = () => {
+  const [selectedMap, setSelectedMap] = useState<string | null>(null);
   const [entered, setEntered] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [eventFeedOpen, setEventFeedOpen] = useState(true);
   const [spectatorChatOpen, setSpectatorChatOpen] = useState(false);
-  const [showSetup, setShowSetup] = useState(false);
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
+
+  const handleMapSelect = async (mapId: string) => {
+    try {
+      await fetch('/api/config/map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mapId }),
+      });
+    } catch (e) {
+      console.warn('[MapSelect] Failed to set map config:', e);
+    }
+    setSelectedMap(mapId);
+  };
 
   const handleEnter = () => {
     connectSocket();
@@ -51,8 +61,12 @@ export const App: React.FC = () => {
   const activeRecap = useActiveRecap();
   const socialViewOpen = useSocialViewOpen();
 
+  if (!selectedMap) {
+    return <MapSelectPage onSelect={handleMapSelect} />;
+  }
+
   if (!entered) {
-    return <SetupPage onEnter={handleEnter} />;
+    return <SetupPage onEnter={handleEnter} onBack={() => setSelectedMap(null)} />;
   }
 
   return (
@@ -63,7 +77,9 @@ export const App: React.FC = () => {
         ref={gameContainerRef}
         style={{ width: '100%', height: '100%' }}
       />
-      <TopNav />
+      <div style={{ position: 'absolute', top: 0, left: 0, zIndex: 10 }}>
+        <TimeDisplay />
+      </div>
       {/* Sidebar toggle button — outside sidebar so it's always visible */}
       <button
         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -104,78 +120,8 @@ export const App: React.FC = () => {
       }}>
         <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
       </div>
-      {/* Event Feed panel — left of sidebar */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        right: sidebarCollapsed ? 0 : SIDEBAR_WIDTH,
-        bottom: 0,
-        width: eventFeedOpen ? EVENT_FEED_WIDTH : 0,
-        zIndex: 10,
-        transition: 'width 0.25s ease, right 0.25s ease',
-        overflow: 'hidden',
-        background: COLORS.bg,
-        borderLeft: eventFeedOpen ? `1px solid ${COLORS.border}` : 'none',
-      }}>
-        <div style={{
-          padding: '10px 14px',
-          borderBottom: `1px solid ${COLORS.border}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
-            EVENT FEED
-          </span>
-          <button
-            onClick={() => setEventFeedOpen(false)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: COLORS.textDim,
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontFamily: FONTS.body,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-        <div style={{ height: 'calc(100% - 42px)', overflowY: 'auto' }}>
-          <EventFeed />
-        </div>
-      </div>
-      {/* Event Feed toggle — left of event feed panel */}
-      {!eventFeedOpen && (
-        <button
-          onClick={() => setEventFeedOpen(true)}
-          style={{
-            position: 'absolute',
-            right: sidebarCollapsed ? 0 : SIDEBAR_WIDTH,
-            top: 70,
-            width: 24,
-            height: 48,
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
-            borderRight: 'none',
-            borderRadius: '6px 0 0 6px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: COLORS.accent,
-            fontFamily: FONTS.pixel,
-            fontSize: '12px',
-            zIndex: 11,
-            padding: 0,
-            transition: 'right 0.25s ease',
-          }}
-        >
-          ◀
-        </button>
-      )}
       {/* Narrative bar — bottom overlay */}
-      <NarrativeBar sidebarWidth={(sidebarCollapsed ? 0 : SIDEBAR_WIDTH) + (eventFeedOpen ? EVENT_FEED_WIDTH : 0)} />
+      <NarrativeBar sidebarWidth={sidebarCollapsed ? 0 : SIDEBAR_WIDTH} />
       {/* Character page — slides in from right */}
       {characterPageAgentId && <CharacterPage />}
       {/* Recap overlay — full screen cinematic */}
@@ -188,7 +134,7 @@ export const App: React.FC = () => {
       <FeedButton chatOpen={spectatorChatOpen} />
       {/* Back to setup button */}
       <button
-        onClick={() => setShowSetup(true)}
+        onClick={() => setEntered(false)}
         style={{
           position: 'absolute',
           top: 14,
@@ -207,12 +153,6 @@ export const App: React.FC = () => {
       >
         + ADD AGENT
       </button>
-      {/* Setup page overlay */}
-      {showSetup && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 100, overflowY: 'auto' }}>
-          <SetupPage onEnter={() => setShowSetup(false)} />
-        </div>
-      )}
       {/* Dev tools — toggle via DEV_TOOLS_ENABLED */}
       {DEV_TOOLS_ENABLED && <DevPanel />}
     </div>
