@@ -23,6 +23,8 @@ export const DevPanel: React.FC = () => {
   }, []);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
     dragging.current = true;
     offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
   }, [pos]);
