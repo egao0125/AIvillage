@@ -36,8 +36,8 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
   const radius = Math.min(28, 18 + connectionCount * 1.5);
   const moodRingColor = moodColor(mood);
   const baseOpacity = stateOpacity(state);
-  const opacity = dimmed ? 0.12 : baseOpacity;
-  const hoverScale = hovered ? 1.12 : 1;
+  const opacity = dimmed ? 0.15 : baseOpacity;
+  const hoverScale = hovered ? 1.2 : 1;
 
   const gRef = useRef<SVGGElement>(null);
   const pos = useRef({ x, y });
