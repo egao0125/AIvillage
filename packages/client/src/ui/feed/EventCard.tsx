@@ -20,11 +20,11 @@ interface EventCardProps {
 
 export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
   const [showConversation, setShowConversation] = useState(false);
-  const [showReactions, setShowReactions] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   const reactionCount = getReactionCount(event);
   const isLong = event.headline.length > TRUNCATE_LENGTH;
+  const isExpandable = isLong || reactionCount > 0;
   const displayText = isLong && !expanded
     ? event.headline.slice(0, TRUNCATE_LENGTH) + '...'
     : event.headline;
@@ -33,14 +33,14 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
 
   return (
     <div
-      onClick={() => { if (isLong) setExpanded(prev => !prev); }}
+      onClick={() => { if (isExpandable) setExpanded(prev => !prev); }}
       style={{
         margin: '6px 10px',
         padding: '12px 14px',
         background: COLORS.bgCard,
         borderRadius: 8,
         border: `1px solid ${COLORS.border}`,
-        cursor: isLong ? 'pointer' : undefined,
+        cursor: isExpandable ? 'pointer' : undefined,
       }}
     >
       {/* Header: icon + type badge + "by author" ... status flag (top right) */}
@@ -49,7 +49,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         <span
           style={{
             fontFamily: FONTS.pixel,
-            fontSize: '7px',
+            fontSize: '9px',
             padding: '2px 6px',
             borderRadius: 3,
             background: event.color + '33',
@@ -69,7 +69,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
           <span
             style={{
               fontFamily: FONTS.pixel,
-              fontSize: '7px',
+              fontSize: '9px',
               padding: '2px 6px',
               borderRadius: 3,
               background: statusStyle.bg,
@@ -88,7 +88,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         style={{
           fontFamily: FONTS.body,
           fontSize: '12px',
-          color: COLORS.textDim,
+          color: COLORS.text,
           lineHeight: '1.6',
           whiteSpace: 'pre-wrap',
         }}
@@ -96,33 +96,20 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         {displayText}
       </div>
 
-      {/* Footer: day count bottom-left */}
-      <div style={{ marginTop: 8 }}>
+      {/* Footer: day + reaction count hint when collapsed */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
         <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: COLORS.textDim, letterSpacing: 0.5 }}>
           Day {event.day}
         </span>
+        {reactionCount > 0 && !expanded && (
+          <span style={{ fontFamily: FONTS.body, fontSize: '10px', color: COLORS.accent }}>
+            {reactionCount} reaction{reactionCount === 1 ? '' : 's'}
+          </span>
+        )}
       </div>
 
-      {/* Reactions expander */}
-      {reactionCount > 0 && (
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowReactions(prev => !prev); }}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: COLORS.accent,
-            fontFamily: FONTS.body,
-            fontSize: '11px',
-            cursor: 'pointer',
-            padding: 0,
-            marginTop: 4,
-            display: 'block',
-          }}
-        >
-          {showReactions ? `▾ Hide reactions` : `▸ ${reactionCount} reaction${reactionCount === 1 ? '' : 's'}`}
-        </button>
-      )}
-      {showReactions && <ReactionsExpander event={event} />}
+      {/* Reactions — shown when card is expanded */}
+      {expanded && reactionCount > 0 && <ReactionsExpander event={event} />}
 
       {/* Conversation expander */}
       {event.sourceConversationId && (

@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import { gameStore, type ChatEntry, type ThoughtEntry, type ActionLogEntry } from './GameStore';
+import { gameStore, type ChatEntry, type ThoughtEntry, type ActionLogEntry, type InspectTarget } from './GameStore';
 import type {
   Agent,
   BoardPost,
@@ -208,6 +208,13 @@ export function useAgentEvents(agentId: string): VillageEvent[] {
   return useMemo(
     () => allEvents.filter(e => e.agentIds.includes(agentId)),
     [allEvents, agentId]
+  );
+}
+
+export function useInspectTarget(): InspectTarget | null {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().inspectTarget
   );
 }
 
