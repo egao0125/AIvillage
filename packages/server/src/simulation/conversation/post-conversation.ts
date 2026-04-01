@@ -78,7 +78,8 @@ export class PostConversationProcessor {
           learned: Array.isArray(parsed.learned) ? parsed.learned.filter((f: any) => typeof f === 'string').slice(0, 2) : [],
           tension: typeof parsed.tension === 'string' ? parsed.tension : null,
         };
-      } catch {
+      } catch (err) {
+        console.warn('[PostConversation] LLM response parse failed:', (err as Error).message);
         result = { summary: `I talked with ${othersLabel}.`, agreements: [], learned: [], tension: null };
       }
 
@@ -105,16 +106,20 @@ export class PostConversationProcessor {
       // --- 2. Agreements → memories + social ledger entries (max 2) ---
       for (const agreement of result.agreements.slice(0, 2)) {
         // Memory for this participant
-        await cognition.addLinkedMemory({
-          id: crypto.randomUUID(),
-          agentId: participantId,
-          type: 'plan',
-          content: `AGREEMENT with ${othersLabel}: ${agreement}`,
-          importance: 7,
-          timestamp: Date.now(),
-          relatedAgentIds: otherIds,
-          causedBy: conversationMemoryId,
-        });
+        try {
+          await cognition.addLinkedMemory({
+            id: crypto.randomUUID(),
+            agentId: participantId,
+            type: 'plan',
+            content: `AGREEMENT with ${othersLabel}: ${agreement}`,
+            importance: 7,
+            timestamp: Date.now(),
+            relatedAgentIds: otherIds,
+            causedBy: conversationMemoryId,
+          });
+        } catch (err) {
+          console.warn(`[post-conversation] Failed to write agreement memory for ${participantId}:`, (err as Error).message);
+        }
 
         // Memory for other participants
         for (const otherId of otherIds) {
@@ -131,7 +136,9 @@ export class PostConversationProcessor {
               relatedAgentIds: [participantId],
               causedBy: conversationMemoryId,
             });
-          } catch {}
+          } catch (err) {
+            console.warn(`[post-conversation] Failed to write agreement memory for agent ${otherId}:`, err);
+          }
         }
 
         // Classify and create commitment or social ledger entry
@@ -239,30 +246,38 @@ export class PostConversationProcessor {
           }
         }
 
-        await cognition.addLinkedMemory({
-          id: crypto.randomUUID(),
-          agentId: participantId,
-          type: 'observation',
-          content: `${othersLabel} told me: ${fact}`,
-          importance: 5,
-          timestamp: Date.now(),
-          relatedAgentIds: otherIds,
-          causedBy: conversationMemoryId,
-        });
+        try {
+          await cognition.addLinkedMemory({
+            id: crypto.randomUUID(),
+            agentId: participantId,
+            type: 'observation',
+            content: `${othersLabel} told me: ${fact}`,
+            importance: 5,
+            timestamp: Date.now(),
+            relatedAgentIds: otherIds,
+            causedBy: conversationMemoryId,
+          });
+        } catch (err) {
+          console.warn(`[post-conversation] Failed to write learned-fact memory for ${participantId}:`, (err as Error).message);
+        }
       }
 
       // --- 4. Tension → thought memory ---
       if (result.tension) {
-        await cognition.addLinkedMemory({
-          id: crypto.randomUUID(),
-          agentId: participantId,
-          type: 'thought',
-          content: result.tension,
-          importance: 6,
-          timestamp: Date.now(),
-          relatedAgentIds: otherIds,
-          causedBy: conversationMemoryId,
-        });
+        try {
+          await cognition.addLinkedMemory({
+            id: crypto.randomUUID(),
+            agentId: participantId,
+            type: 'thought',
+            content: result.tension,
+            importance: 6,
+            timestamp: Date.now(),
+            relatedAgentIds: otherIds,
+            causedBy: conversationMemoryId,
+          });
+        } catch (err) {
+          console.warn(`[post-conversation] Failed to write tension memory for ${participantId}:`, (err as Error).message);
+        }
       }
 
       // --- 5. Four Stream: update dossiers + add concerns ---
@@ -272,7 +287,9 @@ export class PostConversationProcessor {
           const otherName = this.world.getAgent(otherId)?.config.name || 'someone';
           void cognition.fourStream.updateDossier(
             otherId, otherName, result.summary, cognition.llmProvider
-          );
+          ).catch((err: unknown) => {
+            console.warn('[PostConversation] updateDossier failed:', (err as Error).message);
+          });
         }
 
         // Commitments are now tracked in agent.commitments[], not as concerns.

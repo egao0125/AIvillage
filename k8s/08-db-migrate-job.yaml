@@ -1,0 +1,189 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-migrate-sql
+  namespace: ai-village
+data:
+  migrate.sql: |
+    BEGIN;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'aivillage_app') THEN
+        CREATE ROLE aivillage_app WITH LOGIN;
+      END IF;
+    END
+    $$;
+
+    CREATE TABLE IF NOT EXISTS world_state (
+      id         TEXT PRIMARY KEY DEFAULT 'current',
+      data       JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS agents (
+      id         UUID PRIMARY KEY,
+      data       JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_controllers (
+      agent_id   UUID PRIMARY KEY,
+      data       JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS memories (
+      id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      agent_id          UUID NOT NULL,
+      type              TEXT NOT NULL DEFAULT 'observation',
+      content           TEXT NOT NULL,
+      importance        FLOAT NOT NULL DEFAULT 5,
+      timestamp         BIGINT NOT NULL,
+      related_agent_ids TEXT[] NOT NULL DEFAULT '{}',
+      visibility        TEXT NOT NULL DEFAULT 'private',
+      emotional_valence FLOAT NOT NULL DEFAULT 0,
+      caused_by         TEXT,
+      led_to            TEXT[],
+      is_core           BOOLEAN GENERATED ALWAYS AS (importance >= 9) STORED,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- Composite indexes to support the three primary query patterns in rds-store.ts:
+    --   (1) WHERE agent_id = $1 ORDER BY timestamp DESC LIMIT N
+    --   (2) WHERE agent_id = $1 AND timestamp < $2 ORDER BY timestamp DESC LIMIT N
+    --   (3) WHERE agent_id = $1 [AND importance >= $3] ORDER BY importance DESC
+    -- PostgreSQL B-Tree: leftmost column (agent_id) prunes the index scan to one agent,
+    -- then the second column satisfies ORDER BY without a sort step (index-only ordering).
+    -- Reference: PostgreSQL docs §11.3 "Multicolumn Indexes".
+    CREATE INDEX IF NOT EXISTS memories_agent_timestamp_idx ON memories (agent_id, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS memories_agent_importance_idx ON memories (agent_id, importance DESC);
+
+    GRANT SELECT, INSERT, UPDATE, DELETE ON world_state       TO aivillage_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON agents            TO aivillage_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON agent_controllers TO aivillage_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON memories          TO aivillage_app;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aivillage_app;
+
+    -- Add version column for optimistic locking (horizontal scaling / leader election)
+    -- IF NOT EXISTS makes this idempotent — safe to re-run on existing clusters
+    ALTER TABLE world_state ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 0;
+
+    -- Per-map isolation: agents and controllers are partitioned by map_id
+    ALTER TABLE agents ADD COLUMN IF NOT EXISTS map_id TEXT NOT NULL DEFAULT 'village';
+    CREATE INDEX IF NOT EXISTS idx_agents_map_id ON agents(map_id);
+
+    ALTER TABLE agent_controllers ADD COLUMN IF NOT EXISTS map_id TEXT NOT NULL DEFAULT 'village';
+    CREATE INDEX IF NOT EXISTS idx_agent_controllers_map_id ON agent_controllers(map_id);
+
+    -- Migrate existing world_state row from id='current' to id='village'
+    UPDATE world_state SET id = 'village' WHERE id = 'current';
+
+    COMMIT;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: ai-village
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: OnFailure
+      # Use the app SA — it has IRSA access to ai-village/* secrets in Secrets Manager.
+      # The rds-master-secret ESO sync runs under the ESO SA, not this SA.
+      serviceAccountName: ai-village
+      # Pod-level security: non-root, no privilege escalation
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999   # postgres user in postgres:16-alpine
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: postgres:16-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -euo pipefail
+              # Connect as RDS master user (has DDL/GRANT privileges) to run schema migration.
+              # DB_ADMIN_USER / DB_ADMIN_PASSWORD come from rds-master-secret (ESO-managed,
+              # sourced from the RDS-managed master password in Secrets Manager).
+              # DB_APP_PASSWORD is the aivillage_app role password from ai-village-secret —
+              # kept separate from master credentials (principle of least privilege).
+              # sslmode=require: TLS-encrypted but no cert verification.
+              # verify-full requires the AWS RDS CA bundle not present in postgres:16-alpine.
+              # Acceptable inside private VPC — MITM on RDS endpoint not feasible.
+              # App container uses verify-full via NODE_EXTRA_CA_CERTS.
+              ADMIN_DSN="postgresql://${DB_ADMIN_USER}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}?sslmode=require"
+              echo "Running DDL migration as master user..."
+              PGPASSWORD="$DB_ADMIN_PASSWORD" psql "$ADMIN_DSN" -f /sql/migrate.sql
+              echo "Setting aivillage_app password..."
+              # Feed ALTER ROLE via stdin with psql variable substitution to keep
+              # the password out of /proc/*/cmdline. -v passes the value to psql's
+              # variable store; :'apppassword' in SQL performs safe quoted substitution.
+              # stdin reading (not -c) is required for :'var' interpolation to work.
+              # (CIS PostgreSQL Benchmark / NIST SP 800-53 IA-5)
+              echo "ALTER ROLE aivillage_app WITH LOGIN ENCRYPTED PASSWORD :'apppassword';" \
+                | PGPASSWORD="$DB_ADMIN_PASSWORD" psql "$ADMIN_DSN" -v "apppassword=$DB_APP_PASSWORD"
+              echo "Migration completed successfully"
+          env:
+            # RDS master credentials — from rds-master-secret (02b-rds-master-external-secret.yaml)
+            # The RDS-managed secret stores {"username":"...", "password":"..."} JSON
+            - name: DB_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: rds-master-secret
+                  key: username
+            - name: DB_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: rds-master-secret
+                  key: password
+            # DB host/port/name from app secret (non-sensitive config)
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_NAME
+            # App user password — set on aivillage_app role (separate from master)
+            - name: DB_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ai-village-secret
+                  key: DB_PASSWORD
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+      volumes:
+        - name: sql
+          configMap:
+            name: db-migrate-sql

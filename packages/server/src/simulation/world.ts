@@ -1,7 +1,7 @@
 import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, VillageMemoryEntry, Weather, WorldObject, WorldSnapshot } from '@ai-village/shared';
 import type { TradeProposal } from '@ai-village/ai-engine';
 import { RESOURCES, SKILLS, BUILDINGS } from '@ai-village/ai-engine';
-import { AREAS, getAreaAt as mapGetAreaAt } from '../map/village.js';
+import { getAreas, getAreaAt as mapGetAreaAt } from '../map/map-provider.js';
 import { SpatialGrid } from './spatial-grid.js';
 
 export class World {
@@ -267,7 +267,7 @@ export class World {
       time: { ...this.time },
       agents: Array.from(this.agents.values()),
       conversations: Array.from(this.conversations.values()).filter(c => !c.endedAt),
-      areas: AREAS,
+      areas: getAreas(),
       board: this.getActiveBoard(),
       elections: Array.from(this.elections.values()),
       properties: Array.from(this.properties.values()),
@@ -418,7 +418,7 @@ export class World {
 
   getSecretsFor(agentId: string): Secret[] {
     return this.secrets.filter(
-      s => s.holderId === agentId || s.aboutAgentId === agentId || s.sharedWith.includes(agentId),
+      s => s.holderId === agentId || s.aboutAgentId === agentId || (s.sharedWith ?? []).includes(agentId),
     );
   }
 

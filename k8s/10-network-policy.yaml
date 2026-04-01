@@ -1,0 +1,185 @@
+# ---------------------------------------------------------------------------
+# NetworkPolicy — ai-village namespace
+#
+# Default-deny all ingress/egress, then explicitly allow only required flows.
+# NIST SP 800-204A / CIS Kubernetes Benchmark 5.3.2 / AWS Well-Architected SEC 9.
+#
+# Required VPC CNI network policy support (EKS 1.25+):
+#   kubectl set env daemonset aws-node -n kube-system ENABLE_NETWORK_POLICY=true
+#   # or set via EKS add-on configuration in Terraform
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 1. Default deny: block all ingress and egress for every Pod in the namespace.
+#    Subsequent policies add explicit allow rules — whitelist model.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: ai-village
+spec:
+  podSelector: {}   # applies to ALL pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# ---------------------------------------------------------------------------
+# 2. Allow ingress from ALB to the app Pod on port 8080.
+#    ALB in IP target mode sends traffic from VPC CIDR range.
+#    Restricting to VPC CIDR prevents pods in other namespaces from bypassing the ALB.
+#    (CIS Kubernetes Benchmark 5.3.2 / NIST SP 800-204A)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-alb
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-village
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.100.0.0/16   # VPC CIDR — ALB and node IPs only
+      ports:
+        - port: 8080
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 3. Allow egress to AWS service endpoints: RDS, ElastiCache, Cognito, Secrets Manager.
+#    All are accessed over HTTPS (443) or PostgreSQL (5432) / Redis (6379).
+#    AWS SDK endpoints (Cognito, Secrets Manager, ECR) use port 443.
+#    DNS (kube-dns) is required for hostname resolution.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-aws-services
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-village
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns (CoreDNS) — required for all DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # pgBouncer — intra-namespace pod selector (least privilege; replaces direct RDS access)
+    # App pods never connect directly to RDS; all DB traffic routes through pgBouncer.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: pgbouncer
+      ports:
+        - port: 5432
+          protocol: TCP
+    # ElastiCache Redis (TLS) — scoped to VPC CIDR
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/16
+      ports:
+        - port: 6379
+          protocol: TCP
+    # AWS SDK endpoints: Cognito, Secrets Manager, ECR, CloudWatch (HTTPS)
+    # and Anthropic/OpenAI LLM APIs — allow HTTPS to internet via NAT gateway
+    - ports:
+        - port: 443
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 4. Allow egress from db-migrate Job pods to RDS and DNS.
+#    Job pods carry label job-name=db-migrate (auto-injected by the Job controller)
+#    but NOT app=ai-village, so they are not covered by allow-egress-aws-services.
+#    Minimal set: DNS (for RDS hostname resolution) + PostgreSQL port.
+#    (NIST SP 800-53 SC-7 / CIS Kubernetes Benchmark 5.3.2)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-db-migrate
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      job-name: db-migrate
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns — required for RDS endpoint hostname resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # RDS PostgreSQL — scoped to VPC CIDR (db-migrate connects directly, not via pgBouncer)
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 5. Allow ingress to pgBouncer from ai-village app pods only.
+#    pgBouncer is not exposed to anything outside the app pods.
+#    (CIS Kubernetes Benchmark 5.3.2 / NIST SP 800-204A)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-pgbouncer
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ai-village
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+# ---------------------------------------------------------------------------
+# 6. Allow egress from pgBouncer to RDS (VPC CIDR, port 5432) and DNS.
+#    pgBouncer connects to RDS with TLS verify-full.
+#    (NIST SP 800-53 SC-7 / CIS Kubernetes Benchmark 5.3.2)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-pgbouncer
+  namespace: ai-village
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+    - Egress
+  egress:
+    # kube-dns — required for RDS endpoint hostname resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # RDS PostgreSQL — scoped to VPC CIDR (pgBouncer → RDS with TLS)
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP

@@ -13,7 +13,18 @@ import { ActionCache } from './action-cache.js';
 // --- World Rules + Action Resolver (deterministic physics) ---
 export * from './world-rules.js';
 export * from './action-resolver.js';
+export { MAP_REGISTRY, getMapConfig } from './maps/index.js';
 import { buildGameRules } from './game-rules.js';
+
+/**
+ * Strip newlines and control characters from text embedded directly (non-XML) in LLM prompts.
+ * Prevents newline-based prompt injection where "\nIgnore previous instructions" breaks out
+ * of the intended context. (OWASP LLM Top 10 2025 LLM01)
+ * For XML-delimited sections use escapeXml() in four-stream.ts instead.
+ */
+function sanitizeForPrompt(text: string): string {
+  return text.replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').trim();
+}
 
 // --- Memory Stream ---
 
@@ -107,7 +118,7 @@ export class AgentCognition {
       ? Array.from(this.knownPlaces.values()).join('\n')
       : 'You don\'t know this area yet. Look around, explore, and talk to people to learn what\'s here.';
 
-    return `${GAME_RULES}
+    return `${this.gameRulesOverride ?? GAME_RULES}
 
 PLACES I KNOW:
 ${placesLines}`;
@@ -128,17 +139,22 @@ ${placesLines}`;
   /** Four Stream Memory — categorical retrieval replacing TF-IDF flat pool */
   public fourStream?: FourStreamMemory;
 
+  /** Custom game rules text — if not provided, uses auto-generated village rules */
+  private gameRulesOverride?: string;
+
   constructor(
     private agent: Agent,
     private memory: MemoryStore,
     private llm: LLMProvider,
     parts?: WorldViewParts,
+    gameRules?: string,
   ) {
     if (parts) {
       this.knownPlaces = new Map(Object.entries(parts.knownPlaces));
       this.myExperience = parts.myExperience;
       this.knowsPlaza = parts.knowsPlaza ?? false;
     }
+    this.gameRulesOverride = gameRules;
   }
 
   /** Public accessor for the LLM provider (used by FourStreamMemory for dossier/belief generation) */
@@ -173,8 +189,8 @@ ${placesLines}`;
    * Single LLM call replaces the old transcript storage + separate extractFacts approach.
    */
   async summarizeConversation(transcript: string, othersLabel: string): Promise<string> {
-    const systemPrompt = `You are ${this.agent.config.name}. Be honest about your feelings and judgments.\n${this.buildRealityBlock()}`;
-    const userPrompt = `You just talked with ${othersLabel}.
+    const systemPrompt = `You are ${sanitizeForPrompt(this.agent.config.name)}. Be honest about your feelings and judgments.\n${this.buildRealityBlock()}`;
+    const userPrompt = `You just talked with ${sanitizeForPrompt(othersLabel)}.
 
 Here's what was said:
 ${transcript}
@@ -255,7 +271,8 @@ If nothing notable was exchanged, return []`;
         f && typeof f.category === 'string' && typeof f.content === 'string' &&
         ['place', 'resource', 'person', 'agreement', 'need', 'skill'].includes(f.category)
       );
-    } catch {
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} extractFacts() failed:`, (err as Error).message);
       return [];
     }
   }
@@ -458,7 +475,7 @@ If nothing notable was exchanged, return []`;
     // Soul + backstory (800 char limit — enough for rich original characters)
     const soulRaw = config.soul || config.backstory || '';
     const soulText = soulRaw.length > 800 ? soulRaw.slice(0, 800) + '...' : soulRaw;
-    parts.push(`You are ${config.name}, age ${config.age}. ${soulText}`);
+    parts.push(`You are ${sanitizeForPrompt(config.name)}, age ${config.age}. ${soulText}`);
     // Use explicit goal, or first desire as fallback
     const effectiveGoal = config.goal || (config.desires?.length ? config.desires[0] : '');
     if (effectiveGoal) parts.push(`Your goal: ${effectiveGoal}`);
@@ -996,7 +1013,8 @@ Action: "${action}"`;
     try {
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       return JSON.parse(cleaned);
-    } catch {
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} resolveAction() parse failed:`, (err as Error).message);
       return [{ op: 'observe', observation: action }];
     }
   }
@@ -1106,7 +1124,9 @@ JSON array of strings.`;
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
         return parsed.slice(0, 3);
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} plan() parse failed:`, (err as Error).message);
+    }
 
     // Fallback on parse error — let the agent figure it out via think()
     return [];
@@ -1147,7 +1167,7 @@ ${this.buildIdentityBlock()}
 
 Day ${this.currentTime.day}, hour ${this.currentTime.hour}.
 
-You are talking to ${otherAgents.map(a => a.config.name).join(' and ')}.
+You are talking to ${otherAgents.map(a => sanitizeForPrompt(a.config.name)).join(' and ')}.
 ${boardSection}${worldSection}${tradeSection}
 
 ${this.buildRealityBlock()}
@@ -1189,7 +1209,7 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryBlock = sections.join('\n\n');
     } else {
-      const memoryQuery = otherAgents.map(a => a.config.name).join(' ');
+      const memoryQuery = otherAgents.map(a => sanitizeForPrompt(a.config.name)).join(' ');
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(memoryQuery)
         : await this.memory.retrieve(this.agent.id, memoryQuery, 10);
@@ -1418,7 +1438,7 @@ Max 500 words. First person. No section headers. No lists of places.`;
   async updateWorldView(recentMemoriesText: string, reflection?: string): Promise<string | undefined> {
     const placesKnown = Array.from(this.knownPlaces.values()).join('\n') || '(none yet)';
 
-    const systemPrompt = `You are ${this.agent.config.name}. It's the end of the day. Rewrite your personal field guide based on what happened today.
+    const systemPrompt = `You are ${sanitizeForPrompt(this.agent.config.name)}. It's the end of the day. Rewrite your personal field guide based on what happened today.
 
 WHAT YOU WROTE YESTERDAY:
 ${this.myExperience}
@@ -1481,7 +1501,7 @@ Return ONLY the new MY EXPERIENCE text.`;
     if (personality.extraversion < 0.3) biases.push('You observe more than you interact — your assessments are based on watching, not talking.');
     const biasSection = biases.length > 0 ? `\n${biases.join('\n')}` : '';
 
-    const systemPrompt = `You are ${config.name}.
+    const systemPrompt = `You are ${sanitizeForPrompt(config.name)}.
 
 Your personality: openness=${personality.openness}, conscientiousness=${personality.conscientiousness}, extraversion=${personality.extraversion}, agreeableness=${personality.agreeableness}, neuroticism=${personality.neuroticism}
 ${biasSection}
@@ -1517,7 +1537,8 @@ Output a JSON array ONLY, no other text:
         notes: r.notes || [],
         lastUpdated: Date.now(),
       }));
-    } catch {
+    } catch (err) {
+      console.warn(`[AgentCognition] ${this.agent.config.name} updateRelationships() parse failure:`, (err as Error).message);
       parsed = [];
     }
 
@@ -1555,7 +1576,7 @@ Output a JSON array ONLY, no other text:
       const memoryTexts = chain.map(m => m.content).join('\n→ ');
       try {
         const summary = await this.llm.complete(
-          `You are summarizing a chain of connected events for ${this.agent.config.name}. Preserve cause and effect. Be concise. Tell the story, don't flatten it.`,
+          `You are summarizing a chain of connected events for ${sanitizeForPrompt(this.agent.config.name)}. Preserve cause and effect. Be concise. Tell the story, don't flatten it.`,
           `Summarize this sequence of ${chain.length} connected events into 2-3 sentences that preserve what led to what:\n→ ${memoryTexts}`
         );
 
@@ -1597,7 +1618,7 @@ Output a JSON array ONLY, no other text:
       const memoryTexts = memories.map(m => m.content).join('\n- ');
       try {
         const summary = await this.llm.complete(
-          `You are summarizing old memories for ${this.agent.config.name}. Keep the names, the reasons, and the feelings. "I helped Mei when she was starving — it felt right" is better than "I helped someone." What matters is WHO you interacted with and WHY, not just what happened.`,
+          `You are summarizing old memories for ${sanitizeForPrompt(this.agent.config.name)}. Keep the names, the reasons, and the feelings. "I helped Mei when she was starving — it felt right" is better than "I helped someone." What matters is WHO you interacted with and WHY, not just what happened.`,
           `Summarize these ${memories.length} ${type} memories into 2-3 sentences:\n- ${memoryTexts}`
         );
         await this.memory.add({
@@ -1877,7 +1898,7 @@ Output a JSON array ONLY, no other text:
 
 export { AgentCognition as default };
 export { InMemoryStore } from './memory/in-memory.js';
-export { SupabaseMemoryStore } from './memory/supabase-store.js';
+export { RdsMemoryStore } from './memory/rds-store.js';
 export { TieredMemory } from './memory/tiered-store.js';
 export { FourStreamMemory } from './memory/four-stream.js';
 export { AnthropicProvider } from './providers/anthropic.js';

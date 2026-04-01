@@ -35,7 +35,9 @@ export class TieredMemory {
     }
     // Identity memories also go into backing store for retrieval
     for (const m of this.identity) {
-      void this.backingStore.add(m);
+      void this.backingStore.add(m).catch((err: unknown) => {
+        console.warn(`[TieredMemory] Failed to persist identity memory ${m.id} for agent ${this.agentId}:`, (err as Error).message);
+      });
     }
   }
 

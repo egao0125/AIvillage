@@ -1,0 +1,163 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { COLORS, FONTS } from '../styles';
+import { gameStore, type InspectTarget } from '../../core/GameStore';
+import { useInspectTarget, useAgentsMap } from '../../core/hooks';
+import { AgentDetail } from './AgentDetail';
+import { RelationshipDetail } from './RelationshipDetail';
+import { EventDetail } from './EventDetail';
+import { LocationDetail } from './LocationDetail';
+import { InstitutionDetail } from './InstitutionDetail';
+
+function targetLabel(target: InspectTarget, agentsMap: Map<string, { config: { name: string } }>): string {
+  const getName = (id: string) => agentsMap.get(id)?.config.name ?? id.slice(0, 8);
+
+  switch (target.type) {
+    case 'agent':
+      return `Agent: ${getName(target.id)}`;
+    case 'relationship':
+      return `${getName(target.id)} \u2194 ${getName(target.secondaryId!)}`;
+    case 'event':
+      return `Event`;
+    case 'location':
+      return `Location`;
+    case 'institution':
+      return `Institution`;
+    default:
+      return 'Unknown';
+  }
+}
+
+export const ContextPanel: React.FC = () => {
+  const inspectTarget = useInspectTarget();
+  const agentsMap = useAgentsMap();
+  const [breadcrumbs, setBreadcrumbs] = useState<InspectTarget[]>([]);
+  const prevTargetRef = useRef<InspectTarget | null>(null);
+
+  // Track breadcrumb navigation
+  useEffect(() => {
+    if (!inspectTarget) {
+      setBreadcrumbs([]);
+      prevTargetRef.current = null;
+      return;
+    }
+
+    const prev = prevTargetRef.current;
+    if (inspectTarget.drillDown && prev) {
+      // Drill-down from within the panel — push to breadcrumbs
+      setBreadcrumbs((bc) => [...bc, prev]);
+    } else if (!inspectTarget.drillDown) {
+      // Fresh selection from canvas/roster — reset breadcrumbs
+      setBreadcrumbs([]);
+    }
+    prevTargetRef.current = inspectTarget;
+  }, [inspectTarget]);
+
+  const handleBack = () => {
+    if (breadcrumbs.length > 0) {
+      const newBreadcrumbs = [...breadcrumbs];
+      const previous = newBreadcrumbs.pop()!;
+      setBreadcrumbs(newBreadcrumbs);
+      prevTargetRef.current = previous;
+      gameStore.openDetail(previous);
+    } else {
+      prevTargetRef.current = null;
+      gameStore.closeDetail();
+    }
+  };
+
+  const renderContent = () => {
+    if (!inspectTarget) {
+      return (
+        <div style={{ fontFamily: FONTS.body, fontSize: 13, color: COLORS.textDim, textAlign: 'center', paddingTop: 40 }}>
+          Select an entity to inspect
+        </div>
+      );
+    }
+
+    switch (inspectTarget.type) {
+      case 'agent':
+        return <AgentDetail agentId={inspectTarget.id} />;
+      case 'relationship':
+        return <RelationshipDetail agentId={inspectTarget.id} secondaryId={inspectTarget.secondaryId!} />;
+      case 'event':
+        return <EventDetail eventId={inspectTarget.id} />;
+      case 'location':
+        return <LocationDetail locationId={inspectTarget.id} />;
+      case 'institution':
+        return <InstitutionDetail institutionId={inspectTarget.id} />;
+      default:
+        return (
+          <div style={{ fontFamily: FONTS.body, fontSize: 13, color: COLORS.textDim, padding: 16 }}>
+            Unknown target type
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div style={{
+      padding: 16,
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 0,
+    }}>
+      {/* Header */}
+      <div style={{ marginBottom: 12, flexShrink: 0 }}>
+        {/* Back button */}
+        <div
+          style={{
+            fontFamily: FONTS.body,
+            fontSize: 12,
+            color: COLORS.accent,
+            cursor: 'pointer',
+            marginBottom: 6,
+          }}
+          onClick={handleBack}
+        >
+          {'\u2190'}
+        </div>
+
+        {/* Breadcrumbs */}
+        {inspectTarget && breadcrumbs.length > 0 && (
+          <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+            <span
+              onClick={() => { setBreadcrumbs([]); prevTargetRef.current = null; gameStore.closeDetail(); }}
+              style={{ cursor: 'pointer' }}
+              onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.color = COLORS.textDim; }}
+            >
+              Watch
+            </span>
+            {breadcrumbs.map((bc, i) => (
+              <React.Fragment key={i}>
+                <span style={{ margin: '0 2px' }}>&gt;</span>
+                <span
+                  onClick={() => {
+                    const newBreadcrumbs = breadcrumbs.slice(0, i);
+                    setBreadcrumbs(newBreadcrumbs);
+                    prevTargetRef.current = bc;
+                    gameStore.openDetail(bc);
+                  }}
+                  style={{ cursor: 'pointer' }}
+                  onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}
+                  onMouseLeave={e => { (e.target as HTMLElement).style.color = COLORS.textDim; }}
+                >
+                  {targetLabel(bc, agentsMap as Map<string, { config: { name: string } }>)}
+                </span>
+              </React.Fragment>
+            ))}
+            <span style={{ margin: '0 2px' }}>&gt;</span>
+            <span style={{ color: COLORS.text }}>
+              {targetLabel(inspectTarget, agentsMap as Map<string, { config: { name: string } }>)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {renderContent()}
+      </div>
+    </div>
+  );
+};
