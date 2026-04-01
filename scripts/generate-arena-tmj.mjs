@@ -43,13 +43,13 @@ const WALL = 5, SHALLOW_WATER = 6, RUIN_FLOOR = 7, MANGROVE = 8, CAVE = 9;
 
 // Ground terrain → GID mapping
 const TILE_CONFIG = {
-  [WATER]:          { sheet: 'ts_sand',   frames: [341, 821, 1781] },
+  [WATER]:          { sheet: 'ts_sand',   frames: [2400, 2401, 2402, 2403, 2448, 2449, 2450, 2451, 2496, 2497, 2498, 2499] },
   [SAND]:           { sheet: 'ts_sand',   frames: [50, 384, 385, 386, 387, 388, 389, 432, 433, 434] },
   [OPEN]:           { sheet: 'ts_ground', frames: [50, 56, 62, 384, 385, 386, 387, 388, 389, 432, 433, 434, 435, 436, 437] },
   [JUNGLE]:         { sheet: 'ts_ground', frames: [1394, 1400, 1728, 1729, 1730, 1731, 1732, 1733, 1776, 1777, 1778, 1779, 1780, 1781] },
   [HIGH_GROUND]:    { sheet: 'ts_ground', frames: [2066, 2072, 2078, 2400, 2401, 2402, 2403, 2404, 2405, 2448, 2449, 2450, 2451, 2452, 2453] },
   [WALL]:           { sheet: 'ts_road',   frames: [524, 648, 649, 650, 651, 652, 653, 666, 667, 668, 669, 670, 671] },
-  [SHALLOW_WATER]:  { sheet: 'ts_sand',   frames: [341, 821, 1781] },
+  [SHALLOW_WATER]:  { sheet: 'ts_sand',   frames: [1920, 1921, 1922, 1923, 1968, 1969, 1970, 1971, 2016, 2017, 2018, 2019] },
   [RUIN_FLOOR]:     { sheet: 'ts_road',   frames: [272, 396, 397, 398, 399, 400, 401, 414, 415, 416, 417, 418, 419] },
   [MANGROVE]:       { sheet: 'ts_ground', frames: [1394, 1400, 1728, 1729, 1730, 1731] },
   [CAVE]:           { sheet: 'ts_ground', frames: [347, 1394, 1400] },
