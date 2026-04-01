@@ -16,7 +16,7 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ onAddAgent }) => {
   const aliveAgents = agents.filter(a => a.alive !== false);
 
   return (
-    <div style={{ position: 'absolute', top: 48, left: 8, zIndex: 20, pointerEvents: 'auto' }}>
+    <div style={{ position: 'absolute', top: 48, left: 8, zIndex: 20, pointerEvents: 'auto', background: COLORS.bg, borderRadius: 6 }}>
       {/* Toggle pill */}
       <button
         onClick={() => setOpen(prev => !prev)}
@@ -43,6 +43,7 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ onAddAgent }) => {
             width: 280,
             maxHeight: 400,
             overflowY: 'auto',
+            overscrollBehavior: 'contain',
             background: COLORS.bg,
             border: `1px solid ${COLORS.border}`,
             borderRadius: 6,
