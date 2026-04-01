@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { COLORS, FONTS } from '../styles';
-import { gameStore } from '../../core/GameStore';
 import { useSocialGraph } from './useSocialGraph';
 import { useForceLayout } from './useForceLayout';
 import { useMapLayout } from './useMapLayout';
@@ -11,7 +10,7 @@ import { SOCIAL_KEYFRAMES } from './socialAnimations';
 import type { LayoutMode, SocialFilter, SocialNode } from './types';
 import { DEFAULT_FILTER } from './types';
 
-class SocialViewErrorBoundary extends React.Component<
+class SocialGraphErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { error: Error | null }
 > {
@@ -20,10 +19,9 @@ class SocialViewErrorBoundary extends React.Component<
   render() {
     if (this.state.error) {
       return (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: COLORS.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+        <div style={{ position: 'absolute', inset: 0, background: COLORS.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
           <div style={{ color: COLORS.warning, fontFamily: FONTS.pixel, fontSize: 12 }}>SOCIAL VIEW ERROR</div>
           <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 12, maxWidth: 500, textAlign: 'center' }}>{this.state.error.message}</div>
-          <button onClick={() => gameStore.closeSocialView()} style={{ padding: '8px 16px', background: COLORS.bgCard, border: `1px solid ${COLORS.border}`, borderRadius: 4, color: COLORS.text, cursor: 'pointer', fontFamily: FONTS.body }}>Close</button>
         </div>
       );
     }
@@ -31,13 +29,13 @@ class SocialViewErrorBoundary extends React.Component<
   }
 }
 
-export const SocialView: React.FC = () => (
-  <SocialViewErrorBoundary>
-    <SocialViewInner />
-  </SocialViewErrorBoundary>
+export const SocialGraph: React.FC = () => (
+  <SocialGraphErrorBoundary>
+    <SocialGraphInner />
+  </SocialGraphErrorBoundary>
 );
 
-const SocialViewInner: React.FC = () => {
+const SocialGraphInner: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [layout, setLayout] = useState<LayoutMode>('force');
@@ -106,14 +104,12 @@ const SocialViewInner: React.FC = () => {
     setSelectedEdgeId(null);
   }, []);
 
-  // Keyboard: Escape closes
+  // Keyboard: Escape closes detail panel
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (selectedNodeId || selectedEdgeId) {
           closePanel();
-        } else {
-          gameStore.closeSocialView();
         }
       }
     };
@@ -128,9 +124,9 @@ const SocialViewInner: React.FC = () => {
   return (
     <div
       style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100,
+        position: 'relative',
+        width: '100%',
+        height: '100%',
         background: COLORS.bg,
         display: 'flex',
         flexDirection: 'column',
@@ -165,22 +161,6 @@ const SocialViewInner: React.FC = () => {
             {nodes.length} agents · {edges.length} connections
           </span>
         </div>
-        <button
-          onClick={() => gameStore.closeSocialView()}
-          style={{
-            background: 'none',
-            border: `1px solid ${COLORS.border}`,
-            borderRadius: 4,
-            color: COLORS.textDim,
-            cursor: 'pointer',
-            padding: '4px 12px',
-            fontFamily: FONTS.pixel,
-            fontSize: 8,
-            letterSpacing: 1,
-          }}
-        >
-          CLOSE
-        </button>
       </div>
 
       {/* Controls */}

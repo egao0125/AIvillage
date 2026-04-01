@@ -1,7 +1,6 @@
 import React from 'react';
 import type { Agent } from '@ai-village/shared';
 import { nameToColor, hexToString } from '../../utils/color';
-import { gameStore } from '../../core/GameStore';
 import { useReputation } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 
@@ -36,7 +35,6 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   return (
     <div
       onClick={onClick}
-      onDoubleClick={() => gameStore.openCharacterPage(agent.id)}
       style={{
         display: 'flex',
         alignItems: 'center',

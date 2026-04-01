@@ -46,12 +46,10 @@ interface GameState {
   technologies: Technology[];
   narratives: NarrativeEntry[];
   storylines: Storyline[];
-  characterPageAgentId: string | null;
   activeRecap: Recap | null;
   weeklySummary: string | null;
   villageMemory: VillageMemoryEntry[];
   actionLog: Map<string, ActionLogEntry[]>;
-  socialViewOpen: boolean;
   activeMode: 'watch' | 'inspect' | 'analyze';
   inspectTarget: InspectTarget | null;
 }
@@ -100,12 +98,10 @@ class GameStore {
     technologies: [],
     narratives: [],
     storylines: [],
-    characterPageAgentId: null,
     activeRecap: null,
     weeklySummary: null,
     villageMemory: [],
     actionLog: new Map(),
-    socialViewOpen: false,
     activeMode: 'watch',
     inspectTarget: null,
   };
@@ -532,18 +528,6 @@ class GameStore {
     this.notify();
   }
 
-  // --- Character Page ---
-
-  openCharacterPage(agentId: string): void {
-    this.state = { ...this.state, characterPageAgentId: agentId };
-    this.notify();
-  }
-
-  closeCharacterPage(): void {
-    this.state = { ...this.state, characterPageAgentId: null };
-    this.notify();
-  }
-
   // --- Recap ---
 
   setActiveRecap(recap: Recap | null): void {
@@ -572,18 +556,6 @@ class GameStore {
     const newAgents = new Map(this.state.agents);
     newAgents.set(agentId, { ...agent, socialLedger: ledger });
     this.state = { ...this.state, agents: newAgents };
-    this.notify();
-  }
-
-  // --- Social View ---
-
-  openSocialView(): void {
-    this.state = { ...this.state, socialViewOpen: true };
-    this.notify();
-  }
-
-  closeSocialView(): void {
-    this.state = { ...this.state, socialViewOpen: false };
     this.notify();
   }
 

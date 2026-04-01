@@ -6,8 +6,9 @@ const statCard: React.CSSProperties = {
   background: COLORS.bgCard,
   border: `1px solid ${COLORS.border}`,
   borderRadius: 4,
-  padding: 12,
+  padding: 10,
   textAlign: 'center',
+  overflow: 'hidden',
 };
 
 const labelStyle: React.CSSProperties = {
@@ -20,9 +21,12 @@ const labelStyle: React.CSSProperties = {
 
 const valueStyle: React.CSSProperties = {
   fontFamily: FONTS.pixel,
-  fontSize: 12,
+  fontSize: 9,
   color: COLORS.text,
-  marginTop: 6,
+  marginTop: 4,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 };
 
 const weatherIcon = (current: string): string => {
@@ -49,7 +53,7 @@ export const VillageStatus: React.FC = () => {
   const aliveCount = agents.filter((a) => a.alive !== false).length;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
       <div style={statCard}>
         <div style={labelStyle}>Population</div>
         <div style={valueStyle}>{aliveCount}</div>
