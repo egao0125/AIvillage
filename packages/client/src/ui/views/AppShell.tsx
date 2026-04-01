@@ -9,26 +9,17 @@ const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
     style={{
       width: '100%',
       height: '100%',
-      position: 'relative',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       background: COLORS.bg,
+      color: COLORS.textDim,
+      fontFamily: FONTS.pixel,
+      fontSize: '10px',
+      letterSpacing: 1,
     }}
   >
-    <TopNav />
-    <div
-      style={{
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: COLORS.textDim,
-        fontFamily: FONTS.pixel,
-        fontSize: '10px',
-        letterSpacing: 1,
-      }}
-    >
-      {mode.toUpperCase()} MODE — COMING SOON
-    </div>
+    {mode.toUpperCase()} MODE — COMING SOON
   </div>
 );
 
@@ -40,6 +31,7 @@ export const AppShell: React.FC = () => {
       {activeMode === 'watch' && <WatchView />}
       {activeMode === 'inspect' && <Placeholder mode="inspect" />}
       {activeMode === 'analyze' && <Placeholder mode="analyze" />}
+      <TopNav />
     </div>
   );
 };

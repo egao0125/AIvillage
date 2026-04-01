@@ -614,3 +614,6 @@ class GameStore {
 }
 
 export const gameStore = new GameStore();
+
+// Expose for console debugging
+(window as any).gameStore = gameStore;
