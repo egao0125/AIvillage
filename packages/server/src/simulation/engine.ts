@@ -14,6 +14,7 @@ import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
 import { AREAS } from '../map/village.js';
 import { RdsPersistence, type ControllerData, VersionConflictError } from '../persistence/rds.js';
+import { SupabasePersistence } from '../persistence/supabase.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
 import { CharacterTimeline } from './character-timeline.js';
@@ -43,6 +44,7 @@ export class SimulationEngine {
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
   private persistence: RdsPersistence | null = null;
+  private supabaseFallback: SupabasePersistence | null = null;
   private weatherStableUntil: number = 0;
   private lastConversationPair: Map<string, number> = new Map();
   private narrator!: VillageNarrator;
@@ -98,7 +100,15 @@ export class SimulationEngine {
         console.error('[Engine] FATAL: RDS persistence disabled in production. Set DB_HOST, DB_USER, DB_PASSWORD to prevent data loss on pod restart.');
         process.exit(1);
       }
-      console.log('[Engine] RDS persistence disabled — using in-memory store (dev mode only)');
+      // Fallback: try Supabase for read-only data restore (local dev)
+      const supabaseUrl = process.env.SUPABASE_URL;
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (supabaseUrl && supabaseKey) {
+        this.supabaseFallback = new SupabasePersistence(supabaseUrl, supabaseKey);
+        console.log('[Engine] Supabase fallback enabled (read-only data restore)');
+      } else {
+        console.log('[Engine] RDS persistence disabled — using in-memory store (dev mode only)');
+      }
     }
   }
 
@@ -196,6 +206,9 @@ export class SimulationEngine {
     // Restore from RDS if persistence is enabled
     if (this.persistence) {
       await this.loadFromRds();
+    } else if (this.supabaseFallback) {
+      // Local dev: restore read-only data from Supabase
+      await this._loadFromSupabase();
     }
 
     // --- Infra 1: Wire event bus subscriptions ---
@@ -714,6 +727,46 @@ export class SimulationEngine {
       // Starting with an empty world after a DB failure would silently wipe simulation state.
       console.error('[Engine] Failed to load from RDS — aborting startup:', err);
       throw err;
+    }
+  }
+
+  /** Local dev fallback: restore world state + agents from Supabase (read-only) */
+  private async _loadFromSupabase(): Promise<void> {
+    if (!this.supabaseFallback) return;
+    try {
+      const [worldData, agents] = await Promise.all([
+        this.supabaseFallback.loadWorldState(),
+        this.supabaseFallback.loadAgents(),
+      ]);
+
+      if (worldData) {
+        this.world.time = worldData.time as typeof this.world.time;
+        this.world.weather = worldData.weather as typeof this.world.weather;
+        this.world.board = (worldData.board ?? []) as typeof this.world.board;
+        this.world.reputation = (worldData.reputation ?? []) as typeof this.world.reputation;
+        this.world.artifacts = (worldData.artifacts ?? []) as typeof this.world.artifacts;
+        this.world.technologies = (worldData.technologies ?? []) as typeof this.world.technologies;
+        this.world.conversations = recordToMap(worldData.conversations ?? {}) as typeof this.world.conversations;
+        this.world.elections = recordToMap(worldData.elections ?? {}) as typeof this.world.elections;
+        this.world.properties = recordToMap(worldData.properties ?? {}) as typeof this.world.properties;
+        this.world.items = recordToMap(worldData.items ?? {}) as typeof this.world.items;
+        this.world.institutions = recordToMap(worldData.institutions ?? {}) as typeof this.world.institutions;
+        this.world.buildings = recordToMap(worldData.buildings ?? {}) as typeof this.world.buildings;
+        if (worldData.villageMemory && Array.isArray(worldData.villageMemory)) {
+          this.world.villageMemory = worldData.villageMemory as typeof this.world.villageMemory;
+        }
+        console.log(`[Engine] World state restored from Supabase (day ${this.world.time.day}, hour ${this.world.time.hour})`);
+      }
+
+      if (agents.length > 0) {
+        for (const agent of agents) {
+          this.world.addAgent(agent);
+          console.log(`[Engine] Agent ${agent.config.name} restored from Supabase`);
+        }
+        console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
+      }
+    } catch (err) {
+      console.warn('[Engine] Supabase fallback load failed:', err);
     }
   }
 
