@@ -79,7 +79,7 @@ resource "aws_kms_alias" "cloudtrail" {
 
 resource "aws_s3_bucket" "cloudtrail" {
   # Bucket name must be globally unique — account ID suffix ensures uniqueness
-  bucket        = "ai-village-cloudtrail-${data.aws_caller_identity.current.account_id}"
+  bucket        = "ai-village-cloudtrail-us1-${data.aws_caller_identity.current.account_id}"
   force_destroy = false  # Never auto-delete audit logs
   tags          = var.tags
 }
@@ -168,7 +168,7 @@ resource "aws_s3_bucket_policy" "cloudtrail" {
 # an immutable access trail.  The logs bucket uses AWS-managed SSE (not CMK)
 # to avoid a circular dependency between the KMS key and the logging bucket.
 resource "aws_s3_bucket" "cloudtrail_access_logs" {
-  bucket        = "ai-village-cloudtrail-access-logs-${data.aws_caller_identity.current.account_id}"
+  bucket        = "ai-village-cloudtrail-access-logs-us1-${data.aws_caller_identity.current.account_id}"
   force_destroy = false
   tags          = var.tags
 }

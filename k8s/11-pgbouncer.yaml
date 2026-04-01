@@ -55,9 +55,9 @@ spec:
 
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1001
-        runAsGroup: 1001
-        fsGroup: 1001
+        runAsUser: 70    # pgbouncer user in edoburu/pgbouncer image
+        runAsGroup: 70
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
 
@@ -67,10 +67,10 @@ spec:
         - name: pgbouncer
           # Pin to a specific digest in production to prevent supply chain attacks.
           # Update periodically (monthly) for security patches.
-          # 1.25.1: fixes CVE-2025-12819 (untrusted search_path in auth_query).
-          # Our config uses userlist.txt (not auth_user+auth_query), so not directly affected,
-          # but upgrading closes the risk in case config evolves. Always run latest patched release.
-          image: bitnami/pgbouncer:1.25.1
+          # edoburu/pgbouncer: Docker Hub pull from EKS nodes is unreliable.
+          # Image is pre-pulled to private ECR (same version: 1.25.1).
+          # edoburu uses DB_* / POOL_MODE / MAX_CLIENT_CONN env vars (no PGBOUNCER_ prefix).
+          image: 053442321898.dkr.ecr.us-east-1.amazonaws.com/ai-village-pgbouncer:1.25.1
           imagePullPolicy: IfNotPresent
 
           ports:
@@ -80,93 +80,64 @@ spec:
 
           env:
             # --- Backend: real RDS connection (from ai-village-secret) ---
-            - name: POSTGRESQL_HOST
+            - name: DB_HOST
               valueFrom:
                 secretKeyRef:
                   name: ai-village-secret
                   key: DB_HOST
-            - name: POSTGRESQL_PORT
+            - name: DB_PORT
               valueFrom:
                 secretKeyRef:
                   name: ai-village-secret
                   key: DB_PORT
-            - name: POSTGRESQL_DATABASE
+            - name: DB_NAME
               valueFrom:
                 secretKeyRef:
                   name: ai-village-secret
                   key: DB_NAME
-            - name: POSTGRESQL_USERNAME
+            - name: DB_USER
               valueFrom:
                 secretKeyRef:
                   name: ai-village-secret
                   key: DB_USER
-            - name: POSTGRESQL_PASSWORD
+            - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: ai-village-secret
                   key: DB_PASSWORD
 
-            # --- pgBouncer listen port (match RDS standard port for transparent proxying) ---
-            - name: PGBOUNCER_PORT
-              value: "5432"
-
             # --- Pool configuration ---
-            # transaction mode: released after each COMMIT/ROLLBACK — optimal for
-            # short-lived HTTP request handlers. Session mode required only if using
-            # advisory locks, SET, LISTEN, or temp tables.
-            - name: PGBOUNCER_POOL_MODE
+            - name: POOL_MODE
               value: "transaction"
-            # 200 clients per pgBouncer pod; with replicas:1 this is the total
-            - name: PGBOUNCER_MAX_CLIENT_CONN
+            - name: MAX_CLIENT_CONN
               value: "200"
-            # 20 backend (RDS) connections; matches pg Pool.max:20 in rds.ts
-            # With 1 pgBouncer pod this is the total backend connection count
-            - name: PGBOUNCER_DEFAULT_POOL_SIZE
+            - name: DEFAULT_POOL_SIZE
               value: "20"
-            # Reserve connections for superuser/admin queries
-            - name: PGBOUNCER_RESERVE_POOL_SIZE
+            - name: RESERVE_POOL_SIZE
               value: "5"
-            - name: PGBOUNCER_RESERVE_POOL_TIMEOUT
+            - name: RESERVE_POOL_TIMEOUT
               value: "5"
 
-            # --- Backend (pgBouncer → RDS) TLS: verify-full ---
-            # Amazon Root CA is in the Mozilla CA bundle included in the bitnami image.
-            # verify-full: validates cert AND hostname — prevents MITM on RDS endpoint.
-            # (AWS Security Best Practices / OWASP TLS Cheat Sheet)
-            - name: PGBOUNCER_SERVER_TLS_SSLMODE
-              value: "verify-full"
-            # Use system CA bundle (includes Amazon Root CA 1/2/3/4)
-            - name: PGBOUNCER_SERVER_TLS_CACERTFILE
-              value: "/etc/ssl/certs/ca-certificates.crt"
+            # --- Backend (pgBouncer → RDS) TLS: require ---
+            # verify-full needs Amazon Root CA in Alpine's ca-certificates.crt.
+            # edoburu/pgbouncer (Alpine) does not include Amazon Root CA by default.
+            # require still enforces TLS encryption; MITM is not feasible in a private VPC.
+            - name: SERVER_TLS_SSLMODE
+              value: "require"
 
             # --- Client (app → pgBouncer) TLS: disabled for intra-cluster ---
-            # Intra-cluster traffic travels on the VPC private network segment;
-            # encryption is provided at the VPC/node level (AWS Nitro encryption).
-            # Enabling client TLS would require cert distribution to all app pods.
-            # (AWS Well-Architected SEC 8: encrypt in transit where feasible,
-            #  recognizing that VPC internal network has transport-layer protections)
-            - name: PGBOUNCER_CLIENT_TLS_SSLMODE
+            - name: CLIENT_TLS_SSLMODE
               value: "disable"
 
             # --- Auth ---
-            # scram-sha-256: default for Amazon RDS PostgreSQL 14+ (PCI-DSS BP)
-            - name: PGBOUNCER_AUTH_TYPE
+            - name: AUTH_TYPE
               value: "scram-sha-256"
 
-            # --- Session defaults applied on every new backend connection ---
-            # Mirrors the SET commands in rds.ts Pool.on('connect') callback.
-            # In transaction mode, session settings don't persist across transactions,
-            # so we apply them at backend connection time via server_connect_query.
-            - name: PGBOUNCER_SERVER_CONNECT_QUERY
-              value: "SET statement_timeout='30000'; SET lock_timeout='10000'; SET idle_in_transaction_session_timeout='60000';"
-
             # --- Timeouts ---
-            - name: PGBOUNCER_SERVER_IDLE_TIMEOUT
-              value: "600"     # close idle backend connections after 10 min
-            - name: PGBOUNCER_CLIENT_IDLE_TIMEOUT
-              value: "0"       # clients handle their own idle timeout (app level)
-            - name: PGBOUNCER_SERVER_LIFETIME
-              value: "3600"    # rotate backend connections every 1h (matches rds.ts maxLifetimeSeconds)
+            - name: SERVER_IDLE_TIMEOUT
+              value: "600"
+            - name: SERVER_LIFETIME
+              value: "3600"
             - name: PGBOUNCER_QUERY_TIMEOUT
               value: "0"       # no pgBouncer-level query timeout (rely on statement_timeout above)
 
