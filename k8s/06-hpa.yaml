@@ -15,7 +15,7 @@ spec:
   # 書き込みエンドポイント (POST /api/agents等) はリーダーPodのみ受け付け。
   # 詳細: packages/server/src/cluster/leader-election.ts
   # -----------------------------------------------------------------------
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 3
   metrics:
     - type: Resource
@@ -32,7 +32,7 @@ spec:
           averageUtilization: 80
   behavior:
     scaleDown:
-      # Never scale below 1 replica; wait 5 min before scaling down to avoid flapping.
+      # Never scale below 2 replicas; wait 5 min before scaling down to avoid flapping.
       stabilizationWindowSeconds: 300
       policies:
         - type: Pods
