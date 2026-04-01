@@ -85,6 +85,56 @@ const BRIDGE_DARK = 0x5a4020;
 const BRIDGE_LIGHT = 0x9a7c5a;
 const BRIDGE_ROPE = 0x6b5030;
 
+// ── Arena Color Palette ──────────────────────────────────
+const OCEAN_DEEP = 0x0f2b3e;
+const OCEAN_MID = 0x163d52;
+const OCEAN_LIGHT = 0x1e5068;
+const OCEAN_HIGHLIGHT = 0x2a7090;
+
+const SHALLOW_BASE = 0x2a6a7a;
+const SHALLOW_LIGHT = 0x3a8a9a;
+const SHALLOW_SAND = 0x5a8a6a;
+
+const BEACH_BASE = 0xc4a060;
+const BEACH_LIGHT = 0xd4b470;
+const BEACH_DARK = 0xa08040;
+const BEACH_WET = 0x8a7040;
+const BEACH_SHELL = 0xe0d0b0;
+
+const JUNGLE_BASE = 0x1a4a28;
+const JUNGLE_DARK = 0x0e3318;
+const JUNGLE_LIGHT = 0x2a6a38;
+const JUNGLE_HIGHLIGHT = 0x3a8a48;
+const JUNGLE_SHADOW = 0x0a2210;
+const JUNGLE_VINE = 0x2a5a1a;
+
+const GROUND_BASE = 0x5a7a3a;
+const GROUND_LIGHT = 0x6a8a4a;
+const GROUND_DARK = 0x4a6a2a;
+const GROUND_DIRT = 0x6a5a30;
+
+const ROCK_BASE = 0x6a6a62;
+const ROCK_LIGHT = 0x8a8a80;
+const ROCK_DARK = 0x4a4a44;
+const ROCK_HIGHLIGHT = 0x9a9a90;
+const ROCK_SHADOW = 0x3a3a36;
+const ROCK_MOSS = 0x4a5a3a;
+
+const RUIN_BASE = 0x4a4a42;
+const RUIN_LIGHT = 0x5a5a52;
+const RUIN_DARK = 0x2a2a26;
+const RUIN_MOSS = 0x3a4a2a;
+const RUIN_CRACK = 0x1a1a18;
+
+const CAVE_BASE = 0x1a1a1e;
+const CAVE_LIGHT = 0x2a2a30;
+const CAVE_DAMP = 0x1e2228;
+
+const MANGROVE_BASE = 0x1a3a20;
+const MANGROVE_WATER = 0x1a3a3a;
+const MANGROVE_ROOT = 0x4a3a1a;
+const MANGROVE_DARK = 0x0e2a14;
+
 // ── Hair color palette for agent variety ──────────────────
 const HAIR_PALETTES = [
   0x2a1a0a, 0x6b4020, 0x8a5a30, 0x3a2010, 0xc49a6c,
@@ -2650,36 +2700,619 @@ export class BootScene extends Phaser.Scene {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // ARENA TILE TEXTURES — simple colored squares for now
+  // ARENA TILE TEXTURES — rich procedural pixel art
   // ═══════════════════════════════════════════════════════════
   private generateArenaTileTextures(): void {
-    const tiles: [string, number][] = [
-      ['arena_water',       0x1B3A4B],
-      ['arena_sand',        0xD4A76A],
-      ['arena_open',        0x6B8F4A],
-      ['arena_jungle',      0x2C5A3E],
-      ['arena_high_ground', 0x7A7A72],
-      ['arena_wall',        0x3A3A3A],
-      ['arena_shallow',     0x4A8BAB],
-    ];
+    this.generateArenaOceanTile();
+    this.generateArenaShallowTile();
+    this.generateArenaBeachTile();
+    this.generateArenaJungleTile();
+    this.generateArenaGroundTile();
+    this.generateArenaRockTile();
+    this.generateArenaRuinWallTile();
+    this.generateArenaRuinFloorTile();
+    this.generateArenaMangroveTile();
+    this.generateArenaCaveTile();
+  }
 
-    for (const [key, baseColor] of tiles) {
+  // ── Arena Ocean — deep dangerous water ─────────────────
+  private generateArenaOceanTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_ocean_${v}`;
       if (this.textures.exists(key)) continue;
+      const rng = seeded(10001 + v * 97);
       const g = this.add.graphics();
-      const rng = seeded(baseColor);
 
-      // Fill with subtle per-pixel noise for texture
-      const r0 = (baseColor >> 16) & 0xff;
-      const g0 = (baseColor >> 8) & 0xff;
-      const b0 = baseColor & 0xff;
-
+      // Base: depth gradient — darker in center, lighter at edges
       for (let y = 0; y < T; y++) {
         for (let x = 0; x < T; x++) {
-          const noise = (rng() - 0.5) * 20; // ±10 per channel
-          const r = Math.max(0, Math.min(255, Math.round(r0 + noise)));
-          const gv = Math.max(0, Math.min(255, Math.round(g0 + noise)));
-          const b = Math.max(0, Math.min(255, Math.round(b0 + noise)));
-          px(g, x, y, (r << 16) | (gv << 8) | b);
+          const cx = Math.abs(x - T / 2) / (T / 2);
+          const cy = Math.abs(y - T / 2) / (T / 2);
+          const edgeDist = Math.max(cx, cy);
+          let color = blend(OCEAN_DEEP, OCEAN_MID, edgeDist * 0.5);
+          // Per-pixel noise
+          if (rng() > 0.85) color = lighten(color, 0.04);
+          if (rng() > 0.92) color = darken(color, 0.06);
+          px(g, x, y, color);
+        }
+      }
+
+      // Ripples: sinusoidal horizontal lines every 8 rows, slow wavelength
+      for (let wy = 4; wy < T; wy += 8) {
+        const waveOffset = Math.floor(rng() * 6);
+        for (let wx = 0; wx < T; wx++) {
+          const waveY = wy + Math.round(Math.sin((wx + waveOffset) * 0.5) * 1.0);
+          if (waveY >= 0 && waveY < T) {
+            px(g, wx, waveY, OCEAN_HIGHLIGHT);
+            if (waveY + 1 < T) {
+              px(g, wx, waveY + 1, blend(OCEAN_MID, OCEAN_HIGHLIGHT, 0.25));
+            }
+          }
+        }
+      }
+
+      // Foam: 3-4 white-ish specks
+      const foamCount = 3 + Math.floor(rng() * 2);
+      for (let i = 0; i < foamCount; i++) {
+        const fx = Math.floor(rng() * T);
+        const fy = Math.floor(rng() * T);
+        px(g, fx, fy, 0x6090a0);
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Shallow — lagoon/near shore ──────────────────
+  private generateArenaShallowTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_shallow_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10101 + v * 97);
+      const g = this.add.graphics();
+
+      // Base: SHALLOW_BASE with per-pixel variation + sand showing through
+      for (let y = 0; y < T; y++) {
+        for (let x = 0; x < T; x++) {
+          let color = SHALLOW_BASE;
+          if (rng() > 0.8) color = lighten(color, 0.06);
+          if (rng() > 0.9) color = darken(color, 0.05);
+          // Sand showing through: every 3rd-4th pixel
+          if ((x + y) % 3 === 0 && rng() > 0.5) {
+            color = blend(color, SHALLOW_SAND, 0.3);
+          }
+          px(g, x, y, color);
+        }
+      }
+
+      // Ripples: tighter, every 5 rows
+      for (let wy = 3; wy < T; wy += 5) {
+        const waveOffset = Math.floor(rng() * 4);
+        for (let wx = 0; wx < T; wx++) {
+          const waveY = wy + Math.round(Math.sin((wx + waveOffset) * 0.7) * 0.6);
+          if (waveY >= 0 && waveY < T) {
+            px(g, wx, waveY, SHALLOW_LIGHT);
+          }
+        }
+      }
+
+      // Shimmer: 4-5 bright specks
+      const shimmerCount = 4 + Math.floor(rng() * 2);
+      for (let i = 0; i < shimmerCount; i++) {
+        const sx = Math.floor(rng() * T);
+        const sy = Math.floor(rng() * T);
+        px(g, sx, sy, lighten(SHALLOW_LIGHT, 0.3));
+      }
+
+      // Seabed rocks: 2-3 small dark pixel clusters
+      const rockCount = 2 + Math.floor(rng() * 2);
+      for (let i = 0; i < rockCount; i++) {
+        const rx = Math.floor(rng() * 28) + 2;
+        const ry = Math.floor(rng() * 28) + 2;
+        px(g, rx, ry, darken(SHALLOW_BASE, 0.3));
+        px(g, rx + 1, ry, darken(SHALLOW_BASE, 0.25));
+        if (rng() > 0.5) px(g, rx, ry + 1, darken(SHALLOW_BASE, 0.2));
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Beach — warm tropical sand ───────────────────
+  private generateArenaBeachTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_beach_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10201 + v * 97);
+      const g = this.add.graphics();
+
+      // Base: per-pixel variation between BEACH colors + grain jitter
+      for (let y = 0; y < T; y++) {
+        for (let x = 0; x < T; x++) {
+          const r = rng();
+          let color: number;
+          if (r < 0.5) color = BEACH_BASE;
+          else if (r < 0.8) color = BEACH_LIGHT;
+          else color = BEACH_DARK;
+          // Grain: brightness jitter ±5%
+          const jitter = (rng() - 0.5) * 0.1;
+          color = jitter > 0 ? lighten(color, jitter) : darken(color, -jitter);
+          px(g, x, y, color);
+        }
+      }
+
+      // Shells: 1-2 per tile — bright pixel + adjacent shadow
+      const shellCount = 1 + Math.floor(rng() * 2);
+      for (let i = 0; i < shellCount; i++) {
+        const sx = Math.floor(rng() * 28) + 2;
+        const sy = Math.floor(rng() * 28) + 2;
+        px(g, sx, sy, BEACH_SHELL);
+        px(g, sx + 1, sy, darken(BEACH_SHELL, 0.15));
+      }
+
+      // Pebbles: 2-3 dark brown single pixels
+      const pebbleCount = 2 + Math.floor(rng() * 2);
+      for (let i = 0; i < pebbleCount; i++) {
+        const pbx = Math.floor(rng() * 30) + 1;
+        const pby = Math.floor(rng() * 30) + 1;
+        px(g, pbx, pby, BEACH_WET);
+      }
+
+      // Footprints: occasional 2x1 darker patches
+      if (rng() > 0.4) {
+        const fpx = Math.floor(rng() * 26) + 3;
+        const fpy = Math.floor(rng() * 26) + 3;
+        px(g, fpx, fpy, darken(BEACH_BASE, 0.12));
+        px(g, fpx + 1, fpy, darken(BEACH_BASE, 0.10));
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Jungle — dense tropical canopy ───────────────
+  private generateArenaJungleTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_jungle_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10301 + v * 97);
+      const g = this.add.graphics();
+
+      // Base: fill with JUNGLE_DARK
+      rect(g, 0, 0, T, T, JUNGLE_DARK);
+
+      // Canopy: 6-8 overlapping circle blobs
+      const blobCount = 6 + Math.floor(rng() * 3);
+      for (let b = 0; b < blobCount; b++) {
+        const bcx = Math.floor(rng() * 28) + 2;
+        const bcy = Math.floor(rng() * 28) + 2;
+        const radius = 4 + Math.floor(rng() * 4);
+
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (let dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy <= radius * radius) {
+              const bpx = bcx + dx;
+              const bpy = bcy + dy;
+              if (bpx >= 0 && bpx < T && bpy >= 0 && bpy < T) {
+                let color = JUNGLE_BASE;
+                // Top 2 rows of blob: lighter
+                if (dy <= -radius + 2) color = JUNGLE_LIGHT;
+                // Bottom 2 rows of blob: shadow
+                else if (dy >= radius - 2) color = JUNGLE_SHADOW;
+                px(g, bpx, bpy, color);
+              }
+            }
+          }
+        }
+
+        // 1-2 highlight pixels inside each blob
+        const hlCount = 1 + Math.floor(rng() * 2);
+        for (let h = 0; h < hlCount; h++) {
+          const hx = bcx + Math.floor(rng() * 3) - 1;
+          const hy = bcy + Math.floor(rng() * 3) - 1;
+          if (hx >= 0 && hx < T && hy >= 0 && hy < T) {
+            px(g, hx, hy, JUNGLE_HIGHLIGHT);
+          }
+        }
+      }
+
+      // Vines: 2-3 thin vertical lines (1px wide, 3-5px tall)
+      const vineCount = 2 + Math.floor(rng() * 2);
+      for (let i = 0; i < vineCount; i++) {
+        const vx = Math.floor(rng() * 30) + 1;
+        const vy = Math.floor(rng() * 20) + 2;
+        const vlen = 3 + Math.floor(rng() * 3);
+        for (let j = 0; j < vlen; j++) {
+          if (vy + j < T) {
+            px(g, vx, vy + j, JUNGLE_VINE);
+          }
+        }
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Ground — open clearings ──────────────────────
+  private generateArenaGroundTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_ground_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10401 + v * 97);
+      const g = this.add.graphics();
+
+      // Base: GROUND_BASE with per-pixel variation, center slightly lighter
+      for (let y = 0; y < T; y++) {
+        for (let x = 0; x < T; x++) {
+          const r = rng();
+          let color: number;
+          if (r < 0.55) color = GROUND_BASE;
+          else if (r < 0.8) color = GROUND_LIGHT;
+          else color = GROUND_DARK;
+          // Center slightly lighter (worn path)
+          const cx = Math.abs(x - T / 2) / (T / 2);
+          const cy = Math.abs(y - T / 2) / (T / 2);
+          const centerDist = (cx + cy) / 2;
+          if (centerDist < 0.4) color = lighten(color, 0.06);
+          px(g, x, y, color);
+        }
+      }
+
+      // Grass tufts: clusters of 2-3 darker pixels
+      for (let i = 0; i < 4; i++) {
+        const tx = Math.floor(rng() * 28) + 2;
+        const ty = Math.floor(rng() * 28) + 2;
+        px(g, tx, ty, GROUND_DARK);
+        px(g, tx + 1, ty, darken(GROUND_DARK, 0.08));
+        if (rng() > 0.5) px(g, tx, ty + 1, GROUND_DARK);
+      }
+
+      // Dirt patches: 2-3 patches of GROUND_DIRT
+      const dirtCount = 2 + Math.floor(rng() * 2);
+      for (let i = 0; i < dirtCount; i++) {
+        const dx = Math.floor(rng() * 26) + 3;
+        const dy = Math.floor(rng() * 26) + 3;
+        px(g, dx, dy, GROUND_DIRT);
+        px(g, dx + 1, dy, darken(GROUND_DIRT, 0.1));
+      }
+
+      // Flowers: 1-2 bright pixels with 30% probability
+      if (rng() < 0.3) {
+        const flowerCount = 1 + Math.floor(rng() * 2);
+        const flowerColors = [0xf0e040, 0xe06060, 0x8080e0];
+        for (let i = 0; i < flowerCount; i++) {
+          const fx = Math.floor(rng() * 28) + 2;
+          const fy = Math.floor(rng() * 28) + 2;
+          px(g, fx, fy, flowerColors[Math.floor(rng() * flowerColors.length)]);
+        }
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Rock — elevated rocky terrain ────────────────
+  private generateArenaRockTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_rock_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10501 + v * 97);
+      const g = this.add.graphics();
+
+      // Base: ROCK_BASE with heavy noise (±15%)
+      for (let y = 0; y < T; y++) {
+        for (let x = 0; x < T; x++) {
+          let color = ROCK_BASE;
+          const jitter = (rng() - 0.5) * 0.3;
+          color = jitter > 0 ? lighten(color, jitter) : darken(color, -jitter);
+          // Top 3 rows: lit top edge for elevation illusion
+          if (y < 3) {
+            color = rng() > 0.5 ? ROCK_LIGHT : ROCK_HIGHLIGHT;
+          }
+          // Bottom 3 rows: shadow
+          if (y >= T - 3) {
+            color = rng() > 0.5 ? ROCK_DARK : ROCK_SHADOW;
+          }
+          px(g, x, y, color);
+        }
+      }
+
+      // Cracks: 2-3 dark lines (1px wide, 2-4px long)
+      const crackCount = 2 + Math.floor(rng() * 2);
+      for (let i = 0; i < crackCount; i++) {
+        const cx = Math.floor(rng() * 26) + 3;
+        const cy = Math.floor(rng() * 20) + 5;
+        const clen = 2 + Math.floor(rng() * 3);
+        const vertical = rng() > 0.5;
+        for (let j = 0; j < clen; j++) {
+          const crx = vertical ? cx : cx + j;
+          const cry = vertical ? cy + j : cy;
+          if (crx < T && cry < T) {
+            px(g, crx, cry, ROCK_SHADOW);
+          }
+        }
+      }
+
+      // Moss: 3-4 pixels of ROCK_MOSS
+      const mossCount = 3 + Math.floor(rng() * 2);
+      for (let i = 0; i < mossCount; i++) {
+        const mx = Math.floor(rng() * 30) + 1;
+        const my = Math.floor(rng() * 24) + 4;
+        px(g, mx, my, ROCK_MOSS);
+      }
+
+      // Rubble: occasional dark pixel at bottom
+      if (rng() > 0.4) {
+        const rbx = Math.floor(rng() * 28) + 2;
+        px(g, rbx, T - 1, ROCK_DARK);
+        if (rng() > 0.5) px(g, rbx + 1, T - 1, darken(ROCK_DARK, 0.1));
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Ruin Wall — ancient crumbling stone ──────────
+  private generateArenaRuinWallTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_ruin_wall_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10601 + v * 97);
+      const g = this.add.graphics();
+
+      // Mortar base
+      rect(g, 0, 0, T, T, RUIN_DARK);
+
+      // Brick pattern with irregular sizes (3-5px wide bricks)
+      const brickWidths = [3, 4, 5, 4, 3, 5];
+      const brickH = 4;
+      let by = 0;
+      let row = 0;
+      while (by < T) {
+        let bx = row % 2 === 0 ? 0 : -2; // stagger rows
+        let brickIdx = 0;
+        while (bx < T) {
+          const bw = brickWidths[(brickIdx + row) % brickWidths.length] + Math.floor(rng() * 2);
+          // Check if this brick is "missing"
+          const missing = rng() < 0.08;
+
+          if (!missing) {
+            let brickColor = RUIN_BASE;
+            if (rng() > 0.6) brickColor = lighten(RUIN_BASE, 0.08);
+            if (rng() > 0.85) brickColor = darken(RUIN_BASE, 0.1);
+
+            for (let dy = 0; dy < brickH - 1; dy++) {
+              for (let dx = 0; dx < bw - 1; dx++) {
+                const pxx = bx + dx;
+                const pyy = by + dy;
+                if (pxx >= 0 && pxx < T && pyy >= 0 && pyy < T) {
+                  let c = brickColor;
+                  // Top highlight per brick
+                  if (dy === 0) c = RUIN_LIGHT;
+                  // Bottom shadow
+                  if (dy === brickH - 2) c = darken(brickColor, 0.1);
+                  px(g, pxx, pyy, c);
+                }
+              }
+            }
+          }
+
+          bx += bw + 1; // +1 for mortar
+          brickIdx++;
+        }
+        by += brickH;
+        row++;
+      }
+
+      // Moss: 4-6 pixels in mortar lines
+      const mossCount = 4 + Math.floor(rng() * 3);
+      for (let i = 0; i < mossCount; i++) {
+        const mx = Math.floor(rng() * 30) + 1;
+        const my = Math.floor(rng() * 30) + 1;
+        px(g, mx, my, RUIN_MOSS);
+      }
+
+      // Cracks: 2-3 RUIN_CRACK lines crossing through bricks
+      const crackCount = 2 + Math.floor(rng() * 2);
+      for (let i = 0; i < crackCount; i++) {
+        const cx = Math.floor(rng() * 24) + 4;
+        const cy = Math.floor(rng() * 24) + 4;
+        const clen = 3 + Math.floor(rng() * 3);
+        for (let j = 0; j < clen; j++) {
+          const drift = Math.floor(rng() * 2);
+          const crx = cx + drift;
+          const cry = cy + j;
+          if (crx < T && cry < T) {
+            px(g, crx, cry, RUIN_CRACK);
+          }
+        }
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Ruin Floor — broken stone floor ──────────────
+  private generateArenaRuinFloorTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_ruin_floor_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10701 + v * 97);
+      const g = this.add.graphics();
+
+      // Mortar base (wider gaps than village path)
+      rect(g, 0, 0, T, T, RUIN_DARK);
+
+      // Cobblestones: larger, more irregular than village
+      const stoneW = [6, 7, 8, 9];
+      const stoneH = [5, 6, 7];
+      let cy = 0;
+      let row = 0;
+      while (cy < T) {
+        const sh = stoneH[row % stoneH.length];
+        let cx = row % 2 === 0 ? 0 : -4; // stagger
+        while (cx < T) {
+          const sw = stoneW[Math.floor(rng() * stoneW.length)];
+          // Some stones "missing" (replaced with dirt)
+          const missing = rng() < 0.1;
+          const stoneColor = rng() > 0.5 ? RUIN_BASE : RUIN_LIGHT;
+
+          for (let sy = 0; sy < sh - 2; sy++) {
+            for (let sx = 0; sx < sw - 2; sx++) {
+              const ry = cy + sy;
+              const rx = cx + sx;
+              if (rx >= 0 && rx < T && ry >= 0 && ry < T) {
+                if (missing) {
+                  px(g, rx, ry, GROUND_DIRT);
+                } else {
+                  let c = stoneColor;
+                  if (sy === 0) c = lighten(c, 0.1);
+                  if (sy === sh - 3) c = darken(c, 0.08);
+                  if (sx === 0 && sy > 0) c = darken(c, 0.05);
+                  px(g, rx, ry, c);
+                }
+              }
+            }
+          }
+
+          cx += sw; // wider gap = mortar
+        }
+        cy += sh;
+        row++;
+      }
+
+      // Vegetation growing through cracks: 3-4 green pixels
+      for (let i = 0; i < 3 + Math.floor(rng() * 2); i++) {
+        const vx = Math.floor(rng() * 28) + 2;
+        const vy = Math.floor(rng() * 28) + 2;
+        px(g, vx, vy, JUNGLE_LIGHT);
+        if (rng() > 0.5) px(g, vx + 1, vy, darken(JUNGLE_LIGHT, 0.15));
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Mangrove — swampy jungle with water ──────────
+  private generateArenaMangroveTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_mangrove_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10801 + v * 97);
+      const g = this.add.graphics();
+
+      // Base: very dark underneath, then water
+      rect(g, 0, 0, T, T, MANGROVE_DARK);
+      for (let y = 0; y < T; y++) {
+        for (let x = 0; x < T; x++) {
+          let color = MANGROVE_WATER;
+          if (rng() > 0.85) color = lighten(color, 0.05);
+          if (rng() > 0.9) color = MANGROVE_DARK;
+          px(g, x, y, color);
+        }
+      }
+
+      // Leaf patches: 2-3 smaller blobs (radius 3-4) in MANGROVE_BASE
+      const leafBlobCount = 2 + Math.floor(rng() * 2);
+      for (let b = 0; b < leafBlobCount; b++) {
+        const bcx = Math.floor(rng() * 24) + 4;
+        const bcy = Math.floor(rng() * 24) + 4;
+        const radius = 3 + Math.floor(rng() * 2);
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (let dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy <= radius * radius) {
+              const bpx = bcx + dx;
+              const bpy = bcy + dy;
+              if (bpx >= 0 && bpx < T && bpy >= 0 && bpy < T) {
+                let color = MANGROVE_BASE;
+                if (dy <= -radius + 1) color = lighten(MANGROVE_BASE, 0.1);
+                if (dy >= radius - 1) color = MANGROVE_DARK;
+                px(g, bpx, bpy, color);
+              }
+            }
+          }
+        }
+      }
+
+      // Roots: 3-4 curved lines (1px wide, 4-8px long)
+      const rootCount = 3 + Math.floor(rng() * 2);
+      for (let i = 0; i < rootCount; i++) {
+        const rx = Math.floor(rng() * 24) + 4;
+        const ry = Math.floor(rng() * 20) + 4;
+        const rlen = 4 + Math.floor(rng() * 5);
+        let curX = rx;
+        for (let j = 0; j < rlen; j++) {
+          if (curX >= 0 && curX < T && ry + j >= 0 && ry + j < T) {
+            px(g, curX, ry + j, MANGROVE_ROOT);
+          }
+          // Slight curve
+          if (rng() > 0.6) curX += rng() > 0.5 ? 1 : -1;
+          curX = Math.max(0, Math.min(T - 1, curX));
+        }
+      }
+
+      // Ripples: 1-2 short horizontal highlight lines in water areas
+      const rippleCount = 1 + Math.floor(rng() * 2);
+      for (let i = 0; i < rippleCount; i++) {
+        const rpy = Math.floor(rng() * 28) + 2;
+        const rpx = Math.floor(rng() * 20) + 2;
+        const rplen = 3 + Math.floor(rng() * 4);
+        for (let j = 0; j < rplen; j++) {
+          if (rpx + j < T) {
+            px(g, rpx + j, rpy, lighten(MANGROVE_WATER, 0.12));
+          }
+        }
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
+  }
+
+  // ── Arena Cave — near-black cave interior ──────────────
+  private generateArenaCaveTile(): void {
+    for (let v = 0; v < 3; v++) {
+      const key = `arena_cave_${v}`;
+      if (this.textures.exists(key)) continue;
+      const rng = seeded(10901 + v * 97);
+      const g = this.add.graphics();
+
+      // Base: CAVE_BASE with subtle per-pixel variation
+      for (let y = 0; y < T; y++) {
+        for (let x = 0; x < T; x++) {
+          let color = CAVE_BASE;
+          if (rng() > 0.7) color = CAVE_LIGHT;
+          if (rng() > 0.95) color = darken(CAVE_BASE, 0.1);
+          px(g, x, y, color);
+        }
+      }
+
+      // Damp spots: 3-4 pixels CAVE_DAMP
+      const dampCount = 3 + Math.floor(rng() * 2);
+      for (let i = 0; i < dampCount; i++) {
+        const dx = Math.floor(rng() * 28) + 2;
+        const dy = Math.floor(rng() * 28) + 2;
+        px(g, dx, dy, CAVE_DAMP);
+        if (rng() > 0.5) px(g, dx + 1, dy, CAVE_DAMP);
+      }
+
+      // Stalactite shadows: 1-2 lighter vertical streaks from top
+      const stalCount = 1 + Math.floor(rng() * 2);
+      for (let i = 0; i < stalCount; i++) {
+        const sx = Math.floor(rng() * 28) + 2;
+        const slen = 3 + Math.floor(rng() * 4);
+        for (let j = 0; j < slen; j++) {
+          px(g, sx, j, CAVE_LIGHT);
+          // Fade as it goes down
+          if (j > 1) px(g, sx, j, blend(CAVE_LIGHT, CAVE_BASE, j / slen));
         }
       }
 
