@@ -30,6 +30,7 @@ export const SocialDetailPanel: React.FC<DetailProps & { onClose: () => void }> 
         background: 'rgba(15, 15, 35, 0.96)',
         borderLeft: `1px solid ${COLORS.border}`,
         overflowY: 'auto',
+        overscrollBehavior: 'contain',
         animation: 'socialPanelSlide 0.3s ease',
         zIndex: 10,
       }}
