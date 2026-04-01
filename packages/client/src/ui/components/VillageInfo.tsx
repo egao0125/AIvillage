@@ -13,7 +13,7 @@ export const VillageInfo: React.FC = () => {
   const totalCount = passedRules.length + activeInstitutions.length;
 
   return (
-    <div style={{ position: 'absolute', top: 48, left: 120, zIndex: 20, pointerEvents: 'auto' }}>
+    <div style={{ position: 'absolute', top: 48, left: 120, zIndex: 20, pointerEvents: 'auto', background: COLORS.bg, borderRadius: 6 }}>
       {/* Toggle pill */}
       <button
         onClick={() => setOpen(prev => !prev)}
@@ -40,6 +40,7 @@ export const VillageInfo: React.FC = () => {
             width: 320,
             maxHeight: 400,
             overflowY: 'auto',
+            overscrollBehavior: 'contain',
             background: COLORS.bg,
             border: `1px solid ${COLORS.border}`,
             borderRadius: 6,

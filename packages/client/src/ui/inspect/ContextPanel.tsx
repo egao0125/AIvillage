@@ -102,6 +102,7 @@ export const ContextPanel: React.FC = () => {
       borderLeft: `1px solid ${COLORS.border}`,
       padding: 16,
       overflowY: 'auto',
+    overscrollBehavior: 'contain',
       boxSizing: 'border-box',
       display: 'flex',
       flexDirection: 'column',
@@ -119,17 +120,36 @@ export const ContextPanel: React.FC = () => {
           }}
           onClick={handleBack}
         >
-          {'\u2190'} Watch
+          {'\u2190'}
         </div>
 
         {/* Breadcrumbs */}
         {inspectTarget && breadcrumbs.length > 0 && (
           <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
-            <span>Watch</span>
+            <span
+              onClick={() => { setBreadcrumbs([]); prevTargetRef.current = null; gameStore.backToWatch(); }}
+              style={{ cursor: 'pointer' }}
+              onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.color = COLORS.textDim; }}
+            >
+              Watch
+            </span>
             {breadcrumbs.map((bc, i) => (
               <React.Fragment key={i}>
                 <span style={{ margin: '0 2px' }}>&gt;</span>
-                <span>{targetLabel(bc, agentsMap as Map<string, { config: { name: string } }>)}</span>
+                <span
+                  onClick={() => {
+                    const newBreadcrumbs = breadcrumbs.slice(0, i);
+                    setBreadcrumbs(newBreadcrumbs);
+                    prevTargetRef.current = bc;
+                    gameStore.inspect(bc);
+                  }}
+                  style={{ cursor: 'pointer' }}
+                  onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}
+                  onMouseLeave={e => { (e.target as HTMLElement).style.color = COLORS.textDim; }}
+                >
+                  {targetLabel(bc, agentsMap as Map<string, { config: { name: string } }>)}
+                </span>
               </React.Fragment>
             ))}
             <span style={{ margin: '0 2px' }}>&gt;</span>

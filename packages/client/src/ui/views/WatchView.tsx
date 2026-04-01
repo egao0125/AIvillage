@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { COLORS, FONTS } from '../styles';
 import { SpectatorChat } from '../components/SpectatorChat';
 import { NarrativeBar } from '../components/NarrativeBar';
-import { AgentRoster } from '../components/AgentRoster';
-import { VillageInfo } from '../components/VillageInfo';
+import { OverlayPanel } from '../components/OverlayPanel';
 import { CharacterPage } from '../components/CharacterPage';
 import { RecapOverlay } from '../components/RecapOverlay';
 import { DevPanel } from '../components/DevPanel';
@@ -30,8 +29,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
       {/* Overlay buttons on canvas — below TopNav bar */}
-      <AgentRoster onAddAgent={onAddAgent} />
-      <VillageInfo />
+      <OverlayPanel onAddAgent={onAddAgent} />
 
       {/* Event Feed panel — right side */}
       <div style={{
@@ -71,7 +69,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
             ✕
           </button>
         </div>
-        <div style={{ height: 'calc(100% - 42px)', overflowY: 'auto' }}>
+        <div style={{ height: 'calc(100% - 42px)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
           <EventFeed />
         </div>
       </div>
