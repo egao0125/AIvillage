@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useBoard, useInstitutions } from '../../core/hooks';
+import { gameStore } from '../../core/GameStore';
 import { COLORS, FONTS } from '../styles';
 
 export const VillageInfo: React.FC = () => {
@@ -95,13 +96,18 @@ export const VillageInfo: React.FC = () => {
               {activeInstitutions.map(inst => (
                 <div
                   key={inst.id}
+                  onClick={() => { gameStore.inspectInstitution(inst.id); setOpen(false); }}
                   style={{
                     padding: '8px 14px',
                     borderBottom: `1px solid ${COLORS.border}`,
                     fontFamily: FONTS.body,
                     fontSize: '11px',
                     color: COLORS.textDim,
+                    cursor: 'pointer',
+                    transition: 'background 0.15s',
                   }}
+                  onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >
                   <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{inst.name}</span>
                   <span style={{ marginLeft: 6, color: COLORS.textDim }}>({inst.type})</span>
