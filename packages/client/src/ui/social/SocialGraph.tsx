@@ -135,47 +135,20 @@ const SocialGraphInner: React.FC = () => {
       {/* Inject keyframes */}
       <style>{SOCIAL_KEYFRAMES}</style>
 
-      {/* Top bar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 16px',
-          borderBottom: `1px solid ${COLORS.border}`,
-          flexShrink: 0,
-          background: COLORS.bgLight,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <h1 style={{
-            fontFamily: FONTS.pixel,
-            fontSize: 12,
-            color: COLORS.textAccent,
-            margin: 0,
-            letterSpacing: 1,
-          }}>
-            SOCIAL DYNAMICS
-          </h1>
-          <span style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 11 }}>
-            {nodes.length} agents · {edges.length} connections
-          </span>
-        </div>
-      </div>
-
-      {/* Controls */}
-      <SocialControls
-        layout={layout}
-        onLayoutChange={setLayout}
-        filter={filter}
-        onFilterChange={setFilter}
-      />
-
-      {/* Canvas area */}
+      {/* Canvas area — fills entire space */}
       <div
         ref={containerRef}
         style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
       >
+        {/* Controls — floating under TopNav */}
+        <div style={{ position: 'absolute', top: 48, left: 8, zIndex: 5 }}>
+          <SocialControls
+            layout={layout}
+            onLayoutChange={setLayout}
+            filter={filter}
+            onFilterChange={setFilter}
+          />
+        </div>
         {dimensions.width > 0 && (
           <SocialCanvas
             nodes={displayNodes}
