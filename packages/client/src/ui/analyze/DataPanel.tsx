@@ -19,6 +19,7 @@ export const DataPanel: React.FC = () => (
       width: 420,
       height: '100%',
       overflowY: 'auto',
+      overscrollBehavior: 'contain',
       background: COLORS.bg,
       borderLeft: `1px solid ${COLORS.border}`,
       padding: 16,
