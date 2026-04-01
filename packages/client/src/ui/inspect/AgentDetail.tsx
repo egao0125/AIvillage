@@ -1,6 +1,7 @@
 import React from 'react';
 import { COLORS, FONTS } from '../styles';
-import { useAgentsMap, useAgentEvents, useBoard } from '../../core/hooks';
+import { useAgentsMap, useAgentEvents, useBoard, useInstitutions } from '../../core/hooks';
+import { gameStore } from '../../core/GameStore';
 import { ProfileHeader } from './ProfileHeader';
 import { CharacterArc } from './CharacterArc';
 import { Relationships } from './Relationships';
@@ -15,6 +16,7 @@ export const AgentDetail: React.FC<{ agentId: string }> = ({ agentId }) => {
   const agent = agentsMap.get(agentId);
   const events = useAgentEvents(agentId);
   const board = useBoard();
+  const institutions = useInstitutions();
 
   if (!agent) {
     return <div style={{ fontFamily: FONTS.body, fontSize: 13, color: COLORS.textDim, padding: 16 }}>Agent not found</div>;
@@ -35,6 +37,62 @@ export const AgentDetail: React.FC<{ agentId: string }> = ({ agentId }) => {
       <Divider />
       <Relationships agent={agent} />
       <Divider />
+
+      {/* Institutions */}
+      {(() => {
+        const agentInstitutions = institutions.filter(
+          i => !i.dissolved && i.members.some(m => m.agentId === agentId)
+        );
+        if (agentInstitutions.length === 0) return null;
+        return (
+          <div style={{ padding: '8px 0' }}>
+            <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.textDim, letterSpacing: 2, marginBottom: 8 }}>
+              INSTITUTIONS
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {agentInstitutions.map(inst => {
+                const member = inst.members.find(m => m.agentId === agentId);
+                return (
+                  <div
+                    key={inst.id}
+                    onClick={() => gameStore.inspectInstitution(inst.id)}
+                    style={{
+                      backgroundColor: COLORS.bgCard,
+                      borderRadius: 4,
+                      padding: '8px 10px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      transition: 'background 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = COLORS.bgCard; }}
+                  >
+                    <div>
+                      <span style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.text }}>{inst.name}</span>
+                      <span style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, marginLeft: 8 }}>({inst.type})</span>
+                    </div>
+                    {member && (
+                      <span style={{
+                        fontFamily: FONTS.pixel,
+                        fontSize: 6,
+                        color: COLORS.accent,
+                        padding: '2px 6px',
+                        border: `1px solid ${COLORS.accent}`,
+                        borderRadius: 3,
+                      }}>
+                        {member.role}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <Divider />
+          </div>
+        );
+      })()}
 
       {/* Events */}
       <div style={{ padding: '8px 0' }}>
