@@ -20,6 +20,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const right = position === 'stacked' ? width : 0;
 
   return (
+    // Outer wrapper: solid background, no scroll — never reveals canvas
     <div
       style={{
         position: 'absolute',
@@ -27,16 +28,17 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         right,
         bottom: 0,
         width,
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        overscrollBehavior: 'contain',
         background: COLORS.bg,
         borderLeft: `1px solid ${COLORS.border}`,
         zIndex,
         pointerEvents: 'auto',
         boxSizing: 'border-box',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
+      {/* Sticky header */}
       {(onClose || header) && (
         <div
           style={{
@@ -45,10 +47,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            position: 'sticky',
-            top: 0,
             background: COLORS.bg,
-            zIndex: 1,
+            flexShrink: 0,
           }}
         >
           <div>{header}</div>
@@ -71,7 +71,19 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           )}
         </div>
       )}
-      {children}
+
+      {/* Inner scrollable area — rubber-band stays inside the solid outer wrapper */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          overscrollBehavior: 'contain',
+          minHeight: 0,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 };
