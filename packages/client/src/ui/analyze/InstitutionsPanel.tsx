@@ -111,13 +111,13 @@ export const InstitutionsPanel: React.FC = () => {
                 </span>
               </div>
 
-              {/* Rules */}
+              {/* Rules — truncated */}
               {inst.rules.length > 0 && (
                 <div style={{ marginTop: 4 }}>
                   <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.textDim, marginBottom: 2 }}>
-                    Rules:
+                    Rules ({inst.rules.length}):
                   </div>
-                  {inst.rules.map((rule, i) => (
+                  {inst.rules.slice(0, 2).map((rule, i) => (
                     <div
                       key={i}
                       style={{
@@ -126,11 +126,19 @@ export const InstitutionsPanel: React.FC = () => {
                         color: COLORS.text,
                         paddingLeft: 8,
                         lineHeight: 1.4,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
                       }}
                     >
                       - {rule}
                     </div>
                   ))}
+                  {inst.rules.length > 2 && (
+                    <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, paddingLeft: 8 }}>
+                      +{inst.rules.length - 2} more
+                    </div>
+                  )}
                 </div>
               )}
             </div>

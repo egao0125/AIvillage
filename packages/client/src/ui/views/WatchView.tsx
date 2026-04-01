@@ -3,12 +3,10 @@ import { COLORS, FONTS } from '../styles';
 import { SpectatorChat } from '../components/SpectatorChat';
 import { NarrativeBar } from '../components/NarrativeBar';
 import { OverlayPanel } from '../components/OverlayPanel';
-import { CharacterPage } from '../components/CharacterPage';
 import { RecapOverlay } from '../components/RecapOverlay';
 import { DevPanel } from '../components/DevPanel';
-import { SocialView } from '../social/SocialView';
 import { EventFeed } from '../feed/EventFeed';
-import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../../core/hooks';
+import { useActiveRecap } from '../../core/hooks';
 
 const EVENT_FEED_WIDTH = 380;
 const DEV_TOOLS_ENABLED = true;
@@ -20,9 +18,7 @@ interface WatchViewProps {
 export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
 
-  const characterPageAgentId = useCharacterPageAgentId();
   const activeRecap = useActiveRecap();
-  const socialViewOpen = useSocialViewOpen();
 
   const feedWidth = eventFeedOpen ? EVENT_FEED_WIDTH : 0;
 
@@ -111,9 +107,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
       <SpectatorChat />
 
       {/* Overlays — kept as-is */}
-      {characterPageAgentId && <CharacterPage />}
       {activeRecap && <RecapOverlay />}
-      {socialViewOpen && <SocialView />}
       {DEV_TOOLS_ENABLED && <DevPanel />}
     </div>
   );

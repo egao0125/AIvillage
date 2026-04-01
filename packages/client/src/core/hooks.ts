@@ -145,13 +145,6 @@ export function useStorylines(): Storyline[] {
   );
 }
 
-export function useCharacterPageAgentId(): string | null {
-  return useSyncExternalStore(
-    (cb) => gameStore.subscribe(cb),
-    () => gameStore.getState().characterPageAgentId
-  );
-}
-
 export function useActiveRecap(): Recap | null {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
@@ -163,13 +156,6 @@ export function useWeeklySummary(): string | null {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().weeklySummary
-  );
-}
-
-export function useSocialViewOpen(): boolean {
-  return useSyncExternalStore(
-    (cb) => gameStore.subscribe(cb),
-    () => gameStore.getState().socialViewOpen
   );
 }
 
