@@ -1,11 +1,14 @@
 export const ARENA_TILE_TYPES = {
-  WATER: 0,
-  SAND: 1,
-  OPEN: 2,
-  JUNGLE: 3,
-  HIGH_GROUND: 4,
-  WALL: 5,
-  SHALLOW_WATER: 6,
+  WATER: 0,      // deep ocean
+  SAND: 1,       // beach
+  OPEN: 2,       // open ground/clearing
+  JUNGLE: 3,     // dense jungle canopy
+  HIGH_GROUND: 4, // rocky elevated terrain
+  WALL: 5,       // ruin walls
+  SHALLOW_WATER: 6, // lagoon/shore
+  RUIN_FLOOR: 7, // broken stone floor inside ruins
+  MANGROVE: 8,   // swampy jungle-water mix
+  CAVE: 9,       // dark cave interior
 } as const;
 
 export const ARENA_MAP_WIDTH = 96;
@@ -113,8 +116,8 @@ function generateArenaTilemap(): number[][] {
     { x: 46, y: 32, w: 6, h: 6, terrain: 'open' },
     { x: 56, y: 16, w: 8, h: 6, terrain: 'open' },
     { x: 64, y: 54, w: 12, h: 10, terrain: 'water' },
-    { x: 38, y: 66, w: 14, h: 10, terrain: 'bush' },
-    { x: 16, y: 58, w: 10, h: 8, terrain: 'bush' },
+    { x: 38, y: 66, w: 14, h: 10, terrain: 'mangrove' },
+    { x: 16, y: 58, w: 10, h: 8, terrain: 'cave' },
   ];
 
   for (const area of areas) {
@@ -125,6 +128,8 @@ function generateArenaTilemap(): number[][] {
       case 'water': tileType = 6; break;
       case 'wall': tileType = 2; break;
       case 'open': tileType = 2; break;
+      case 'mangrove': tileType = 8; break;
+      case 'cave': tileType = 9; break;
       default: tileType = 2;
     }
     for (let y = area.y; y < area.y + area.h; y++) {
@@ -148,7 +153,7 @@ function generateArenaTilemap(): number[][] {
         if (isEdge || isInteriorWall) {
           map[y][x] = 5;
         } else {
-          map[y][x] = 2;
+          map[y][x] = 7; // RUIN_FLOOR
         }
       }
     }
@@ -162,7 +167,7 @@ function generateArenaTilemap(): number[][] {
   ];
   for (const [dx, dy] of ruinsDoors) {
     if (dx >= 0 && dx < W && dy >= 0 && dy < H) {
-      map[dy][dx] = 2;
+      map[dy][dx] = 7; // RUIN_FLOOR doorways
     }
   }
 

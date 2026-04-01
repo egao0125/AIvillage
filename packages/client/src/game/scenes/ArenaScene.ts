@@ -15,15 +15,40 @@ import type { Agent, GameTime } from '@ai-village/shared';
 
 const TILE_SIZE = 32;
 
-const ARENA_TILE_TEXTURE_MAP: Record<number, string> = {
-  [ARENA_TILE_TYPES.WATER]: 'arena_water',
-  [ARENA_TILE_TYPES.SAND]: 'arena_sand',
-  [ARENA_TILE_TYPES.OPEN]: 'arena_open',
+// Base texture names (without variant suffix)
+const ARENA_TILE_BASE_TEXTURES: Record<number, string> = {
+  [ARENA_TILE_TYPES.WATER]: 'arena_ocean',
+  [ARENA_TILE_TYPES.SAND]: 'arena_beach',
+  [ARENA_TILE_TYPES.OPEN]: 'arena_ground',
   [ARENA_TILE_TYPES.JUNGLE]: 'arena_jungle',
-  [ARENA_TILE_TYPES.HIGH_GROUND]: 'arena_high_ground',
-  [ARENA_TILE_TYPES.WALL]: 'arena_wall',
+  [ARENA_TILE_TYPES.HIGH_GROUND]: 'arena_rock',
+  [ARENA_TILE_TYPES.WALL]: 'arena_ruin_wall',
   [ARENA_TILE_TYPES.SHALLOW_WATER]: 'arena_shallow',
+  [ARENA_TILE_TYPES.RUIN_FLOOR]: 'arena_ruin_floor',
+  [ARENA_TILE_TYPES.MANGROVE]: 'arena_mangrove',
+  [ARENA_TILE_TYPES.CAVE]: 'arena_cave',
 };
+
+function getArenaTileTexture(tileType: number, x: number, y: number): string {
+  const base = ARENA_TILE_BASE_TEXTURES[tileType] ?? 'arena_ocean';
+  const variant = (x * 7 + y * 13) % 3;
+  return `${base}_${variant}`;
+}
+
+// ── Color helpers (inlined for ArenaScene use) ──────────────
+function darken(c: number, amt: number): number {
+  const r = Math.max(0, Math.round(((c >> 16) & 0xff) * (1 - amt)));
+  const g = Math.max(0, Math.round(((c >> 8) & 0xff) * (1 - amt)));
+  const b = Math.max(0, Math.round((c & 0xff) * (1 - amt)));
+  return (r << 16) | (g << 8) | b;
+}
+
+function lighten(c: number, amt: number): number {
+  const r = Math.min(255, Math.round(((c >> 16) & 0xff) + (255 - ((c >> 16) & 0xff)) * amt));
+  const g = Math.min(255, Math.round(((c >> 8) & 0xff) + (255 - ((c >> 8) & 0xff)) * amt));
+  const b = Math.min(255, Math.round((c & 0xff) + (255 - (c & 0xff)) * amt));
+  return (r << 16) | (g << 8) | b;
+}
 
 export class ArenaScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSprite> = new Map();
@@ -40,6 +65,8 @@ export class ArenaScene extends Phaser.Scene {
 
   create(): void {
     this.drawTileMap();
+    this.drawEdgeTransitions();
+    this.drawDecorations();
     this.drawLocationLabels();
 
     this.conversationGraphics = this.add.graphics();
@@ -120,7 +147,7 @@ export class ArenaScene extends Phaser.Scene {
     for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
       for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
         const tileType = ARENA_TILE_MAP[y]?.[x] ?? ARENA_TILE_TYPES.WATER;
-        const texKey = ARENA_TILE_TEXTURE_MAP[tileType] ?? 'arena_water';
+        const texKey = getArenaTileTexture(tileType, x, y);
 
         this.add
           .image(
@@ -131,6 +158,159 @@ export class ArenaScene extends Phaser.Scene {
           .setDepth(0);
       }
     }
+  }
+
+  // ── Edge transitions ───────────────────────────────────────
+  private drawEdgeTransitions(): void {
+    const g = this.add.graphics();
+    g.setDepth(1); // just above tiles
+
+    // Define edge colors for each terrain type
+    const terrainEdgeColor: Record<number, number> = {
+      [ARENA_TILE_TYPES.WATER]: 0x0f2b3e,
+      [ARENA_TILE_TYPES.SAND]: 0xc4a060,
+      [ARENA_TILE_TYPES.OPEN]: 0x5a7a3a,
+      [ARENA_TILE_TYPES.JUNGLE]: 0x1a4a28,
+      [ARENA_TILE_TYPES.HIGH_GROUND]: 0x6a6a62,
+      [ARENA_TILE_TYPES.WALL]: 0x4a4a42,
+      [ARENA_TILE_TYPES.SHALLOW_WATER]: 0x2a6a7a,
+      [ARENA_TILE_TYPES.RUIN_FLOOR]: 0x4a4a42,
+      [ARENA_TILE_TYPES.MANGROVE]: 0x1a3a20,
+      [ARENA_TILE_TYPES.CAVE]: 0x1a1a1e,
+    };
+
+    for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
+      for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
+        const current = ARENA_TILE_MAP[y]?.[x] ?? 0;
+
+        // Check each neighbor
+        const south = y + 1 < ARENA_MAP_HEIGHT ? (ARENA_TILE_MAP[y + 1]?.[x] ?? 0) : current;
+        const north = y - 1 >= 0 ? (ARENA_TILE_MAP[y - 1]?.[x] ?? 0) : current;
+        const east = x + 1 < ARENA_MAP_WIDTH ? (ARENA_TILE_MAP[y]?.[x + 1] ?? 0) : current;
+        const west = x - 1 >= 0 ? (ARENA_TILE_MAP[y]?.[x - 1] ?? 0) : current;
+
+        const baseX = x * TILE_SIZE;
+        const baseY = y * TILE_SIZE;
+
+        // Blend 3 pixel rows/cols at terrain boundaries
+        if (south !== current) {
+          const c = terrainEdgeColor[south] ?? 0x0f2b3e;
+          for (let row = 0; row < 3; row++) {
+            const alpha = (row + 1) / 4; // 0.25, 0.5, 0.75
+            g.fillStyle(c, alpha);
+            g.fillRect(baseX, baseY + TILE_SIZE - 3 + row, TILE_SIZE, 1);
+          }
+        }
+        if (north !== current) {
+          const c = terrainEdgeColor[north] ?? 0x0f2b3e;
+          for (let row = 0; row < 3; row++) {
+            const alpha = (3 - row) / 4;
+            g.fillStyle(c, alpha);
+            g.fillRect(baseX, baseY + row, TILE_SIZE, 1);
+          }
+        }
+        if (east !== current) {
+          const c = terrainEdgeColor[east] ?? 0x0f2b3e;
+          for (let col = 0; col < 3; col++) {
+            const alpha = (col + 1) / 4;
+            g.fillStyle(c, alpha);
+            g.fillRect(baseX + TILE_SIZE - 3 + col, baseY, 1, TILE_SIZE);
+          }
+        }
+        if (west !== current) {
+          const c = terrainEdgeColor[west] ?? 0x0f2b3e;
+          for (let col = 0; col < 3; col++) {
+            const alpha = (3 - col) / 4;
+            g.fillStyle(c, alpha);
+            g.fillRect(baseX + col, baseY, 1, TILE_SIZE);
+          }
+        }
+      }
+    }
+  }
+
+  // ── Decorative objects ────────────────────────────────────
+  private drawDecorations(): void {
+    // Seeded PRNG for deterministic decoration placement
+    let seed = 12345;
+    const rand = () => { seed = (seed * 16807) % 2147483647; return (seed & 0x7fffffff) / 0x7fffffff; };
+
+    for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
+      for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
+        const tile = ARENA_TILE_MAP[y]?.[x] ?? 0;
+        const wx = x * TILE_SIZE;
+        const wy = y * TILE_SIZE;
+
+        // Palm trees on beach tiles (10% chance)
+        if (tile === ARENA_TILE_TYPES.SAND && rand() < 0.10) {
+          this.drawPalmTree(wx + TILE_SIZE / 2, wy + TILE_SIZE / 2);
+        }
+
+        // Rocks on high ground (15% chance)
+        if (tile === ARENA_TILE_TYPES.HIGH_GROUND && rand() < 0.15) {
+          this.drawRockCluster(wx + Math.floor(rand() * 20) + 6, wy + Math.floor(rand() * 20) + 6);
+        }
+
+        // Broken columns in ruin floor (8% chance)
+        if (tile === ARENA_TILE_TYPES.RUIN_FLOOR && rand() < 0.08) {
+          this.drawBrokenColumn(wx + Math.floor(rand() * 18) + 7, wy + Math.floor(rand() * 18) + 7);
+        }
+      }
+    }
+  }
+
+  private drawPalmTree(x: number, y: number): void {
+    const g = this.add.graphics();
+    // Curved trunk (brown arc)
+    g.fillStyle(0x6a4a2a);
+    for (let i = 0; i < 16; i++) {
+      const tx = x + Math.round(Math.sin(i * 0.15) * 3);
+      g.fillRect(tx, y - i, 2, 1);
+    }
+    // Fronds (4 green fan shapes at top)
+    const frondColor = 0x2a6a28;
+    const topY = y - 16;
+    for (let f = 0; f < 4; f++) {
+      const angle = (f / 4) * Math.PI * 2 - Math.PI / 2;
+      for (let i = 0; i < 8; i++) {
+        const fx = x + Math.round(Math.cos(angle) * i * 1.2);
+        const fy = topY + Math.round(Math.sin(angle) * i * 0.8);
+        g.fillStyle(i < 4 ? frondColor : darken(frondColor, 0.15));
+        g.fillRect(fx, fy, 2, 1);
+        if (i > 2) g.fillRect(fx, fy + 1, 1, 1); // thicker at tips
+      }
+    }
+    g.setDepth(3);
+  }
+
+  private drawRockCluster(x: number, y: number): void {
+    const g = this.add.graphics();
+    // 2-3 small gray irregular shapes
+    const colors = [0x7a7a72, 0x6a6a62, 0x5a5a52];
+    for (let i = 0; i < 3; i++) {
+      const rx = x + i * 3 - 3;
+      const ry = y + (i % 2) * 2;
+      const c = colors[i % colors.length];
+      g.fillStyle(c);
+      g.fillRect(rx, ry, 3 + (i % 2), 2 + (i % 2));
+      g.fillStyle(lighten(c, 0.2));
+      g.fillRect(rx, ry, 3 + (i % 2), 1); // top highlight
+    }
+    g.setDepth(3);
+  }
+
+  private drawBrokenColumn(x: number, y: number): void {
+    const g = this.add.graphics();
+    // Short gray rectangle with irregular top
+    g.fillStyle(0x6a6a60);
+    g.fillRect(x, y, 4, 8);
+    g.fillStyle(0x8a8a80); // highlight
+    g.fillRect(x, y, 4, 1);
+    // Irregular top (broken off)
+    g.fillStyle(0x5a5a52);
+    g.fillRect(x + 1, y - 1, 2, 1);
+    g.fillRect(x + 3, y, 1, 1); // chip
+    g.setDepth(3);
   }
 
   // ── Location labels ─────────────────────────────────────────
