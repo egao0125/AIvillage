@@ -14,6 +14,7 @@
     "@ai-village/shared": "workspace:*",
     "@aws-sdk/client-cognito-identity-provider": "^3.540.0",
     "@socket.io/redis-streams-adapter": "^0.2.2",
+    "@supabase/supabase-js": "^2.101.1",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
