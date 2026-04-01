@@ -4,7 +4,7 @@ import { EventBus } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import type { MapConfig } from '@ai-village/shared';
-import { getAreaEntrance } from '../map/village.js';
+import { getAreaEntrance, setActiveMap } from '../map/map-provider.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
 import { World } from './world.js';
 import { EventBroadcaster } from './events.js';
@@ -71,6 +71,7 @@ export class SimulationEngine {
   setMapConfig(mapId: string): void {
     this.mapConfig = getMapConfig(mapId);
     this.cachedGameRules = null; // invalidate cache
+    setActiveMap(mapId); // switch map provider for pathfinding/areas
     console.log(`[Engine] Map set to: ${this.mapConfig.name} (${this.mapConfig.id})`);
   }
 

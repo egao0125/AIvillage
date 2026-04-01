@@ -232,7 +232,13 @@ export class BootScene extends Phaser.Scene {
     this.generateFurnitureTextures();
     this.generateAgentTextures();
     this.generateUITextures();
-    this.scene.start('VillageScene');
+    this.generateArenaTileTextures();
+
+    // Decide which scene to start based on active map
+    const targetScene = (this.registry.get('activeMap') === 'battle_royale')
+      ? 'ArenaScene'
+      : 'VillageScene';
+    this.scene.start(targetScene);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -2641,5 +2647,44 @@ export class BootScene extends Phaser.Scene {
     g.strokeEllipse(16, 16, 28, 14);
     g.generateTexture('ui_selection_ring', 32, 32);
     g.destroy();
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ARENA TILE TEXTURES — simple colored squares for now
+  // ═══════════════════════════════════════════════════════════
+  private generateArenaTileTextures(): void {
+    const tiles: [string, number][] = [
+      ['arena_water',       0x1B3A4B],
+      ['arena_sand',        0xD4A76A],
+      ['arena_open',        0x6B8F4A],
+      ['arena_jungle',      0x2C5A3E],
+      ['arena_high_ground', 0x7A7A72],
+      ['arena_wall',        0x3A3A3A],
+      ['arena_shallow',     0x4A8BAB],
+    ];
+
+    for (const [key, baseColor] of tiles) {
+      if (this.textures.exists(key)) continue;
+      const g = this.add.graphics();
+      const rng = seeded(baseColor);
+
+      // Fill with subtle per-pixel noise for texture
+      const r0 = (baseColor >> 16) & 0xff;
+      const g0 = (baseColor >> 8) & 0xff;
+      const b0 = baseColor & 0xff;
+
+      for (let y = 0; y < T; y++) {
+        for (let x = 0; x < T; x++) {
+          const noise = (rng() - 0.5) * 20; // ±10 per channel
+          const r = Math.max(0, Math.min(255, Math.round(r0 + noise)));
+          const gv = Math.max(0, Math.min(255, Math.round(g0 + noise)));
+          const b = Math.max(0, Math.min(255, Math.round(b0 + noise)));
+          px(g, x, y, (r << 16) | (gv << 8) | b);
+        }
+      }
+
+      g.generateTexture(key, T, T);
+      g.destroy();
+    }
   }
 }

@@ -493,5 +493,10 @@ Relationships: ${mentalModels}`;
     res.json({ ok: true, mapId });
   });
 
+  router.get('/api/config/map', (_req, res) => {
+    const config = engine.getMapConfig();
+    res.json({ mapId: config.id });
+  });
+
   return router;
 }

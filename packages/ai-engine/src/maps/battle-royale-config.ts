@@ -8,7 +8,7 @@ You have a body. It can be tagged, trapped, and eliminated. Elimination is perma
 Each turn you pick ONE action from a menu. The menu shows everything you can do right now. Your action menu IS your reality.
 
 ARENA:
-The arena is a hostile terrain with forest, ruins, and open ground. Cover exists but is limited. The zone shrinks every 5 minutes — if you're outside the safe zone, you take 10 damage per minute.
+The arena is a 96x96 island surrounded by water. Locations: Summit (mountain peak, exposed), Watchtower (north, high ground), Cliffs (northwest, isolated), Ruins (east, only hard cover), Shipwreck (west beach), Bamboo Grove (dense cover), Clearing (central, open), Spring (between Summit and Clearing), Ravine (narrow pass), Lagoon (southeast, slow movement), Mangroves (south coast, stealth), Tidal Caves (southwest, dead end). The zone shrinks every 5 minutes — if you're outside the safe zone, you take 10 damage per minute.
 
 ELIMINATION:
 Tag another player within 3 tiles to eliminate them. They are gone permanently. Their items drop where they fell.
@@ -58,8 +58,11 @@ export const BATTLE_ROYALE_CONFIG: MapConfig = {
   id: 'battle_royale',
   name: 'Battle Royale',
   description: 'Tag or be tagged. Agents hunt, hide, form alliances, and betray. The arena shrinks. Last one standing wins.',
-  mapSize: { width: 512, height: 512 },
-  spawnAreas: ['north_edge', 'south_edge', 'east_edge', 'west_edge', 'ruins', 'forest_clearing'],
+  mapSize: { width: 96, height: 96 },
+  spawnAreas: [
+    'summit', 'watchtower', 'cliffs', 'ruins', 'shipwreck', 'bamboo_grove',
+    'clearing', 'spring', 'ravine', 'lagoon', 'mangroves', 'tidal_caves',
+  ],
   systems: {
     hunger: false,
     gathering: false,
