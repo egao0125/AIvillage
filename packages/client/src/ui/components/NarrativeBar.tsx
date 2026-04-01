@@ -88,6 +88,7 @@ export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500, 
       style={inline ? {
         width: '100%',
         zIndex: 15,
+        pointerEvents: 'auto',
       } : {
         position: 'absolute',
         bottom: 0,
@@ -95,6 +96,7 @@ export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500, 
         width: `calc(100% - ${sidebarWidth}px)`,
         transition: 'width 0.25s ease',
         zIndex: 15,
+        pointerEvents: 'auto',
       }}
     >
       {/* Expanded history */}

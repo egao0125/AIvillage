@@ -24,7 +24,7 @@ export const WatchView: React.FC = () => {
   const feedWidth = eventFeedOpen ? EVENT_FEED_WIDTH : 0;
 
   return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
       {/* Overlay buttons on canvas — below TopNav bar */}
       <AgentRoster />
       <VillageInfo />
@@ -37,6 +37,7 @@ export const WatchView: React.FC = () => {
         bottom: 0,
         width: feedWidth,
         zIndex: 10,
+        pointerEvents: 'auto',
         transition: 'width 0.25s ease',
         overflow: 'hidden',
         background: COLORS.bg,
@@ -79,6 +80,7 @@ export const WatchView: React.FC = () => {
             position: 'absolute',
             right: 0,
             top: 70,
+            pointerEvents: 'auto',
             width: 24,
             height: 48,
             background: COLORS.bg,

@@ -12,7 +12,7 @@ export const AgentRoster: React.FC = () => {
   const aliveAgents = agents.filter(a => a.alive !== false);
 
   return (
-    <div style={{ position: 'absolute', top: 48, left: 8, zIndex: 20 }}>
+    <div style={{ position: 'absolute', top: 48, left: 8, zIndex: 20, pointerEvents: 'auto' }}>
       {/* Toggle pill */}
       <button
         onClick={() => setOpen(prev => !prev)}
