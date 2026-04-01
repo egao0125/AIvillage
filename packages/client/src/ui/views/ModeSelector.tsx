@@ -3,11 +3,10 @@ import { COLORS, FONTS } from '../styles';
 import { gameStore } from '../../core/GameStore';
 import { useActiveMode } from '../../core/hooks';
 
-type Mode = 'watch' | 'inspect' | 'analyze';
+type Mode = 'watch' | 'analyze';
 
 const MODES: { key: Mode; icon: string; label: string }[] = [
   { key: 'watch', icon: '👁', label: 'Watch' },
-  { key: 'inspect', icon: '🔍', label: 'Inspect' },
   { key: 'analyze', icon: '📊', label: 'Analyze' },
 ];
 

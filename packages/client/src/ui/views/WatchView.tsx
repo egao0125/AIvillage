@@ -6,10 +6,13 @@ import { OverlayPanel } from '../components/OverlayPanel';
 import { RecapOverlay } from '../components/RecapOverlay';
 import { DevPanel } from '../components/DevPanel';
 import { EventFeed } from '../feed/EventFeed';
-import { useActiveRecap } from '../../core/hooks';
+import { SidePanel } from '../shared/SidePanel';
+import { ContextPanel } from '../inspect/ContextPanel';
+import { useActiveRecap, useInspectTarget } from '../../core/hooks';
+import { gameStore } from '../../core/GameStore';
 
-const EVENT_FEED_WIDTH = 380;
 const DEV_TOOLS_ENABLED = true;
+const PANEL_WIDTH = 420;
 
 interface WatchViewProps {
   onAddAgent?: () => void;
@@ -17,61 +20,56 @@ interface WatchViewProps {
 
 export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
-
   const activeRecap = useActiveRecap();
+  const inspectTarget = useInspectTarget();
 
-  const feedWidth = eventFeedOpen ? EVENT_FEED_WIDTH : 0;
+  const sidebarWidth = inspectTarget ? PANEL_WIDTH : eventFeedOpen ? PANEL_WIDTH : 0;
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
       {/* Overlay buttons on canvas — below TopNav bar */}
       <OverlayPanel onAddAgent={onAddAgent} />
 
-      {/* Event Feed panel — right side */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        right: 0,
-        bottom: 0,
-        width: feedWidth,
-        zIndex: 10,
-        pointerEvents: 'auto',
-        transition: 'width 0.25s ease',
-        overflow: 'hidden',
-        background: COLORS.bg,
-        borderLeft: eventFeedOpen ? `1px solid ${COLORS.border}` : 'none',
-      }}>
-        <div style={{
-          padding: '10px 14px',
-          borderBottom: `1px solid ${COLORS.border}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-          <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
-            EVENT FEED
-          </span>
-          <button
-            onClick={() => setEventFeedOpen(false)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: COLORS.textDim,
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontFamily: FONTS.body,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-        <div style={{ height: 'calc(100% - 42px)', overflowY: 'auto', overscrollBehavior: 'contain' }}>
+      {/* Primary: Event Feed panel */}
+      {eventFeedOpen && (
+        <SidePanel position="primary" width={PANEL_WIDTH}>
+          <div style={{
+            padding: '10px 14px',
+            borderBottom: `1px solid ${COLORS.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
+            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
+              EVENT FEED
+            </span>
+            <button
+              onClick={() => setEventFeedOpen(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: COLORS.textDim,
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontFamily: FONTS.body,
+              }}
+            >
+              ✕
+            </button>
+          </div>
           <EventFeed />
-        </div>
-      </div>
+        </SidePanel>
+      )}
+
+      {/* Stacked: Detail panel (ContextPanel) */}
+      {inspectTarget && (
+        <SidePanel position="stacked" width={PANEL_WIDTH} onClose={() => gameStore.closeDetail()}>
+          <ContextPanel />
+        </SidePanel>
+      )}
 
       {/* Event Feed toggle when closed */}
-      {!eventFeedOpen && (
+      {!eventFeedOpen && !inspectTarget && (
         <button
           onClick={() => setEventFeedOpen(true)}
           style={{
@@ -101,7 +99,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
       )}
 
       {/* Narrative bar — bottom overlay, avoids feed panel */}
-      <NarrativeBar sidebarWidth={feedWidth} />
+      <NarrativeBar sidebarWidth={sidebarWidth} />
 
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat />

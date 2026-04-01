@@ -135,7 +135,7 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                     selected={selectedAgent?.id === agent.id}
                     onClick={() => {
                       selectAgent(agent.id);
-                      gameStore.inspectAgent(agent.id);
+                      gameStore.openAgentDetail(agent.id);
                       setOpen(false);
                     }}
                   />
@@ -188,7 +188,7 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                     {activeInstitutions.map(inst => (
                       <div
                         key={inst.id}
-                        onClick={() => { gameStore.inspectInstitution(inst.id); setOpen(false); }}
+                        onClick={() => { gameStore.openDetail({ type: 'institution', id: inst.id }); setOpen(false); }}
                         style={{
                           padding: '8px 14px',
                           borderBottom: `1px solid ${COLORS.border}`,

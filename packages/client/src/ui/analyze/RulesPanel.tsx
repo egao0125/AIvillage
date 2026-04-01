@@ -72,7 +72,7 @@ export const RulesPanel: React.FC = () => {
                       color: COLORS.accent,
                       cursor: 'pointer',
                     }}
-                    onClick={() => gameStore.inspectAgent(rule.authorId)}
+                    onClick={() => gameStore.openAgentDetail(rule.authorId)}
                   >
                     {agentName(rule.authorId)}
                   </span>

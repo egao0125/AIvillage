@@ -50,7 +50,7 @@ interface GameState {
   weeklySummary: string | null;
   villageMemory: VillageMemoryEntry[];
   actionLog: Map<string, ActionLogEntry[]>;
-  activeMode: 'watch' | 'inspect' | 'analyze';
+  activeMode: 'watch' | 'analyze';
   inspectTarget: InspectTarget | null;
 }
 
@@ -561,58 +561,39 @@ class GameStore {
 
   // --- View Mode ---
 
-  setMode(mode: 'watch' | 'inspect' | 'analyze'): void {
-    this.state = { ...this.state, activeMode: mode };
+  setMode(mode: 'watch' | 'analyze'): void {
+    this.state = { ...this.state, activeMode: mode, inspectTarget: null };
     this.notify();
   }
 
-  inspectAgent(agentId: string): void {
-    this.state = {
-      ...this.state,
-      activeMode: 'inspect',
-      inspectTarget: { type: 'agent', id: agentId },
-    };
+  openAgentDetail(agentId: string): void {
+    this.state = { ...this.state, inspectTarget: { type: 'agent', id: agentId } };
     this.notify();
   }
 
-  inspect(target: InspectTarget): void {
-    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: target };
+  openDetail(target: InspectTarget): void {
+    this.state = { ...this.state, inspectTarget: target };
+    this.notify();
+  }
+
+  closeDetail(): void {
+    this.state = { ...this.state, inspectTarget: null };
     this.notify();
   }
 
   /** Drill-down navigation from within the ContextPanel — builds breadcrumbs */
-  drillToAgent(agentId: string): void {
+  drillToAgentDetail(agentId: string): void {
     this.state = { ...this.state, inspectTarget: { type: 'agent', id: agentId, drillDown: true } };
     this.notify();
   }
 
-  drillToRelationship(agentId: string, secondaryId: string): void {
+  drillToRelationshipDetail(agentId: string, secondaryId: string): void {
     this.state = { ...this.state, inspectTarget: { type: 'relationship', id: agentId, secondaryId, drillDown: true } };
     this.notify();
   }
 
-  drillToInstitution(institutionId: string): void {
+  drillToInstitutionDetail(institutionId: string): void {
     this.state = { ...this.state, inspectTarget: { type: 'institution', id: institutionId, drillDown: true } };
-    this.notify();
-  }
-
-  inspectRelationship(agentId: string, secondaryId: string): void {
-    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: { type: 'relationship', id: agentId, secondaryId } };
-    this.notify();
-  }
-
-  inspectInstitution(institutionId: string): void {
-    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: { type: 'institution', id: institutionId } };
-    this.notify();
-  }
-
-  inspectLocation(locationId: string): void {
-    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: { type: 'location', id: locationId } };
-    this.notify();
-  }
-
-  backToWatch(): void {
-    this.state = { ...this.state, activeMode: 'watch', inspectTarget: null };
     this.notify();
   }
 

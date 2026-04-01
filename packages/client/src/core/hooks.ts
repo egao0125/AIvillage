@@ -204,7 +204,7 @@ export function useInspectTarget(): InspectTarget | null {
   );
 }
 
-export function useActiveMode(): 'watch' | 'inspect' | 'analyze' {
+export function useActiveMode(): 'watch' | 'analyze' {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().activeMode

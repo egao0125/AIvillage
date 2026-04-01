@@ -83,7 +83,7 @@ export const AgentRoster: React.FC<AgentRosterProps> = ({ onAddAgent }) => {
               selected={selectedAgent?.id === agent.id}
               onClick={() => {
                 selectAgent(agent.id);
-                gameStore.inspectAgent(agent.id);
+                gameStore.openAgentDetail(agent.id);
                 setOpen(false);
               }}
             />
