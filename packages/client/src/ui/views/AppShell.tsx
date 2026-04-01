@@ -119,7 +119,7 @@ export const AppShell: React.FC = () => {
         style={{
           width: '100%',
           height: '100%',
-          display: activeMode === 'watch' ? 'block' : 'none',
+          visibility: activeMode === 'watch' ? 'visible' : 'hidden',
         }}
       />
       {activeMode === 'watch' && <WatchView />}

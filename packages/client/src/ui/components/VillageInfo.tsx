@@ -12,7 +12,7 @@ export const VillageInfo: React.FC = () => {
   const totalCount = passedRules.length + activeInstitutions.length;
 
   return (
-    <div style={{ position: 'absolute', top: 48, left: 120, zIndex: 20 }}>
+    <div style={{ position: 'absolute', top: 48, left: 120, zIndex: 20, pointerEvents: 'auto' }}>
       {/* Toggle pill */}
       <button
         onClick={() => setOpen(prev => !prev)}
