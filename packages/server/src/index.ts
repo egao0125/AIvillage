@@ -94,8 +94,9 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       // unsafe-inline is required for Tailwind CSS utility classes in inline styles.
       // TODO: Replace with nonce-based CSP once a nonce middleware is in place (OWASP CSP Cheat Sheet)
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", 'data:', 'https:'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
       connectSrc: ["'self'", ...wssOrigins],
       frameAncestors: ["'none'"],
       // Upgrade HTTP to HTTPS automatically in production (HSTS layer 2)
