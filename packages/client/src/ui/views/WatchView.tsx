@@ -1,6 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
-import Phaser from 'phaser';
-import { createGameConfig } from '../../game/config';
+import React, { useState } from 'react';
 import { COLORS, FONTS } from '../styles';
 import { SetupPage } from '../components/SetupPage';
 import { SpectatorChat } from '../components/SpectatorChat';
@@ -12,55 +10,23 @@ import { RecapOverlay } from '../components/RecapOverlay';
 import { DevPanel } from '../components/DevPanel';
 import { SocialView } from '../social/SocialView';
 import { EventFeed } from '../feed/EventFeed';
-import { connectSocket } from '../../network/socket';
 import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../../core/hooks';
 
 const EVENT_FEED_WIDTH = 380;
 const DEV_TOOLS_ENABLED = true;
 
 export const WatchView: React.FC = () => {
-  const [entered, setEntered] = useState(false);
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
   const [showSetup, setShowSetup] = useState(false);
-  const gameContainerRef = useRef<HTMLDivElement>(null);
-  const gameRef = useRef<Phaser.Game | null>(null);
-
-  const handleEnter = () => {
-    connectSocket();
-    setEntered(true);
-  };
-
-  useEffect(() => {
-    if (entered && gameContainerRef.current && !gameRef.current) {
-      const config = createGameConfig('game-container');
-      gameRef.current = new Phaser.Game(config);
-    }
-
-    return () => {
-      gameRef.current?.destroy(true);
-      gameRef.current = null;
-    };
-  }, [entered]);
 
   const characterPageAgentId = useCharacterPageAgentId();
   const activeRecap = useActiveRecap();
   const socialViewOpen = useSocialViewOpen();
 
-  if (!entered) {
-    return <SetupPage onEnter={handleEnter} />;
-  }
-
   const feedWidth = eventFeedOpen ? EVENT_FEED_WIDTH : 0;
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
-      {/* Canvas fills everything behind the panels */}
-      <div
-        id="game-container"
-        ref={gameContainerRef}
-        style={{ width: '100%', height: '100%' }}
-      />
-
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
       {/* Overlay buttons on canvas — below TopNav bar */}
       <AgentRoster />
       <VillageInfo />
