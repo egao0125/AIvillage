@@ -55,7 +55,7 @@ export const AgentDetail: React.FC<{ agentId: string }> = ({ agentId }) => {
                 return (
                   <div
                     key={inst.id}
-                    onClick={() => gameStore.inspectInstitution(inst.id)}
+                    onClick={() => gameStore.drillToInstitution(inst.id)}
                     style={{
                       backgroundColor: COLORS.bgCard,
                       borderRadius: 4,

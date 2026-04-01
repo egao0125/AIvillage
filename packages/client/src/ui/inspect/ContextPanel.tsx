@@ -41,10 +41,13 @@ export const ContextPanel: React.FC = () => {
       return;
     }
 
-    // Only push if this is a genuinely new target (not from back navigation)
     const prev = prevTargetRef.current;
-    if (prev && (prev.id !== inspectTarget.id || prev.type !== inspectTarget.type || prev.secondaryId !== inspectTarget.secondaryId)) {
+    if (inspectTarget.drillDown && prev) {
+      // Drill-down from within the panel — push to breadcrumbs
       setBreadcrumbs((bc) => [...bc, prev]);
+    } else if (!inspectTarget.drillDown) {
+      // Fresh selection from canvas/roster — reset breadcrumbs
+      setBreadcrumbs([]);
     }
     prevTargetRef.current = inspectTarget;
   }, [inspectTarget]);

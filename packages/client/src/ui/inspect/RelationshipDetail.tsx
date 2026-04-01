@@ -66,7 +66,7 @@ const AvatarName: React.FC<{ agent: Agent }> = ({ agent }) => {
       </div>
       <div
         style={{ fontFamily: FONTS.pixel, fontSize: 11, color: COLORS.accent, cursor: 'pointer' }}
-        onClick={() => gameStore.inspectAgent(agent.id)}
+        onClick={() => gameStore.drillToAgent(agent.id)}
       >
         {agent.config.name}
       </div>

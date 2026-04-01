@@ -61,7 +61,7 @@ export const InstitutionDetail: React.FC<{ institutionId: string }> = ({ institu
           <span style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>Founded by: </span>
           <span
             style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.accent, cursor: 'pointer' }}
-            onClick={() => gameStore.inspectAgent(founder.id)}
+            onClick={() => gameStore.drillToAgent(founder.id)}
           >
             {founder.config.name}
           </span>
@@ -127,7 +127,7 @@ export const InstitutionDetail: React.FC<{ institutionId: string }> = ({ institu
                 </div>
                 <span
                   style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.accent, cursor: 'pointer', flex: 1 }}
-                  onClick={() => gameStore.inspectAgent(member.agentId)}
+                  onClick={() => gameStore.drillToAgent(member.agentId)}
                 >
                   {name}
                 </span>
