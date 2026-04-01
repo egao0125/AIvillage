@@ -6,6 +6,9 @@ const ARENA_MAP_URL = '/tilesets/arena-map.tmj';
 const TILESET_GROUND_URL = '/tilesets/Tileset_Ground.png';
 const TILESET_SAND_URL = '/tilesets/Tileset_Sand.png';
 const TILESET_ROAD_URL = '/tilesets/Tileset_Road.png';
+const ATLAS_TREES_URL = '/tilesets/Atlas_Trees_Bushes.png';
+const ATLAS_ROCKS_URL = '/tilesets/Atlas_Rocks.png';
+const TILESET_SHADOW_URL = '/tilesets/Tileset_Shadow.png';
 
 const T = 32; // tile size
 
@@ -246,6 +249,9 @@ export class BootScene extends Phaser.Scene {
       this.load.image('Tileset_Ground', TILESET_GROUND_URL);
       this.load.image('Tileset_Sand', TILESET_SAND_URL);
       this.load.image('Tileset_Road', TILESET_ROAD_URL);
+      this.load.image('Atlas_Trees_Bushes', ATLAS_TREES_URL);
+      this.load.image('Atlas_Rocks', ATLAS_ROCKS_URL);
+      this.load.image('Tileset_Shadow', TILESET_SHADOW_URL);
       this.load.on('complete', () => {
         console.log('[BootScene] Arena tilemap + tilesets loaded');
       });
