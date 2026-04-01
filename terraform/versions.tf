@@ -41,6 +41,6 @@ terraform {
     region         = "us-east-1"
     encrypt        = true
     dynamodb_table = "ai-village-terraform-locks-us1"
-    profile        = "ai-village"
+    # profile omitted: local dev uses AWS_PROFILE env var; CI uses OIDC env var credentials
   }
 }
