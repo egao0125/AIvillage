@@ -80,7 +80,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => 
         <div
           style={{
             position: 'absolute',
-            right: 0,
+            left: 0,
             top: '100%',
             marginTop: 4,
             zIndex: 50,

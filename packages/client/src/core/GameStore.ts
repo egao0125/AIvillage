@@ -602,6 +602,26 @@ class GameStore {
     this.notify();
   }
 
+  inspect(target: InspectTarget): void {
+    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: target };
+    this.notify();
+  }
+
+  inspectRelationship(agentId: string, secondaryId: string): void {
+    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: { type: 'relationship', id: agentId, secondaryId } };
+    this.notify();
+  }
+
+  inspectInstitution(institutionId: string): void {
+    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: { type: 'institution', id: institutionId } };
+    this.notify();
+  }
+
+  inspectLocation(locationId: string): void {
+    this.state = { ...this.state, activeMode: 'inspect', inspectTarget: { type: 'location', id: locationId } };
+    this.notify();
+  }
+
   backToWatch(): void {
     this.state = { ...this.state, activeMode: 'watch', inspectTarget: null };
     this.notify();
