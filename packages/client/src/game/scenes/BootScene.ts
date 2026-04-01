@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 
-// Fan-tasy Tileset spritesheet URLs (Vite resolves to hashed asset paths)
-import tilesetGroundUrl from '../../assets/tilesets/fan-tasy-premium/Art/Ground Tilesets/Tileset_Ground.png';
-import tilesetSandUrl from '../../assets/tilesets/fan-tasy-premium/Art/Water and Sand/Tileset_Sand.png';
-import tilesetRoadUrl from '../../assets/tilesets/fan-tasy-premium/Art/Ground Tilesets/Tileset_Road.png';
+// Fan-tasy Tileset spritesheet URLs — served from public/ directory.
+// Using absolute paths (not Vite imports) to avoid hashing/LFS issues in Docker builds.
+const tilesetGroundUrl = '/tilesets/Tileset_Ground.png';
+const tilesetSandUrl = '/tilesets/Tileset_Sand.png';
+const tilesetRoadUrl = '/tilesets/Tileset_Road.png';
 
 const T = 32; // tile size
 
@@ -232,11 +233,23 @@ export class BootScene extends Phaser.Scene {
   }
 
   preload(): void {
+    const activeMap = this.registry.get('activeMap');
+    console.log('[BootScene] preload — activeMap:', activeMap);
+
     // Load Fan-tasy Tileset spritesheets for arena map (16x16 tiles)
-    if (this.registry.get('activeMap') === 'battle_royale') {
+    if (activeMap === 'battle_royale') {
+      this.load.on('loaderror', (file: { key: string; url: string }) => {
+        console.error('[BootScene] Failed to load asset:', file.key, file.url);
+      });
       this.load.spritesheet('ts_ground', tilesetGroundUrl, { frameWidth: 16, frameHeight: 16 });
       this.load.spritesheet('ts_sand', tilesetSandUrl, { frameWidth: 16, frameHeight: 16 });
       this.load.spritesheet('ts_road', tilesetRoadUrl, { frameWidth: 16, frameHeight: 16 });
+      this.load.on('complete', () => {
+        console.log('[BootScene] All spritesheets loaded —',
+          'ts_ground:', this.textures.exists('ts_ground'),
+          'ts_sand:', this.textures.exists('ts_sand'),
+          'ts_road:', this.textures.exists('ts_road'));
+      });
     }
   }
 
