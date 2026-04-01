@@ -9,28 +9,7 @@ import { WatchView } from './WatchView';
 import { SetupPage } from '../components/SetupPage';
 import { MapSelectPage } from '../components/MapSelectPage';
 import { AgentCreator } from '../components/AgentCreator';
-import { InspectView } from './InspectView';
 import { AnalyzeView } from './AnalyzeView';
-import { COLORS, FONTS } from '../styles';
-
-const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
-  <div
-    style={{
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: COLORS.bg,
-      color: COLORS.textDim,
-      fontFamily: FONTS.pixel,
-      fontSize: '10px',
-      letterSpacing: 1,
-    }}
-  >
-    {mode.toUpperCase()} MODE — COMING SOON
-  </div>
-);
 
 export const AppShell: React.FC = () => {
   const [selectedMap, setSelectedMap] = useState<string | null>(() => sessionStorage.getItem('ai-village-map'));
@@ -121,11 +100,10 @@ export const AppShell: React.FC = () => {
         style={{
           width: '100%',
           height: '100%',
-          visibility: activeMode === 'watch' || activeMode === 'inspect' ? 'visible' : 'hidden',
+          visibility: 'visible',
         }}
       />
       {activeMode === 'watch' && <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />}
-      {activeMode === 'inspect' && <InspectView />}
       {activeMode === 'analyze' && <AnalyzeView />}
       <TopNav
         onChangeMap={handleChangeMap}

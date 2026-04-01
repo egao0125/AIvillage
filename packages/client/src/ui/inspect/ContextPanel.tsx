@@ -58,10 +58,10 @@ export const ContextPanel: React.FC = () => {
       const previous = newBreadcrumbs.pop()!;
       setBreadcrumbs(newBreadcrumbs);
       prevTargetRef.current = previous;
-      gameStore.inspect(previous);
+      gameStore.openDetail(previous);
     } else {
       prevTargetRef.current = null;
-      gameStore.backToWatch();
+      gameStore.closeDetail();
     }
   };
 
@@ -96,16 +96,10 @@ export const ContextPanel: React.FC = () => {
 
   return (
     <div style={{
-      width: 420,
-      height: '100%',
-      backgroundColor: COLORS.bg,
-      borderLeft: `1px solid ${COLORS.border}`,
       padding: 16,
-      overflowY: 'auto',
-    overscrollBehavior: 'contain',
-      boxSizing: 'border-box',
       display: 'flex',
       flexDirection: 'column',
+      minHeight: 0,
     }}>
       {/* Header */}
       <div style={{ marginBottom: 12, flexShrink: 0 }}>
@@ -127,7 +121,7 @@ export const ContextPanel: React.FC = () => {
         {inspectTarget && breadcrumbs.length > 0 && (
           <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
             <span
-              onClick={() => { setBreadcrumbs([]); prevTargetRef.current = null; gameStore.backToWatch(); }}
+              onClick={() => { setBreadcrumbs([]); prevTargetRef.current = null; gameStore.closeDetail(); }}
               style={{ cursor: 'pointer' }}
               onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}
               onMouseLeave={e => { (e.target as HTMLElement).style.color = COLORS.textDim; }}
@@ -142,7 +136,7 @@ export const ContextPanel: React.FC = () => {
                     const newBreadcrumbs = breadcrumbs.slice(0, i);
                     setBreadcrumbs(newBreadcrumbs);
                     prevTargetRef.current = bc;
-                    gameStore.inspect(bc);
+                    gameStore.openDetail(bc);
                   }}
                   style={{ cursor: 'pointer' }}
                   onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}

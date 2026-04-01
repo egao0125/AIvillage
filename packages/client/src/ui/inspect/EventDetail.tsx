@@ -49,7 +49,7 @@ export const EventDetail: React.FC<{ eventId: string }> = ({ eventId }) => {
         {event.author && (
           <div
             style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.accent, cursor: 'pointer', marginBottom: 6 }}
-            onClick={() => gameStore.drillToAgent(event.author!.id)}
+            onClick={() => gameStore.drillToAgentDetail(event.author!.id)}
           >
             {event.author.name}
           </div>
@@ -83,7 +83,7 @@ export const EventDetail: React.FC<{ eventId: string }> = ({ eventId }) => {
                     padding: '3px 8px',
                     borderRadius: 3,
                   }}
-                  onClick={() => gameStore.drillToAgent(aid)}
+                  onClick={() => gameStore.drillToAgentDetail(aid)}
                 >
                   <div style={{
                     width: 18,
@@ -119,7 +119,7 @@ export const EventDetail: React.FC<{ eventId: string }> = ({ eventId }) => {
               <div key={msg.id} style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.text }}>
                 <span
                   style={{ color: hexToString(nameToColor(msg.agentName)), cursor: 'pointer', fontWeight: 'bold' }}
-                  onClick={() => gameStore.drillToAgent(msg.agentId)}
+                  onClick={() => gameStore.drillToAgentDetail(msg.agentId)}
                 >
                   {msg.agentName}:
                 </span>{' '}

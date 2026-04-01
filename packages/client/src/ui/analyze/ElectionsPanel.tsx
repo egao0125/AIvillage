@@ -92,7 +92,7 @@ export const ElectionsPanel: React.FC = () => {
                     >
                       <span
                         style={clickableName}
-                        onClick={() => gameStore.inspectAgent(cId)}
+                        onClick={() => gameStore.openAgentDetail(cId)}
                       >
                         {agentName(cId)}
                       </span>
@@ -133,7 +133,7 @@ export const ElectionsPanel: React.FC = () => {
                     <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.textDim }}>Winner: </span>
                     <span
                       style={clickableName}
-                      onClick={() => gameStore.inspectAgent(el.winner!)}
+                      onClick={() => gameStore.openAgentDetail(el.winner!)}
                     >
                       {agentName(el.winner)}
                     </span>

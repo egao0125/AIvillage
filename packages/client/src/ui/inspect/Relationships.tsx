@@ -56,7 +56,7 @@ export const Relationships: React.FC<{ agent: Agent }> = ({ agent }) => {
                   {/* Name - clickable */}
                   <div
                     style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.accent, cursor: 'pointer' }}
-                    onClick={() => gameStore.drillToAgent(model.targetId)}
+                    onClick={() => gameStore.drillToAgentDetail(model.targetId)}
                   >
                     {targetName}
                   </div>

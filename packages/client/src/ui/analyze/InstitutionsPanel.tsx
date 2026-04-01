@@ -40,7 +40,7 @@ export const InstitutionsPanel: React.FC = () => {
           {institutions.map((inst) => (
             <div
               key={inst.id}
-              onClick={() => gameStore.inspectInstitution(inst.id)}
+              onClick={() => gameStore.openDetail({ type: 'institution', id: inst.id })}
               style={{
                 background: COLORS.bgCard,
                 border: `1px solid ${COLORS.border}`,
@@ -94,7 +94,7 @@ export const InstitutionsPanel: React.FC = () => {
                   style={clickableName}
                   onClick={(e) => {
                     e.stopPropagation();
-                    gameStore.inspectAgent(inst.founderId);
+                    gameStore.openAgentDetail(inst.founderId);
                   }}
                 >
                   {agentName(inst.founderId)}

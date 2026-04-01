@@ -97,7 +97,7 @@ export const VillageInfo: React.FC = () => {
               {activeInstitutions.map(inst => (
                 <div
                   key={inst.id}
-                  onClick={() => { gameStore.inspectInstitution(inst.id); setOpen(false); }}
+                  onClick={() => { gameStore.openDetail({ type: 'institution', id: inst.id }); setOpen(false); }}
                   style={{
                     padding: '8px 14px',
                     borderBottom: `1px solid ${COLORS.border}`,

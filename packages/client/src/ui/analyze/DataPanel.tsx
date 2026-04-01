@@ -14,18 +14,7 @@ const divider: React.CSSProperties = {
 };
 
 export const DataPanel: React.FC = () => (
-  <div
-    style={{
-      width: 420,
-      height: '100%',
-      overflowY: 'auto',
-      overscrollBehavior: 'contain',
-      background: COLORS.bg,
-      borderLeft: `1px solid ${COLORS.border}`,
-      padding: 16,
-      boxSizing: 'border-box',
-    }}
-  >
+  <div style={{ padding: 16 }}>
     <VillageStatus />
     <div style={divider} />
     <VillageHistory />
