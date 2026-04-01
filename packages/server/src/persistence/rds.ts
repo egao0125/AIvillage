@@ -93,7 +93,7 @@ export class RdsPersistence {
     });
   }
 
-  async saveWorldState(world: World, expectedVersion?: number): Promise<number> {
+  async saveWorldState(world: World, mapId: string, expectedVersion?: number): Promise<number> {
     const data: WorldStateData = {
       time: world.time,
       weather: world.weather,
@@ -125,9 +125,9 @@ export class RdsPersistence {
         const result = await client.query<{ version: number }>(
           `UPDATE world_state
            SET data = $1, version = version + 1, updated_at = NOW()
-           WHERE id = 'current' AND version = $2
+           WHERE id = $2 AND version = $3
            RETURNING version`,
-          [JSON.stringify(data), expectedVersion],
+          [JSON.stringify(data), mapId, expectedVersion],
         );
         if (result.rowCount === 0) {
           throw new VersionConflictError(
@@ -143,13 +143,13 @@ export class RdsPersistence {
       try {
         const result = await this.pool.query<{ version: number }>(
           `INSERT INTO world_state (id, data, version, updated_at)
-           VALUES ('current', $1, 1, NOW())
+           VALUES ($1, $2, 1, NOW())
            ON CONFLICT (id) DO UPDATE
              SET data = EXCLUDED.data,
                  version = world_state.version + 1,
                  updated_at = NOW()
            RETURNING version`,
-          [JSON.stringify(data)],
+          [mapId, JSON.stringify(data)],
         );
         return result.rows[0].version;
       } catch (err) {
@@ -159,23 +159,25 @@ export class RdsPersistence {
     }
   }
 
-  async saveAgents(agents: Map<string, Agent>): Promise<void> {
+  async saveAgents(agents: Map<string, Agent>, mapId: string): Promise<void> {
     if (agents.size === 0) return;
 
     const ids: string[] = [];
     const datas: string[] = [];
+    const mapIds: string[] = [];
 
     for (const agent of agents.values()) {
       ids.push(agent.id);
       datas.push(JSON.stringify(agent));
+      mapIds.push(mapId);
     }
 
     try {
       await this.pool.query(
-        `INSERT INTO agents (id, data, updated_at)
-         SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
-         ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-        [ids, datas],
+        `INSERT INTO agents (id, data, map_id, updated_at)
+         SELECT unnest($1::uuid[]), unnest($2::jsonb[]), unnest($3::text[]), NOW()
+         ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, map_id = EXCLUDED.map_id, updated_at = EXCLUDED.updated_at`,
+        [ids, datas, mapIds],
       );
     } catch (err) {
       console.error('[RDS] saveAgents failed:', (err as Error).message);
@@ -186,11 +188,13 @@ export class RdsPersistence {
   async saveAgentControllers(
     controllers: Map<string, AgentController>,
     apiKeys?: Map<string, { apiKey: string; model: string }>,
+    mapId?: string,
   ): Promise<void> {
     if (controllers.size === 0) return;
 
     const agentIds: string[] = [];
     const datas: string[] = [];
+    const mapIds: string[] = [];
 
     for (const [agentId, ctrl] of controllers.entries()) {
       const keyData = apiKeys?.get(agentId);
@@ -209,14 +213,15 @@ export class RdsPersistence {
       };
       agentIds.push(agentId);
       datas.push(JSON.stringify(ctrlData));
+      mapIds.push(mapId ?? 'village');
     }
 
     try {
       await this.pool.query(
-        `INSERT INTO agent_controllers (agent_id, data, updated_at)
-         SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
-         ON CONFLICT (agent_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-        [agentIds, datas],
+        `INSERT INTO agent_controllers (agent_id, data, map_id, updated_at)
+         SELECT unnest($1::uuid[]), unnest($2::jsonb[]), unnest($3::text[]), NOW()
+         ON CONFLICT (agent_id) DO UPDATE SET data = EXCLUDED.data, map_id = EXCLUDED.map_id, updated_at = EXCLUDED.updated_at`,
+        [agentIds, datas, mapIds],
       );
     } catch (err) {
       console.error('[RDS] saveAgentControllers failed:', (err as Error).message);
@@ -252,6 +257,7 @@ export class RdsPersistence {
     world: World,
     controllers: Map<string, AgentController>,
     apiKeys?: Map<string, { apiKey: string; model: string }>,
+    mapId: string = 'village',
     expectedVersion?: number,
   ): Promise<number> {
     // Exponential backoff retry for transient RDS errors (Multi-AZ failover window ~60s).
@@ -268,9 +274,9 @@ export class RdsPersistence {
         // saveAgentControllers fails) leaves the DB in an inconsistent state that
         // causes agents to lose their controller context on pod restart.
         await client.query('BEGIN');
-        const newVersion = await this.saveWorldStateClient(client, world, expectedVersion);
-        await this.saveAgentsClient(client, world.agents);
-        await this.saveAgentControllersClient(client, controllers, apiKeys);
+        const newVersion = await this.saveWorldStateClient(client, world, mapId, expectedVersion);
+        await this.saveAgentsClient(client, world.agents, mapId);
+        await this.saveAgentControllersClient(client, controllers, apiKeys, mapId);
         await client.query('COMMIT');
         console.log(`[Persistence] Saved: ${world.agents.size} agents, ${controllers.size} controllers`);
         return newVersion;
@@ -303,7 +309,7 @@ export class RdsPersistence {
 
   // Client-scoped variants used inside the saveAll transaction.
   // These accept an already-checked-out PoolClient so all writes share a single transaction.
-  private async saveWorldStateClient(client: pg.PoolClient, world: World, expectedVersion?: number): Promise<number> {
+  private async saveWorldStateClient(client: pg.PoolClient, world: World, mapId: string, expectedVersion?: number): Promise<number> {
     // Identical serialization to saveWorldState() — uses the same mapToRecord helpers.
     const data: WorldStateData = {
       time: world.time,
@@ -332,9 +338,9 @@ export class RdsPersistence {
       const result = await client.query<{ version: number }>(
         `UPDATE world_state
          SET data = $1, version = version + 1, updated_at = NOW()
-         WHERE id = 'current' AND version = $2
+         WHERE id = $2 AND version = $3
          RETURNING version`,
-        [JSON.stringify(data), expectedVersion],
+        [JSON.stringify(data), mapId, expectedVersion],
       );
       if (result.rowCount === 0) {
         throw new VersionConflictError(
@@ -346,31 +352,33 @@ export class RdsPersistence {
       // Version-agnostic upsert — used for initial save or recovery.
       const result = await client.query<{ version: number }>(
         `INSERT INTO world_state (id, data, version, updated_at)
-         VALUES ('current', $1, 1, NOW())
+         VALUES ($1, $2, 1, NOW())
          ON CONFLICT (id) DO UPDATE
            SET data = EXCLUDED.data,
                version = world_state.version + 1,
                updated_at = NOW()
          RETURNING version`,
-        [JSON.stringify(data)],
+        [mapId, JSON.stringify(data)],
       );
       return result.rows[0].version;
     }
   }
 
-  private async saveAgentsClient(client: pg.PoolClient, agents: Map<string, Agent>): Promise<void> {
+  private async saveAgentsClient(client: pg.PoolClient, agents: Map<string, Agent>, mapId: string): Promise<void> {
     if (agents.size === 0) return;
     const ids: string[] = [];
     const datas: string[] = [];
+    const mapIds: string[] = [];
     for (const agent of agents.values()) {
       ids.push(agent.id);
       datas.push(JSON.stringify(agent));
+      mapIds.push(mapId);
     }
     await client.query(
-      `INSERT INTO agents (id, data, updated_at)
-       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
-       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-      [ids, datas],
+      `INSERT INTO agents (id, data, map_id, updated_at)
+       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), unnest($3::text[]), NOW()
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, map_id = EXCLUDED.map_id, updated_at = EXCLUDED.updated_at`,
+      [ids, datas, mapIds],
     );
   }
 
@@ -378,10 +386,12 @@ export class RdsPersistence {
     client: pg.PoolClient,
     controllers: Map<string, AgentController>,
     apiKeys?: Map<string, { apiKey: string; model: string }>,
+    mapId?: string,
   ): Promise<void> {
     if (controllers.size === 0) return;
     const agentIds: string[] = [];
     const datas: string[] = [];
+    const mapIds: string[] = [];
     for (const [agentId, ctrl] of controllers.entries()) {
       const keyData = apiKeys?.get(agentId);
       const ctrlData: ControllerData = {
@@ -399,18 +409,20 @@ export class RdsPersistence {
       };
       agentIds.push(agentId);
       datas.push(JSON.stringify(ctrlData));
+      mapIds.push(mapId ?? 'village');
     }
     await client.query(
-      `INSERT INTO agent_controllers (agent_id, data, updated_at)
-       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), NOW()
-       ON CONFLICT (agent_id) DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
-      [agentIds, datas],
+      `INSERT INTO agent_controllers (agent_id, data, map_id, updated_at)
+       SELECT unnest($1::uuid[]), unnest($2::jsonb[]), unnest($3::text[]), NOW()
+       ON CONFLICT (agent_id) DO UPDATE SET data = EXCLUDED.data, map_id = EXCLUDED.map_id, updated_at = EXCLUDED.updated_at`,
+      [agentIds, datas, mapIds],
     );
   }
 
-  async loadWorldState(): Promise<{ data: WorldStateData; version: number } | null> {
+  async loadWorldState(mapId: string = 'village'): Promise<{ data: WorldStateData; version: number } | null> {
     const result = await this.pool.query<{ data: WorldStateData; version: number }>(
-      `SELECT data, version FROM world_state WHERE id = 'current'`,
+      `SELECT data, version FROM world_state WHERE id = $1`,
+      [mapId],
     );
     if (result.rows.length === 0) return null;
     const { data, version } = result.rows[0];
@@ -418,14 +430,18 @@ export class RdsPersistence {
     return { data, version };
   }
 
-  async loadAgents(): Promise<Agent[]> {
-    const result = await this.pool.query<{ data: Agent }>(`SELECT data FROM agents`);
-    return result.rows.map(row => row.data);
+  async loadAgents(mapId: string = 'village'): Promise<Agent[]> {
+    const result = await this.pool.query<{ data: Agent }>(
+      `SELECT data FROM agents WHERE map_id = $1`,
+      [mapId],
+    );
+    return result.rows.map((row: { data: Agent }) => row.data);
   }
 
-  async loadAgentControllers(): Promise<Map<string, ControllerData>> {
+  async loadAgentControllers(mapId: string = 'village'): Promise<Map<string, ControllerData>> {
     const result = await this.pool.query<{ agent_id: string; data: ControllerData }>(
-      `SELECT agent_id, data FROM agent_controllers`,
+      `SELECT agent_id, data FROM agent_controllers WHERE map_id = $1`,
+      [mapId],
     );
     const map = new Map<string, ControllerData>();
     for (const row of result.rows) {
@@ -460,12 +476,13 @@ export class RdsPersistence {
     }
   }
 
-  async resetWorldState(): Promise<void> {
+  async resetWorldState(mapId: string = 'village'): Promise<void> {
     try {
       await this.pool.query(
         `INSERT INTO world_state (id, data, updated_at)
-         VALUES ('current', '{}', NOW())
+         VALUES ($1, '{}', NOW())
          ON CONFLICT (id) DO UPDATE SET data = '{}', updated_at = EXCLUDED.updated_at`,
+        [mapId],
       );
     } catch (err) {
       console.error('[RDS] resetWorldState failed:', (err as Error).message);
@@ -473,9 +490,13 @@ export class RdsPersistence {
     }
   }
 
-  async deleteAllControllers(): Promise<void> {
+  async deleteAllControllers(mapId?: string): Promise<void> {
     try {
-      await this.pool.query(`DELETE FROM agent_controllers`);
+      if (mapId) {
+        await this.pool.query(`DELETE FROM agent_controllers WHERE map_id = $1`, [mapId]);
+      } else {
+        await this.pool.query(`DELETE FROM agent_controllers`);
+      }
     } catch (err) {
       console.error('[RDS] deleteAllControllers failed:', (err as Error).message);
       throw err;
