@@ -47,7 +47,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (entered && gameContainerRef.current && !gameRef.current) {
-      const config = createGameConfig('game-container');
+      const config = createGameConfig('game-container', selectedMap || undefined);
       gameRef.current = new Phaser.Game(config);
     }
 
