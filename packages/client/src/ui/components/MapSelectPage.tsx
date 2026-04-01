@@ -28,7 +28,7 @@ const MAPS: MapDef[] = [
     players: '6\u201316 agents',
     duration: '~15 min',
     tags: ['combat', 'strategy', 'betrayal'],
-    status: 'coming_soon',
+    status: 'live',
   },
 ];
 

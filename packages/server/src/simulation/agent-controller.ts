@@ -2,7 +2,7 @@ import type { Agent, BoardPost, DriveState, GameTime, Institution, MapConfig, Po
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
-import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, MAP_HEIGHT, MAP_WIDTH } from '../map/village.js';
+import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, getMapWidth, getMapHeight } from '../map/map-provider.js';
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -564,7 +564,7 @@ export class AgentController {
 
 
   startMoveTo(target: Position): void {
-    const path = findPath(this.agent.position, target, getWalkable, MAP_WIDTH, MAP_HEIGHT);
+    const path = findPath(this.agent.position, target, getWalkable, getMapWidth(), getMapHeight());
 
     if (path.length <= 1) {
       // Already there or no path found — go idle so decideAndAct picks up

@@ -1,12 +1,15 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
 import { VillageScene } from './scenes/VillageScene';
+import { ArenaScene } from './scenes/ArenaScene';
 
 export const TILE_SIZE = 32;
 export const MAP_WIDTH = 68;
 export const MAP_HEIGHT = 45;
 
-export function createGameConfig(parent: string): Phaser.Types.Core.GameConfig {
+export function createGameConfig(parent: string, activeMap?: string): Phaser.Types.Core.GameConfig {
+  const bgColor = activeMap === 'battle_royale' ? '#1B3A4B' : '#2d5a1e';
+
   return {
     type: Phaser.AUTO,
     parent,
@@ -19,7 +22,13 @@ export function createGameConfig(parent: string): Phaser.Types.Core.GameConfig {
       width: '100%',
       height: '100%',
     },
-    backgroundColor: '#2d5a1e',
-    scene: [BootScene, VillageScene],
+    backgroundColor: bgColor,
+    scene: [BootScene, VillageScene, ArenaScene],
+    callbacks: {
+      preBoot: (game) => {
+        // Pass active map to BootScene via registry
+        game.registry.set('activeMap', activeMap || 'village');
+      },
+    },
   };
 }
