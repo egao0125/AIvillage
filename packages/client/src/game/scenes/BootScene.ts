@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 
-// Fan-tasy Tileset spritesheet URLs — served from public/ directory.
-// Using absolute paths (not Vite imports) to avoid hashing/LFS issues in Docker builds.
-const tilesetGroundUrl = '/tilesets/Tileset_Ground.png';
-const tilesetSandUrl = '/tilesets/Tileset_Sand.png';
-const tilesetRoadUrl = '/tilesets/Tileset_Road.png';
+// Arena tileset assets — served from public/ directory (no Vite hashing).
+// Loaded as images (not spritesheets) for Phaser's tilemap renderer.
+const ARENA_MAP_URL = '/tilesets/arena-map.tmj';
+const TILESET_GROUND_URL = '/tilesets/Tileset_Ground.png';
+const TILESET_SAND_URL = '/tilesets/Tileset_Sand.png';
+const TILESET_ROAD_URL = '/tilesets/Tileset_Road.png';
 
 const T = 32; // tile size
 
@@ -236,19 +237,17 @@ export class BootScene extends Phaser.Scene {
     const activeMap = this.registry.get('activeMap');
     console.log('[BootScene] preload — activeMap:', activeMap);
 
-    // Load Fan-tasy Tileset spritesheets for arena map (16x16 tiles)
     if (activeMap === 'battle_royale') {
       this.load.on('loaderror', (file: { key: string; url: string }) => {
         console.error('[BootScene] Failed to load asset:', file.key, file.url);
       });
-      this.load.spritesheet('ts_ground', tilesetGroundUrl, { frameWidth: 16, frameHeight: 16 });
-      this.load.spritesheet('ts_sand', tilesetSandUrl, { frameWidth: 16, frameHeight: 16 });
-      this.load.spritesheet('ts_road', tilesetRoadUrl, { frameWidth: 16, frameHeight: 16 });
+      // Load Tiled JSON map + tileset images (Phaser tilemap handles frame slicing)
+      this.load.tilemapTiledJSON('arena-map', ARENA_MAP_URL);
+      this.load.image('Tileset_Ground', TILESET_GROUND_URL);
+      this.load.image('Tileset_Sand', TILESET_SAND_URL);
+      this.load.image('Tileset_Road', TILESET_ROAD_URL);
       this.load.on('complete', () => {
-        console.log('[BootScene] All spritesheets loaded —',
-          'ts_ground:', this.textures.exists('ts_ground'),
-          'ts_sand:', this.textures.exists('ts_sand'),
-          'ts_road:', this.textures.exists('ts_road'));
+        console.log('[BootScene] Arena tilemap + tilesets loaded');
       });
     }
   }

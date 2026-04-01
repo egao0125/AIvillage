@@ -1,12 +1,9 @@
 import Phaser from 'phaser';
 import {
-  ARENA_TILE_MAP,
-  ARENA_TILE_TYPES,
   ARENA_MAP_WIDTH,
   ARENA_MAP_HEIGHT,
   ARENA_LOCATIONS,
 } from '../data/arena-map';
-import { getArenaTileConfig } from '../data/arena-tiles';
 import { AgentSprite } from '../entities/AgentSprite';
 import { eventBus } from '../../core/EventBus';
 import { gameStore } from '../../core/GameStore';
@@ -15,34 +12,6 @@ import { generateAgentTexture, agentColorsFromName } from './BootScene';
 import type { Agent, GameTime } from '@ai-village/shared';
 
 const TILE_SIZE = 32; // display size (16px source tiles scaled 2x)
-
-// Edge transition colors per terrain type (for the alpha-blend overlay)
-const TERRAIN_EDGE_COLOR: Record<number, number> = {
-  [ARENA_TILE_TYPES.WATER]: 0x2080b0,
-  [ARENA_TILE_TYPES.SAND]: 0xc4a060,
-  [ARENA_TILE_TYPES.OPEN]: 0x5a9a3a,
-  [ARENA_TILE_TYPES.JUNGLE]: 0x1a4a28,
-  [ARENA_TILE_TYPES.HIGH_GROUND]: 0x7a8a6a,
-  [ARENA_TILE_TYPES.WALL]: 0x6a5a4a,
-  [ARENA_TILE_TYPES.SHALLOW_WATER]: 0x4090a0,
-  [ARENA_TILE_TYPES.RUIN_FLOOR]: 0x6a5a4a,
-  [ARENA_TILE_TYPES.MANGROVE]: 0x1a3a2a,
-  [ARENA_TILE_TYPES.CAVE]: 0x1a1a1e,
-};
-
-function darken(c: number, amt: number): number {
-  const r = Math.max(0, Math.round(((c >> 16) & 0xff) * (1 - amt)));
-  const g = Math.max(0, Math.round(((c >> 8) & 0xff) * (1 - amt)));
-  const b = Math.max(0, Math.round((c & 0xff) * (1 - amt)));
-  return (r << 16) | (g << 8) | b;
-}
-
-function lighten(c: number, amt: number): number {
-  const r = Math.min(255, Math.round(((c >> 16) & 0xff) + (255 - ((c >> 16) & 0xff)) * amt));
-  const g = Math.min(255, Math.round(((c >> 8) & 0xff) + (255 - ((c >> 8) & 0xff)) * amt));
-  const b = Math.min(255, Math.round((c & 0xff) + (255 - (c & 0xff)) * amt));
-  return (r << 16) | (g << 8) | b;
-}
 
 export class ArenaScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSprite> = new Map();
@@ -57,27 +26,8 @@ export class ArenaScene extends Phaser.Scene {
     super({ key: 'ArenaScene' });
   }
 
-  preload(): void {
-    // Load spritesheets here as well — BootScene.preload() should have loaded them,
-    // but if the textures don't exist yet (e.g. load failed silently), retry here.
-    // Phaser skips re-loading keys that already exist in the texture manager.
-    if (!this.textures.exists('ts_ground')) {
-      console.warn('[ArenaScene] ts_ground missing — loading spritesheets in ArenaScene.preload');
-      this.load.spritesheet('ts_ground', '/tilesets/Tileset_Ground.png', { frameWidth: 16, frameHeight: 16 });
-      this.load.spritesheet('ts_sand', '/tilesets/Tileset_Sand.png', { frameWidth: 16, frameHeight: 16 });
-      this.load.spritesheet('ts_road', '/tilesets/Tileset_Road.png', { frameWidth: 16, frameHeight: 16 });
-      this.load.on('loaderror', (file: { key: string; url: string }) => {
-        console.error('[ArenaScene] Failed to load:', file.key, file.url);
-      });
-    } else {
-      console.log('[ArenaScene] Spritesheets already loaded from BootScene');
-    }
-  }
-
   create(): void {
-    this.drawTileMap();
-    this.drawEdgeTransitions();
-    this.drawDecorations();
+    this.createTilemap();
     this.drawLocationLabels();
 
     this.conversationGraphics = this.add.graphics();
@@ -97,6 +47,33 @@ export class ArenaScene extends Phaser.Scene {
     this.setupCamera();
     this.setupEventListeners();
     this.syncInitialState();
+  }
+
+  // ── Tilemap — Tiled JSON loaded in BootScene ──────────────
+  private createTilemap(): void {
+    const map = this.make.tilemap({ key: 'arena-map' });
+
+    const tilesets = [
+      map.addTilesetImage('Tileset_Ground', 'Tileset_Ground'),
+      map.addTilesetImage('Tileset_Sand', 'Tileset_Sand'),
+      map.addTilesetImage('Tileset_Road', 'Tileset_Road'),
+    ].filter((ts): ts is Phaser.Tilemaps.Tileset => ts !== null);
+
+    if (tilesets.length === 0) {
+      console.error('[ArenaScene] No tilesets loaded — map will be blank');
+      return;
+    }
+
+    // Create all layers from the TMJ dynamically (user may add more in Tiled)
+    for (const layerData of map.layers) {
+      const layer = map.createLayer(layerData.name, tilesets);
+      if (layer) {
+        layer.setScale(2); // 16px tiles → 32px display
+        layer.setDepth(0);
+      }
+    }
+
+    console.log(`[ArenaScene] Tilemap created: ${map.layers.length} layer(s), ${tilesets.length} tileset(s)`);
   }
 
   update(time: number, delta: number): void {
@@ -151,152 +128,6 @@ export class ArenaScene extends Phaser.Scene {
       this.conversationGraphics.fillStyle(0xffd700, 0.5);
       this.conversationGraphics.fillCircle(midX, midY, 3);
     }
-  }
-
-  // ── Tilemap — Fan-tasy Tileset spritesheets at 2x scale ───
-  private drawTileMap(): void {
-    for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
-      for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
-        const tileType = ARENA_TILE_MAP[y]?.[x] ?? ARENA_TILE_TYPES.WATER;
-        const { sheet, frame, tint } = getArenaTileConfig(tileType, x, y);
-
-        const img = this.add
-          .image(
-            x * TILE_SIZE + TILE_SIZE / 2,
-            y * TILE_SIZE + TILE_SIZE / 2,
-            sheet,
-            frame
-          )
-          .setScale(2)
-          .setDepth(0);
-
-        if (tint !== undefined) {
-          img.setTint(tint);
-        }
-      }
-    }
-  }
-
-  // ── Edge transitions ───────────────────────────────────────
-  private drawEdgeTransitions(): void {
-    const g = this.add.graphics();
-    g.setDepth(1);
-
-    for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
-      for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
-        const current = ARENA_TILE_MAP[y]?.[x] ?? 0;
-
-        const south = y + 1 < ARENA_MAP_HEIGHT ? (ARENA_TILE_MAP[y + 1]?.[x] ?? 0) : current;
-        const north = y - 1 >= 0 ? (ARENA_TILE_MAP[y - 1]?.[x] ?? 0) : current;
-        const east = x + 1 < ARENA_MAP_WIDTH ? (ARENA_TILE_MAP[y]?.[x + 1] ?? 0) : current;
-        const west = x - 1 >= 0 ? (ARENA_TILE_MAP[y]?.[x - 1] ?? 0) : current;
-
-        const baseX = x * TILE_SIZE;
-        const baseY = y * TILE_SIZE;
-
-        if (south !== current) {
-          const c = TERRAIN_EDGE_COLOR[south] ?? 0x0f2b3e;
-          for (let row = 0; row < 3; row++) {
-            g.fillStyle(c, (row + 1) / 4);
-            g.fillRect(baseX, baseY + TILE_SIZE - 3 + row, TILE_SIZE, 1);
-          }
-        }
-        if (north !== current) {
-          const c = TERRAIN_EDGE_COLOR[north] ?? 0x0f2b3e;
-          for (let row = 0; row < 3; row++) {
-            g.fillStyle(c, (3 - row) / 4);
-            g.fillRect(baseX, baseY + row, TILE_SIZE, 1);
-          }
-        }
-        if (east !== current) {
-          const c = TERRAIN_EDGE_COLOR[east] ?? 0x0f2b3e;
-          for (let col = 0; col < 3; col++) {
-            g.fillStyle(c, (col + 1) / 4);
-            g.fillRect(baseX + TILE_SIZE - 3 + col, baseY, 1, TILE_SIZE);
-          }
-        }
-        if (west !== current) {
-          const c = TERRAIN_EDGE_COLOR[west] ?? 0x0f2b3e;
-          for (let col = 0; col < 3; col++) {
-            g.fillStyle(c, (3 - col) / 4);
-            g.fillRect(baseX + col, baseY, 1, TILE_SIZE);
-          }
-        }
-      }
-    }
-  }
-
-  // ── Decorative objects ────────────────────────────────────
-  private drawDecorations(): void {
-    let seed = 12345;
-    const rand = () => { seed = (seed * 16807) % 2147483647; return (seed & 0x7fffffff) / 0x7fffffff; };
-
-    for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
-      for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
-        const tile = ARENA_TILE_MAP[y]?.[x] ?? 0;
-        const wx = x * TILE_SIZE;
-        const wy = y * TILE_SIZE;
-
-        if (tile === ARENA_TILE_TYPES.SAND && rand() < 0.10) {
-          this.drawPalmTree(wx + TILE_SIZE / 2, wy + TILE_SIZE / 2);
-        }
-        if (tile === ARENA_TILE_TYPES.HIGH_GROUND && rand() < 0.15) {
-          this.drawRockCluster(wx + Math.floor(rand() * 20) + 6, wy + Math.floor(rand() * 20) + 6);
-        }
-        if (tile === ARENA_TILE_TYPES.RUIN_FLOOR && rand() < 0.08) {
-          this.drawBrokenColumn(wx + Math.floor(rand() * 18) + 7, wy + Math.floor(rand() * 18) + 7);
-        }
-      }
-    }
-  }
-
-  private drawPalmTree(x: number, y: number): void {
-    const g = this.add.graphics();
-    g.fillStyle(0x6a4a2a);
-    for (let i = 0; i < 16; i++) {
-      const tx = x + Math.round(Math.sin(i * 0.15) * 3);
-      g.fillRect(tx, y - i, 2, 1);
-    }
-    const frondColor = 0x2a6a28;
-    const topY = y - 16;
-    for (let f = 0; f < 4; f++) {
-      const angle = (f / 4) * Math.PI * 2 - Math.PI / 2;
-      for (let i = 0; i < 8; i++) {
-        const fx = x + Math.round(Math.cos(angle) * i * 1.2);
-        const fy = topY + Math.round(Math.sin(angle) * i * 0.8);
-        g.fillStyle(i < 4 ? frondColor : darken(frondColor, 0.15));
-        g.fillRect(fx, fy, 2, 1);
-        if (i > 2) g.fillRect(fx, fy + 1, 1, 1);
-      }
-    }
-    g.setDepth(3);
-  }
-
-  private drawRockCluster(x: number, y: number): void {
-    const g = this.add.graphics();
-    const colors = [0x7a7a72, 0x6a6a62, 0x5a5a52];
-    for (let i = 0; i < 3; i++) {
-      const rx = x + i * 3 - 3;
-      const ry = y + (i % 2) * 2;
-      const c = colors[i % colors.length];
-      g.fillStyle(c);
-      g.fillRect(rx, ry, 3 + (i % 2), 2 + (i % 2));
-      g.fillStyle(lighten(c, 0.2));
-      g.fillRect(rx, ry, 3 + (i % 2), 1);
-    }
-    g.setDepth(3);
-  }
-
-  private drawBrokenColumn(x: number, y: number): void {
-    const g = this.add.graphics();
-    g.fillStyle(0x6a6a60);
-    g.fillRect(x, y, 4, 8);
-    g.fillStyle(0x8a8a80);
-    g.fillRect(x, y, 4, 1);
-    g.fillStyle(0x5a5a52);
-    g.fillRect(x + 1, y - 1, 2, 1);
-    g.fillRect(x + 3, y, 1, 1);
-    g.setDepth(3);
   }
 
   // ── Location labels ─────────────────────────────────────────
