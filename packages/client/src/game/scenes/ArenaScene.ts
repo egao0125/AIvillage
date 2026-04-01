@@ -57,6 +57,23 @@ export class ArenaScene extends Phaser.Scene {
     super({ key: 'ArenaScene' });
   }
 
+  preload(): void {
+    // Load spritesheets here as well — BootScene.preload() should have loaded them,
+    // but if the textures don't exist yet (e.g. load failed silently), retry here.
+    // Phaser skips re-loading keys that already exist in the texture manager.
+    if (!this.textures.exists('ts_ground')) {
+      console.warn('[ArenaScene] ts_ground missing — loading spritesheets in ArenaScene.preload');
+      this.load.spritesheet('ts_ground', '/tilesets/Tileset_Ground.png', { frameWidth: 16, frameHeight: 16 });
+      this.load.spritesheet('ts_sand', '/tilesets/Tileset_Sand.png', { frameWidth: 16, frameHeight: 16 });
+      this.load.spritesheet('ts_road', '/tilesets/Tileset_Road.png', { frameWidth: 16, frameHeight: 16 });
+      this.load.on('loaderror', (file: { key: string; url: string }) => {
+        console.error('[ArenaScene] Failed to load:', file.key, file.url);
+      });
+    } else {
+      console.log('[ArenaScene] Spritesheets already loaded from BootScene');
+    }
+  }
+
   create(): void {
     this.drawTileMap();
     this.drawEdgeTransitions();
