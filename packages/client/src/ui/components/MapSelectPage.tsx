@@ -68,7 +68,6 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
 
   return (
     <div
-      ref={starsRef}
       style={{
         background: '#050510',
         color: COLORS.text,
@@ -83,6 +82,8 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
         fontFamily: '"DM Sans", sans-serif',
       }}
     >
+      {/* Stars container — separate from React content */}
+      <div ref={starsRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
       <style>{`
         @keyframes twinkle { 0%,100% { opacity: .15 } 50% { opacity: .8 } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
