@@ -464,6 +464,7 @@ export class VillageScene extends Phaser.Scene {
       agent.position.y
     );
     if (agent.currentAction) agentSprite.setAction(agent.currentAction);
+    if (agent.mood) agentSprite.setMood(agent.mood);
     this.agentSprites.set(agent.id, agentSprite);
   }
 

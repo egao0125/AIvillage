@@ -3,6 +3,7 @@ import { EventBus } from '@ai-village/shared';
 import { AgentCognition } from '@ai-village/ai-engine';
 import type { World } from '../world.js';
 import type { EventBroadcaster } from '../events.js';
+import type { AgentController } from '../agent-controller.js';
 import { ActionPipeline } from './action-pipeline.js';
 import { PostConversationProcessor } from './post-conversation.js';
 import { buildInstitutionContext } from './helpers.js';
@@ -32,6 +33,9 @@ export class ConversationManager {
     private world: World,
     private broadcaster: EventBroadcaster,
     bus?: EventBus,
+    // Shared engine map — required for post-conversation controller callbacks.
+    // Passed by reference so agents added after construction are visible.
+    private agentControllers?: Map<string, AgentController>,
   ) {
     this.actionPipeline = new ActionPipeline(world, broadcaster, bus);
     this.postProcessor = new PostConversationProcessor(world);
@@ -450,7 +454,7 @@ export class ConversationManager {
         void this.postProcessor.process(active.conversation, cognitions)
           .then(() => {
             for (const participantId of active.conversation.participants) {
-              const ctrl = (this.world as any).controllers?.get?.(participantId);
+              const ctrl = this.agentControllers?.get(participantId);
               if (ctrl?.onPostConversationComplete) {
                 const otherNames = active.conversation.participants
                   .filter((id: string) => id !== participantId)
@@ -464,7 +468,7 @@ export class ConversationManager {
           .catch((err: unknown) => {
             console.error('[PostConversation] Processing failed:', err);
             for (const participantId of active.conversation.participants) {
-              const ctrl = (this.world as any).controllers?.get?.(participantId);
+              const ctrl = this.agentControllers?.get(participantId);
               if (ctrl?.onPostConversationComplete) {
                 ctrl.onPostConversationComplete('Conversation ended.');
               }
@@ -473,7 +477,7 @@ export class ConversationManager {
       } else {
         // No messages — notify immediately
         for (const participantId of (active?.conversation.participants ?? [])) {
-          const ctrl = (this.world as any).controllers?.get?.(participantId);
+          const ctrl = this.agentControllers?.get(participantId);
           if (ctrl?.onPostConversationComplete) {
             ctrl.onPostConversationComplete('Brief exchange.');
           }

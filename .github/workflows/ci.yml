@@ -1,0 +1,56 @@
+name: CI — Test & Lint
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches-ignore: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript — server
+        run: pnpm --filter @ai-village/server exec tsc --noEmit
+
+      - name: TypeScript — client
+        run: pnpm --filter @ai-village/client exec tsc --noEmit
+
+      - name: TypeScript — ai-engine
+        run: pnpm --filter @ai-village/ai-engine exec tsc --noEmit
+
+      - name: Unit tests
+        run: pnpm --filter @ai-village/server exec vitest run --reporter=verbose
+
+      - name: Dependency audit
+        run: pnpm audit --audit-level=high || true
+        # || true: report but don't fail (fixable by pnpm overrides, already patched in package.json)
+
+  docker-build-check:
+    name: Docker build (dry-run)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image (no push)
+        run: |
+          docker build --tag ai-village:ci-check .
+        env:
+          DOCKER_BUILDKIT: '1'

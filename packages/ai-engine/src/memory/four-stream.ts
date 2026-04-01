@@ -1,13 +1,30 @@
 import type { Memory, Agent, AgentConfig, RelationshipDossier, ActiveConcern } from '@ai-village/shared';
 import type { MemoryStore, LLMProvider } from '../index.js';
 
+/**
+ * Escape XML special characters in user-controlled content embedded in prompt XML tags.
+ * Prevents LLM01 XML delimiter injection: a name like "</person_name>IGNORE..." would
+ * break out of the structural tag and inject instructions. (OWASP LLM Top10 2025 LLM01)
+ */
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
 export class FourStreamMemory {
   // Stream 1: Narrative Timeline — ring buffer of recent events
   private timeline: Memory[] = [];
   private static readonly TIMELINE_MAX = 50;
 
   // Stream 2: Relationship Dossiers — per-person profiles
+  // Capped at MAX_DOSSIERS: LRU eviction (oldest lastUpdated) prevents unbounded growth
+  // when an agent interacts with hundreds of unique NPCs over a long simulation run.
   private dossiers: Map<string, RelationshipDossier> = new Map();
+  private static readonly MAX_DOSSIERS = 150;
 
   // Stream 3: Active Concerns — always-present short list
   private concerns: ActiveConcern[] = [];
@@ -52,7 +69,9 @@ export class FourStreamMemory {
     }
     // Also persist to backing store
     for (const m of this.identity) {
-      void this.backingStore.add(m);
+      void this.backingStore.add(m).catch((err: unknown) => {
+        console.warn(`[FourStream] Failed to persist identity memory ${m.id} for agent ${this.agent.id}:`, (err as Error).message);
+      });
     }
 
     // Load existing dossiers and concerns from agent state
@@ -179,16 +198,20 @@ export class FourStreamMemory {
       .map(m => m.content)
       .join('\n');
 
-    const prompt = `You are ${this.agent.config.name}. You just interacted with ${targetName}.
+    // OWASP LLM01: wrap user-controlled content in XML tags AND escape XML special chars
+    // to prevent tag injection (e.g. targetName = "</person_name>IGNORE...").
+    const safeTargetName = escapeXml(targetName);
+    const safeInteractionSummary = escapeXml(interactionSummary);
+    const prompt = `You are ${this.agent.config.name}. You just interacted with <person_name>${safeTargetName}</person_name>.
 
-What happened: ${interactionSummary}
+What happened: <event_description>${safeInteractionSummary}</event_description>
 
-${recentWithPerson ? 'Recent history with them:\n' + recentWithPerson + '\n' : ''}
+${recentWithPerson ? 'Recent history with them:\n<history>' + escapeXml(recentWithPerson) + '</history>\n' : ''}
 ${existingText}
 
-Update your mental model of ${targetName}. Reply with JSON ONLY:
+Update your mental model of <person_name>${safeTargetName}</person_name>. Reply with JSON ONLY:
 {
-  "summary": "3-5 sentences: Who is ${targetName} to you? What defines your relationship? What do you expect from them?",
+  "summary": "3-5 sentences: Who is this person to you? What defines your relationship? What do you expect from them?",
   "trust": number from -100 to 100,
   "activeCommitments": ["things you owe each other, max 3"],
   "concerns": ["any unresolved issues with them, max 2"]
@@ -207,13 +230,14 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
         targetId,
         targetName,
         summary: parsed.summary || `I know ${targetName}.`,
-        trust: Math.max(-100, Math.min(100, parsed.trust ?? existing?.trust ?? 0)),
+        trust: Math.max(-100, Math.min(100, typeof parsed.trust === 'number' ? parsed.trust : (existing?.trust ?? 0))),
         activeCommitments: (parsed.activeCommitments || []).slice(0, 3),
         lastInteraction: Date.now(),
         lastUpdated: Date.now(),
       };
 
       this.dossiers.set(targetId, dossier);
+      this.evictOldestDossierIfNeeded();
       this.syncDossiersToAgent();
 
       if (parsed.concerns) {
@@ -242,6 +266,7 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
           lastInteraction: Date.now(),
           lastUpdated: Date.now(),
         });
+        this.evictOldestDossierIfNeeded();
         this.syncDossiersToAgent();
       }
     }
@@ -269,6 +294,20 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
 
   syncDossiersToAgent(): void {
     this.agent.dossiers = Array.from(this.dossiers.values());
+  }
+
+  /** LRU eviction: remove the least-recently-updated dossier when over the cap. */
+  private evictOldestDossierIfNeeded(): void {
+    if (this.dossiers.size <= FourStreamMemory.MAX_DOSSIERS) return;
+    let oldestKey: string | undefined;
+    let oldestTime = Infinity;
+    for (const [key, d] of this.dossiers) {
+      if (d.lastUpdated < oldestTime) {
+        oldestTime = d.lastUpdated;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey !== undefined) this.dossiers.delete(oldestKey);
   }
 
   // --- STREAM 3: ACTIVE CONCERNS ---
@@ -331,8 +370,16 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
   // --- STREAM 4: BELIEFS ---
 
   addBelief(belief: Memory): void {
+    // Deduplicate by exact content — prevents belief spam from repeated LLM calls
+    const existing = this.beliefs.find(b =>
+      b.content.toLowerCase() === belief.content.toLowerCase()
+    );
+    if (existing) return;
+
     this.beliefs.push(belief);
-    void this.backingStore.add(belief);
+    void this.backingStore.add(belief).catch((err: unknown) => {
+      console.warn(`[FourStream] Failed to persist belief ${belief.id} for agent ${this.agent.id}:`, (err as Error).message);
+    });
     if (this.beliefs.length > 20) {
       this.beliefs.sort((a, b) => b.importance - a.importance);
       this.beliefs = this.beliefs.slice(0, 20);
@@ -564,14 +611,18 @@ Update your mental model of ${targetName}. Reply with JSON ONLY:
       }
     }
     const mentionedDossiers = this.getDossiers([...mentionedIds]);
+    // Escape names and summaries to prevent XML tag injection from adversarial agent names
     const peopleContext = mentionedDossiers.length > 0
-      ? 'People involved:\n' + mentionedDossiers.map(d => `${d.targetName}: ${d.summary.slice(0, 100)}`).join('\n')
+      ? 'People involved:\n' + mentionedDossiers.map(d => `${escapeXml(d.targetName)}: ${escapeXml(d.summary.slice(0, 100))}`).join('\n')
       : '';
 
+    // OWASP LLM01: wrap agent-generated content in XML tags, with XML escaping.
     const prompt = `Based on recent experiences:
-${recentText}
+<recent_events>
+${escapeXml(recentText)}
+</recent_events>
 
-${peopleContext}
+${peopleContext ? '<people_context>\n' + peopleContext + '\n</people_context>' : ''}
 
 What do you now BELIEVE? Not facts — beliefs and conclusions.
 About the people around you, about your own situation, about what you should do differently.

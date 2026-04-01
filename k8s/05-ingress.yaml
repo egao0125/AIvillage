@@ -1,0 +1,48 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-village
+  namespace: ai-village
+  annotations:
+    # AWS Load Balancer Controller (must be installed in the cluster).
+    # Install guide: https://kubernetes-sigs.github.io/aws-load-balancer-controller/
+    kubernetes.io/ingress.class: alb
+
+    # internet-facing: reachable from the public internet.
+    # Use "internal" if serving only within a VPC.
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # ip mode: routes traffic directly to pod IPs (requires VPC CNI).
+    # Avoids double-hop through kube-proxy (better latency for Socket.IO).
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # HTTPS + HTTP→HTTPS redirect (443 terminates TLS at ALB).
+    # ACM cert ARN: terraform output -raw acm_certificate_arn
+    # CI/CD injects this automatically on deploy.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # ACM cert ARN — injected automatically by CI/CD (deploy.yml) from terraform output
+    alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_TERRAFORM_OUTPUT
+
+    # WAFv2 Web ACL — injected automatically by CI/CD (deploy.yml) from terraform output
+    # (CIS AWS 6.7 / NIST SP 800-53 SC-5, SI-3)
+    alb.ingress.kubernetes.io/wafv2-web-acl-arn: REPLACE_WITH_TERRAFORM_OUTPUT
+
+    # 120 s idle timeout for long-lived Socket.IO WebSocket connections.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
+
+    # Sticky sessions for Socket.IO HTTP long-polling fallback (required when replicas > 1).
+    alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.lb_cookie.duration_seconds=86400
+
+spec:
+  rules:
+    - host: ai-village.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-village
+                port:
+                  number: 80

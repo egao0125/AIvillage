@@ -1,7 +1,7 @@
 import type { Server } from 'socket.io';
-import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology } from '@ai-village/shared';
+import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, SupabaseMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import type { MapConfig } from '@ai-village/shared';
 import { getAreaEntrance, setActiveMap } from '../map/map-provider.js';
@@ -12,14 +12,15 @@ import { ConversationManager } from './conversation/index.js';
 import { AgentController } from './agent-controller.js';
 import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
-import { STARTER_AGENTS } from '../agents/starter.js';
 import { AREAS } from '../map/village.js';
-import { SupabasePersistence } from '../persistence/supabase.js';
+import { RdsPersistence, type ControllerData, VersionConflictError } from '../persistence/rds.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
 import { CharacterTimeline } from './character-timeline.js';
 import { StorylineDetector } from './storyline-detector.js';
 import { RecapGenerator } from './recap-generator.js';
+import { LeaderElection } from '../cluster/leader-election.js';
+import { getRedis } from '../redis.js';
 import { SOUL_REWRITES, AGENTS_TO_REMOVE } from './soul-rewrite.js';
 
 export class SimulationEngine {
@@ -41,7 +42,7 @@ export class SimulationEngine {
   readonly viewportManager: ViewportManager = new ViewportManager();
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
-  private persistence: SupabasePersistence | null = null;
+  private persistence: RdsPersistence | null = null;
   private weatherStableUntil: number = 0;
   private lastConversationPair: Map<string, number> = new Map();
   private narrator!: VillageNarrator;
@@ -51,18 +52,53 @@ export class SimulationEngine {
   private lastWeeklySummaryDay: number = 0;
   private cachedWeeklySummary: string | null = null;
   private weeklySummaryGenerating: boolean = false;
+  /** Shared RdsMemoryStore for agents loaded from persistence — held so cleanup() can be called on removeAgent() */
+  private sharedMemoryStore: RdsMemoryStore | null = null;
+
+  // Circuit breaker state for isDbHealthy() readiness probe.
+  // Prevents log flooding (k8s calls every 10s) while still surfacing the first failure
+  // and the recovery moment — per AWS Well-Architected Operational Excellence BP.
+  private dbHealthFailureCount: number = 0;
+  private dbHealthCircuitOpenAt: number = 0;
+  private static readonly DB_HEALTH_CIRCUIT_THRESHOLD = 3;   // open after 3 consecutive failures
+  private static readonly DB_HEALTH_CIRCUIT_RESET_MS = 30_000; // re-try after 30 s
+
+  // Distributed leader election — only the leader Pod runs the simulation tick loop.
+  // Followers serve HTTP/WS reads from Redis snapshot. No-Redis fallback: always leader.
+  private readonly leaderElection: LeaderElection = new LeaderElection();
+  // Optimistic lock version for world_state row — incremented on each successful save.
+  private worldStateVersion: number = 0;
+  // Guard: true while loadFromRds() is in flight after a VersionConflictError.
+  // Prevents a concurrent save_requested from writing with a stale expectedVersion
+  // before the reload completes and updates worldStateVersion.
+  private isReloadingState: boolean = false;
+  // Deduplicates concurrent loadFromRds() calls — returns the in-flight Promise
+  // instead of starting a second parallel load that could corrupt world state.
+  private _loadFromRdsInFlight: Promise<void> | null = null;
 
   constructor(private io: Server) {
     this.world = new World();
     this.decisionQueue = new DecisionQueue(SimulationEngine.MAX_CONCURRENT_LLM);
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (supabaseUrl && supabaseKey) {
-      this.persistence = new SupabasePersistence(supabaseUrl, supabaseKey);
-      console.log('[Engine] Supabase persistence enabled');
+    const dbHost = process.env.DB_HOST;
+    const dbUser = process.env.DB_USER;
+    const dbPassword = process.env.DB_PASSWORD;
+    if (dbHost && dbUser && dbPassword) {
+      // DB_SSLMODE: 'disable' when connecting via pgBouncer (intra-cluster, no TLS).
+      // 'verify-full' when connecting directly to RDS. Controlled by k8s/01-configmap.yaml.
+      const sslMode = process.env.DB_SSLMODE || 'verify-full';
+      const connStr = `postgresql://${dbUser}:${dbPassword}@${dbHost}:${process.env.DB_PORT || '5432'}/${process.env.DB_NAME || 'aivillage'}?sslmode=${sslMode}`;
+      this.persistence = new RdsPersistence(connStr);
+      console.log('[Engine] RDS persistence enabled');
     } else {
-      console.log('[Engine] Supabase persistence disabled (missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY)');
+      if (process.env.NODE_ENV === 'production') {
+        // In production, all memories are lost on pod restart if RDS is unavailable.
+        // This is a data durability issue — ensure DB_HOST, DB_USER, DB_PASSWORD are set.
+        // (AWS Well-Architected: stateful components must be externalized)
+        console.error('[Engine] FATAL: RDS persistence disabled in production. Set DB_HOST, DB_USER, DB_PASSWORD to prevent data loss on pod restart.');
+        process.exit(1);
+      }
+      console.log('[Engine] RDS persistence disabled — using in-memory store (dev mode only)');
     }
   }
 
@@ -103,11 +139,13 @@ export class SimulationEngine {
       this.storylineDetector = new StorylineDetector(this.world, narratorLlm);
       this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, narratorLlm);
     } else {
-      // Fallback: create with a dummy provider that will just fail gracefully
-      const dummyLlm = this.getThrottledProvider('dummy-key', globalModel);
-      this.narrator = new VillageNarrator(dummyLlm, this.world);
-      this.storylineDetector = new StorylineDetector(this.world, dummyLlm);
-      this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, dummyLlm);
+      // ANTHROPIC_API_KEY not set — narrator/storyline/recap LLM calls will be skipped.
+      // Using '' triggers auth errors on any LLM attempt, which providers handle gracefully.
+      console.warn('[Engine] ANTHROPIC_API_KEY not set — narrator, storyline, and recap features disabled');
+      const noKeyLlm = this.getThrottledProvider('', globalModel);
+      this.narrator = new VillageNarrator(noKeyLlm, this.world);
+      this.storylineDetector = new StorylineDetector(this.world, noKeyLlm);
+      this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, noKeyLlm);
     }
 
     this.characterTimeline = new CharacterTimeline();
@@ -115,13 +153,50 @@ export class SimulationEngine {
     this.broadcaster.setDayGetter(() => this.world.time.day);
 
     // Create conversation manager
-    this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus);
+    this.conversationManager = new ConversationManager(this.world, this.broadcaster, this.bus, this.controllers);
     // Wire bystander notification when conversations end
     this.conversationManager.onConversationEnd = (conv) => this.notifyConversationBystanders(conv);
 
-    // Restore from Supabase if persistence is enabled
+    // Distributed leader election: only one Pod runs the simulation tick loop.
+    // Followers serve HTTP/WS reads; the leader writes state to Redis for them.
+    const leaderAcquired = await this.leaderElection.tryAcquire();
+    console.log(`[Engine] ${leaderAcquired ? 'Leadership acquired' : 'Running as follower'} (podId=${this.leaderElection.podId})`);
+
+    // Callback invoked when heartbeat renewal fails (e.g. Redis TTL expired or evicted).
+    // Pause the simulation immediately so the stale leader doesn't overwrite new state.
+    this.leaderElection.onLeadershipLost = () => {
+      console.error('[Engine] Leadership lost — pausing simulation tick');
+      this.pause();
+      this.isReloadingState = true; // prevent stale saves while state is being refreshed
+      // Poll until we re-acquire; another Pod may already be the leader by then.
+      this.leaderElection.startRetrying(() => {
+        console.log('[Engine] Leadership re-acquired — restarting simulation tick');
+        this.loadFromRds()
+          .then(() => { this.isReloadingState = false; this.start(); })
+          .catch((err: unknown) => {
+            console.error('[Engine] Re-acquire reload failed:', (err as Error).message);
+            this.isReloadingState = false;
+          });
+      });
+    };
+
+    // Non-leader follower: keep polling so it can promote if the leader dies.
+    if (!leaderAcquired) {
+      this.isReloadingState = true; // follower starts in reload-pending state
+      this.leaderElection.startRetrying(() => {
+        console.log('[Engine] Follower promoted to leader — starting simulation tick');
+        this.loadFromRds()
+          .then(() => { this.isReloadingState = false; this.start(); })
+          .catch((err: unknown) => {
+            console.error('[Engine] Follower promotion reload failed:', (err as Error).message);
+            this.isReloadingState = false;
+          });
+      });
+    }
+
+    // Restore from RDS if persistence is enabled
     if (this.persistence) {
-      await this.loadFromSupabase();
+      await this.loadFromRds();
     }
 
     // --- Infra 1: Wire event bus subscriptions ---
@@ -134,10 +209,14 @@ export class SimulationEngine {
       this.decayWorldObjects();
     });
 
-    // Tick controllers
+    // Tick controllers — per-agent try-catch so one bad agent doesn't pause the sim
     this.bus.on('tick', (e) => {
-      for (const controller of this.controllers.values()) {
-        controller.tick(e.time);
+      for (const [agentId, controller] of this.controllers.entries()) {
+        try {
+          controller.tick(e.time);
+        } catch (err) {
+          console.error(`[Engine] controller.tick() threw for agent ${agentId} — skipping:`, (err as Error).message);
+        }
       }
     });
 
@@ -178,7 +257,7 @@ export class SimulationEngine {
           importance: 8,
           timestamp: Date.now(),
           relatedAgentIds: [e.thiefId, e.victimId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (theft witness):', (err as Error).message); });
 
         // Trigger reactive think — witness decides whether to intervene
         const ctrl = this.controllers.get(witness.id);
@@ -186,7 +265,9 @@ export class SimulationEngine {
           void cognition.think(
             `You just saw ${thiefName} steal ${e.item} from ${victimName}.`,
             `You're nearby. They might not have seen you watching.`,
-          ).catch(() => {});
+          ).catch((err: unknown) => {
+            console.warn(`[Engine] Witness think failed for ${witness.id}:`, (err as Error).message);
+          });
         }
       }
       this.broadcaster.agentAction(e.thiefId, `stole ${e.item}`, '\u{1F978}');
@@ -212,7 +293,7 @@ export class SimulationEngine {
           importance: 7,
           timestamp: Date.now(),
           relatedAgentIds: [e.attackerId, e.defenderId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (fight witness):', (err as Error).message); });
       }
     });
 
@@ -243,54 +324,128 @@ export class SimulationEngine {
           importance: 8,
           timestamp: Date.now(),
           relatedAgentIds: [e.agentId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule violation leader):', (err as Error).message); });
 
         // Trigger a reactive think — leader decides how to respond
         void cognition.think(
           `${e.agentName}, a member of ${e.institutionName}, just broke the rule: "${e.rule}". They ${e.action}.`,
           `You are a leader of ${e.institutionName}. You must decide how to respond — warn them, confront them, expel them, or let it slide.`,
-        ).catch(() => {});
+        ).catch((err: unknown) => {
+          console.warn(`[Engine] Leader think failed for ${leaderId}:`, (err as Error).message);
+        });
       }
 
       console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}"`);
     });
 
+    // Agent death — nearby witnesses form a memory and react immediately
+    this.bus.on('agent_died', (e) => {
+      const dead = this.world.getAgent(e.agentId);
+      if (!dead) return;
+      const nearby = this.world.getNearbyAgents(dead.position, 6);
+      for (const witness of nearby) {
+        if (witness.id === e.agentId || witness.alive === false) continue;
+        const cognition = this.cognitions.get(witness.id);
+        const ctrl = this.controllers.get(witness.id);
+        if (!cognition) continue;
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: witness.id,
+          type: 'observation',
+          content: `I witnessed ${dead.config.name} die. Cause: ${e.cause}`,
+          importance: 9,
+          timestamp: Date.now(),
+          relatedAgentIds: [e.agentId],
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (death witness):', (err as Error).message); });
+        if (ctrl) {
+          ctrl.lastTrigger = `${dead.config.name} just died right in front of you! Cause: ${e.cause}. How do you react?`;
+          ctrl.idleTimer = 7;
+        }
+      }
+    });
+
     // Board post reactions — each alive agent generates a 1-2 sentence comment
     this.bus.on('board_post_created', (e) => {
-      void this.generatePostReactions(e.post);
+      void this.generatePostReactions(e.post).catch((err: unknown) => {
+        console.warn('[Engine] generatePostReactions failed:', (err as Error).message);
+      });
     });
 
     // Nightly vote — at hour 21, vote on all pending proposals
     this.bus.on('hour_changed', (e) => {
       if (e.hour === 21) {
-        void this.resolveNightlyVotes();
+        void this.resolveNightlyVotes().catch((err: unknown) => {
+          console.warn('[Engine] resolveNightlyVotes failed:', (err as Error).message);
+        });
       }
     });
 
-    // Periodic save
+    // Periodic save with optimistic locking.
+    // Only the leader Pod writes to RDS; the snapshot is also pushed to Redis so
+    // follower Pods can serve reads without hitting the DB.
     this.bus.on('save_requested', () => {
-      if (this.persistence) {
-        void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-          console.error('[Persistence] Periodic save failed:', err)
-        );
-      }
+      if (!this.persistence) return;
+      if (!this.leaderElection.isLeader) return; // followers must not write world state
+      // Skip if a reload is in flight — worldStateVersion is stale until it completes.
+      if (this.isReloadingState) return;
+
+      const expectedVersion = this.worldStateVersion;
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, expectedVersion)
+        .then((newVersion: number) => {
+          this.worldStateVersion = newVersion;
+          // Publish snapshot to Redis so follower Pods can serve getSnapshot() without RDS.
+          return this.writeRedisSnapshot();
+        })
+        .catch((err: unknown) => {
+          if ((err as Error).name === 'VersionConflictError') {
+            // Another Pod wrote a newer version — reload to get fresh state + current version.
+            // Guard prevents any further saves until the reload is complete.
+            console.error('[Persistence] Version conflict on save — reloading world state');
+            this.isReloadingState = true;
+            void this.loadFromRds()
+              .catch((e: unknown) => {
+                console.error('[Persistence] Reload after version conflict failed:', (e as Error).message);
+              })
+              .finally(() => {
+                this.isReloadingState = false;
+              });
+          } else {
+            console.error('[Persistence] Periodic save failed:', (err as Error).message);
+          }
+        });
     });
 
     console.log(`[Engine] AI Village initialized (no starter agents — users create agents via UI)`);
   }
 
-  private async loadFromSupabase(): Promise<void> {
+  /**
+   * Deduplicated wrapper: if a loadFromRds is already in flight, returns the
+   * same Promise rather than starting a second parallel load that would race
+   * writes to `this.world`, `this.controllers`, and `this.worldStateVersion`.
+   */
+  private loadFromRds(): Promise<void> {
+    if (this._loadFromRdsInFlight) return this._loadFromRdsInFlight;
+    const p = this._execLoadFromRds();
+    this._loadFromRdsInFlight = p;
+    void p.finally(() => { this._loadFromRdsInFlight = null; });
+    return p;
+  }
+
+  private async _execLoadFromRds(): Promise<void> {
     if (!this.persistence) return;
 
     try {
       // Load all data in parallel
-      const [worldData, agents, controllerDataMap] = await Promise.all([
+      const [worldStateResult, agents, controllerDataMap] = await Promise.all([
         this.persistence.loadWorldState(),
         this.persistence.loadAgents(),
         this.persistence.loadAgentControllers(),
       ]);
 
-      if (worldData) {
+      if (worldStateResult) {
+        // Capture the optimistic-lock version so saveAll() can detect concurrent writes.
+        this.worldStateVersion = worldStateResult.version;
+        const worldData = worldStateResult.data;
         this.world.time = worldData.time as typeof this.world.time;
         this.world.weather = worldData.weather as typeof this.world.weather;
         this.world.board = (worldData.board ?? []) as typeof this.world.board;
@@ -312,8 +467,11 @@ export class SimulationEngine {
 
         // Fix 3: Restore emergent world state
         if (worldData.worldObjects && Array.isArray(worldData.worldObjects)) {
-          for (const obj of worldData.worldObjects as any[]) {
-            if (obj && obj.id) this.world.worldObjects.set(obj.id, obj);
+          for (const raw of worldData.worldObjects) {
+            if (raw != null && typeof raw === 'object' && 'id' in raw) {
+              const wo = raw as WorldObject;
+              this.world.worldObjects.set(wo.id, wo);
+            }
           }
         }
         if (worldData.culturalNames) {
@@ -332,43 +490,41 @@ export class SimulationEngine {
           this.world.villageMemory = worldData.villageMemory as typeof this.world.villageMemory;
         }
 
+        // Restore in-progress building projects
+        if (worldData.activeBuildProjects && typeof worldData.activeBuildProjects === 'object') {
+          for (const [key, val] of Object.entries(worldData.activeBuildProjects)) {
+            this.world.activeBuildProjects.set(key, val as typeof this.world.activeBuildProjects extends Map<string, infer V> ? V : never);
+          }
+        }
+
         console.log(`[Engine] World state restored (day ${this.world.time.day}, hour ${this.world.time.hour})`);
       }
 
       if (agents.length === 0) {
-        console.log('[Engine] No agents to restore from Supabase');
+        console.log('[Engine] No agents to restore from RDS');
         return;
       }
 
-      const globalKey = process.env.ANTHROPIC_API_KEY;
-      const globalKey2 = process.env.ANTHROPIC_API_KEY_2;
       const defaultModel = 'claude-haiku-4-5-20251001';
-      const sharedMemoryStore = new SupabaseMemoryStore(this.persistence.client);
+      const sharedMemoryStore = new RdsMemoryStore(this.persistence.pool);
+      this.sharedMemoryStore = sharedMemoryStore;
 
       for (let i = 0; i < agents.length; i++) {
         const agent = agents[i];
         this.world.addAgent(agent);
 
-        // Restore per-agent BYOK key from Supabase; fall back to env var round-robin
+        // Restore per-agent BYOK key from RDS only — no global fallback.
+        // Agents without a BYOK key run with LLM calls silently skipped.
         const ctrlDataForKey = controllerDataMap.get(agent.id);
-        const savedKey = (ctrlDataForKey as any)?.apiKey as string | undefined;
-        const savedModel = (ctrlDataForKey as any)?.model as string | undefined;
+        const savedKey = ctrlDataForKey?.apiKey ?? '';
+        const savedModel = ctrlDataForKey?.model;
 
-        let effectiveKey: string;
-        let keyLabel: string;
-        if (savedKey && savedKey !== 'dummy-key') {
-          // BYOK key persisted — restore it
-          effectiveKey = savedKey;
-          keyLabel = 'BYOK';
-        } else {
-          // No saved key — round-robin across env var keys
-          const useKey2 = globalKey2 && i % 2 === 1;
-          effectiveKey = useKey2 ? globalKey2 : (globalKey || 'dummy-key');
-          keyLabel = useKey2 ? 'KEY_2' : 'KEY_1';
+        if (!savedKey) {
+          console.warn(`[Engine] Agent ${agent.config.name} has no BYOK key — LLM calls will be skipped`);
         }
         const effectiveModel = savedModel || defaultModel;
-        this.agentApiKeys.set(agent.id, { apiKey: effectiveKey, model: effectiveModel });
-        console.log(`[Engine] Agent ${agent.config.name} → ${keyLabel} / ${effectiveModel}`);
+        this.agentApiKeys.set(agent.id, { apiKey: savedKey, model: effectiveModel });
+        console.log(`[Engine] Agent ${agent.config.name} → ${savedKey ? 'BYOK' : 'no-key'} / ${effectiveModel}`);
 
         // Away agents persist but don't get controller/cognition (no LLM calls)
         if (agent.state === 'away') {
@@ -376,14 +532,14 @@ export class SimulationEngine {
           continue;
         }
 
-        // Create cognition with Supabase-backed memory + throttled LLM
-        const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+        // Create cognition with RDS-backed memory + throttled LLM (BYOK key or empty)
+        const llmProvider = this.getThrottledProvider(savedKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
-        const savedParts = (ctrlDataForWorldView as any)?.worldViewParts as WorldViewParts | undefined;
+        const savedParts = ctrlDataForWorldView?.worldViewParts;
         const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts, this.getGameRules());
         // Reset MY EXPERIENCE to prevent stale worldView from previous simulation runs
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
-        const freshParts = buildStartingWorldViewParts(spawnArea as any);
+        const freshParts = buildStartingWorldViewParts(spawnArea);
         cognition.resetExperience(freshParts.myExperience);
         this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
         this.cognitions.set(agent.id, cognition);
@@ -403,6 +559,8 @@ export class SimulationEngine {
           sleepHour,
           homeArea,
           this.createActionExecutor(),
+          this.cognitions,
+          this.controllers,
           this.mapConfig,
         );
         controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
@@ -415,7 +573,7 @@ export class SimulationEngine {
           controller.state = (restoredState === 'moving' || restoredState === 'performing' || restoredState === 'conversing' || restoredState === 'deciding')
             ? 'idle'
             : restoredState;
-          controller.currentGoals = (ctrlData as any).currentGoals ?? [];
+          controller.currentGoals = ctrlData.currentGoals ?? [];
           controller.activityTimer = ctrlData.activityTimer ?? 0;
           controller.conversationCooldown = ctrlData.conversationCooldown ?? 0;
         }
@@ -449,8 +607,6 @@ export class SimulationEngine {
         if (agent.activeConcerns) {
           const seen = new Set<string>();
           agent.activeConcerns = agent.activeConcerns.filter(c => {
-            // Remove resolved
-            if ((c as any).resolved) return false;
             // Deduplicate rules by content
             if (c.category === 'rule') {
               const key = c.content.toLowerCase().slice(0, 80);
@@ -505,7 +661,6 @@ export class SimulationEngine {
       for (const agent of this.world.agents.values()) {
         const overwrite = SOUL_REWRITES[agent.config.name];
         if (overwrite && agent.config.soul !== overwrite.soul) {
-          // Overwrite all soul fields
           agent.config.soul = overwrite.soul;
           agent.config.backstory = overwrite.backstory;
           agent.config.goal = overwrite.goal;
@@ -537,7 +692,6 @@ export class SimulationEngine {
       }
       if (soulMigrationApplied) {
         console.log('[SoulRewrite] Migration applied — triggering fresh start to reset memories/state');
-        // Force all remaining agents to Haiku 4.5
         const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
         for (const agent of this.world.agents.values()) {
           const keyData = this.agentApiKeys.get(agent.id);
@@ -546,19 +700,21 @@ export class SimulationEngine {
             keyData.model = HAIKU_MODEL;
           }
         }
-        // Save updated configs first so freshStart preserves them
         if (this.persistence) {
           await this.persistence.saveAgents(this.world.agents);
         }
         this.refreshNameMaps();
         await this.freshStart();
-        return; // freshStart rebuilds everything, no need to continue loadFromSupabase
+        return;
       }
 
-      console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
+      console.log(`[Engine] Restored ${agents.length} agents from RDS`);
       this.refreshNameMaps();
     } catch (err) {
-      console.error('[Engine] Failed to load from Supabase:', err);
+      // Re-throw so initialize() → process.exit(1) in index.ts.
+      // Starting with an empty world after a DB failure would silently wipe simulation state.
+      console.error('[Engine] Failed to load from RDS — aborting startup:', err);
+      throw err;
     }
   }
 
@@ -620,16 +776,17 @@ export class SimulationEngine {
       });
     }
 
-    // Create cognition stack with per-agent API key (falls back to global env)
-    const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
+    // Create cognition stack with per-agent BYOK key only — no global fallback.
+    const effectiveKey = apiKey ?? '';
     const effectiveModel = model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-    if (effectiveKey) {
-      this.agentApiKeys.set(id, { apiKey: effectiveKey, model: effectiveModel });
+    if (!effectiveKey) {
+      console.warn(`[Engine] Agent ${config.name} added without a BYOK key — LLM calls will be skipped`);
     }
+    this.agentApiKeys.set(id, { apiKey: effectiveKey, model: effectiveModel });
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
-    const llmProvider = this.getThrottledProvider(effectiveKey || 'dummy-key', effectiveModel);
+    const llmProvider = this.getThrottledProvider(effectiveKey ?? '', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRules());
     this.wireFourStreamMemory(cognition, agent, memoryStore);
@@ -649,6 +806,8 @@ export class SimulationEngine {
       sleepHour,
       'plaza',
       this.createActionExecutor(),
+      this.cognitions,
+      this.controllers,
       this.mapConfig,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
@@ -660,7 +819,7 @@ export class SimulationEngine {
       `[Engine] Agent created: ${config.name}${config.occupation ? ' (' + config.occupation + ')' : ''} at ${spawnArea}`,
     );
 
-    // Save agent to Supabase FIRST, then seed memories (FK: memories.agent_id → agents.id)
+    // Save agent to RDS FIRST, then seed memories (FK: memories.agent_id → agents.id)
     const seedMemories = async () => {
       // Use soul (rich character text) when backstory is empty
       const identityText = config.soul || config.backstory || '';
@@ -685,17 +844,10 @@ export class SimulationEngine {
       });
     };
 
-    if (this.persistence) {
-      // Await save + seed so memories exist in Supabase before first decide()
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
-        .then(() => seedMemories())
-        .catch(err => {
-          console.error('[Persistence] Save after addAgent failed:', err);
-          return seedMemories(); // still seed in-memory even if DB fails
-        });
-    } else {
-      void seedMemories();
-    }
+    // Save then seed — memories.agent_id FK requires agents row to exist first.
+    // saveAllFireAndForget keeps worldStateVersion in sync so the next periodic save
+    // does not trigger a spurious VersionConflictError.
+    this.saveAllFireAndForget('addAgent', seedMemories);
 
     this.refreshNameMaps();
     return agent;
@@ -715,6 +867,8 @@ export class SimulationEngine {
     this.cognitions.delete(id);
     this.agentApiKeys.delete(id);
     this.decisionQueue.removeAgent(id);
+    // Free TF-IDF embedder from shared store (prevents memory leak in long-running simulations)
+    this.sharedMemoryStore?.cleanup(id);
 
     // Remove from any active conversations
     for (const conv of this.world.getActiveConversations()) {
@@ -741,7 +895,7 @@ export class SimulationEngine {
     // Broadcast leave
     this.broadcaster.agentLeave(id);
 
-    // Delete from Supabase (CASCADE removes controller + memories)
+    // Delete from RDS (CASCADE removes controller + memories)
     if (this.persistence) {
       void this.persistence.deleteAgent(id).catch(err =>
         console.error('[Persistence] Delete failed:', err)
@@ -782,11 +936,7 @@ export class SimulationEngine {
 
     console.log(`[Engine] Agent suspended: ${agent.config.name}`);
 
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after suspend failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('suspendAgent');
 
     return true;
   }
@@ -795,13 +945,16 @@ export class SimulationEngine {
     const agent = this.world.getAgent(id);
     if (!agent || agent.state !== 'away') return false;
 
-    // Recreate cognition
+    // Recreate cognition with BYOK key only — no global fallback.
     const keyData = this.agentApiKeys.get(id);
-    const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+    const effectiveKey = keyData?.apiKey ?? '';
     const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    if (!effectiveKey) {
+      console.warn(`[Engine] Agent ${id} resumed without a BYOK key — LLM calls will be skipped`);
+    }
 
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
     // Preserve worldViewParts from old cognition if available
@@ -820,6 +973,8 @@ export class SimulationEngine {
       23,
       'plaza',
       this.createActionExecutor(),
+      this.cognitions,
+      this.controllers,
       this.mapConfig,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
@@ -840,11 +995,7 @@ export class SimulationEngine {
 
     console.log(`[Engine] Agent resumed: ${agent.config.name}`);
 
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after resume failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('resumeAgent');
 
     return true;
   }
@@ -899,21 +1050,24 @@ export class SimulationEngine {
 
     // Clear old memories BEFORE creating new store — await to prevent race condition
     if (this.persistence) {
-      const { error } = await this.persistence.client
-        .from('memories')
-        .delete()
-        .eq('agent_id', id);
-      if (error) console.error(`[Engine] Failed to clear memories for ${agent.config.name}:`, error.message);
-      else console.log(`[Engine] Cleared memories for ${agent.config.name} on resurrection`);
+      try {
+        await this.persistence.deleteMemoriesForAgent(id);
+        console.log(`[Engine] Cleared memories for ${agent.config.name} on resurrection`);
+      } catch (err) {
+        console.error(`[Engine] Failed to clear memories for ${agent.config.name}:`, err);
+      }
     }
 
-    // Recreate cognition with fresh worldView — no stale knowledge from past life
+    // Recreate cognition with fresh worldView — BYOK key only, no global fallback.
     const keyData = this.agentApiKeys.get(id);
-    const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+    const effectiveKey = keyData?.apiKey ?? '';
     const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    if (!effectiveKey) {
+      console.warn(`[Engine] Agent ${id} resurrected without a BYOK key — LLM calls will be skipped`);
+    }
 
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
     const spawnArea = this.mapConfig.spawnAreas[
@@ -934,6 +1088,8 @@ export class SimulationEngine {
       23,
       'plaza',
       this.createActionExecutor(),
+      this.cognitions,
+      this.controllers,
       this.mapConfig,
     );
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
@@ -941,7 +1097,7 @@ export class SimulationEngine {
     controller.decisionQueue = this.decisionQueue;
     this.controllers.set(id, controller);
 
-    // Seed fresh-start memories — MUST await so first decide() has grounding in Supabase
+    // Seed fresh-start memories — MUST await so first decide() has grounding in RDS
     const identityText = agent.config.soul || agent.config.backstory || '';
     await cognition.addMemory({
       id: crypto.randomUUID(), agentId: id, type: 'reflection',
@@ -997,11 +1153,7 @@ export class SimulationEngine {
 
     this.refreshNameMaps();
 
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after resurrect failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('resurrectAgent');
 
     return true;
   }
@@ -1022,7 +1174,13 @@ export class SimulationEngine {
     if (this.tickInterval) return;
 
     this.tickInterval = setInterval(() => {
-      this.tick();
+      try {
+        this.tick();
+      } catch (err) {
+        console.error('[Engine] CRITICAL: tick() threw — simulation paused to prevent corrupt state:', err);
+        this.pause();
+        this.io.emit('engine:error', { message: 'Simulation tick failed', error: String(err) });
+      }
     }, 83); // 12x speed: 1 game minute = 83ms real time (~3x previous)
 
     // Infra 3: Decision queue processing loop — dequeue and execute cold-path LLM calls
@@ -1035,6 +1193,9 @@ export class SimulationEngine {
         return;
       }
       ctrl.executeQueuedDecision(decision.type, decision.context)
+        .catch((err: unknown) => {
+          console.warn('[Engine] executeQueuedDecision failed:', (err as Error).message);
+        })
         .finally(() => this.decisionQueue.complete(decision.agentId));
     }, 50);
 
@@ -1070,12 +1231,33 @@ export class SimulationEngine {
       clearInterval(this.decisionInterval);
       this.decisionInterval = null;
     }
+
+    // Capture leadership status BEFORE release() sets _isLeader=false.
+    // Follower Pods must NOT write world state — they hold a stale in-memory copy and
+    // would silently overwrite the leader's authoritative state.
+    const wasLeader = this.leaderElection.isLeader;
+
+    // Release leader lock before closing DB so the next Pod can acquire immediately.
+    // destroy() also stops heartbeat + retry timers.
+    await this.leaderElection.release();
+    this.leaderElection.destroy();
+
     if (this.persistence) {
+      if (wasLeader) {
+        try {
+          // Unconditional upsert (no expectedVersion): safe on graceful shutdown because
+          // release() ran first, so the new leader has not yet started writing.
+          await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+          console.log('[Engine] Final state saved to RDS');
+        } catch (err) {
+          console.error('[Engine] Final save failed:', err);
+        }
+      }
       try {
-        await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
-        console.log('[Engine] Final state saved to Supabase');
+        await this.persistence.pool.end();
+        console.log('[Engine] DB connection pool closed');
       } catch (err) {
-        console.error('[Engine] Final save failed:', err);
+        console.error('[Engine] DB pool close failed:', (err as Error).message);
       }
     }
     console.log('[Engine] Simulation stopped');
@@ -1156,7 +1338,7 @@ export class SimulationEngine {
   private decayWorldObjects(): void {
     const DECAY_MINUTES = 7 * 24 * 60;
     for (const [id, obj] of this.world.worldObjects) {
-      if (this.world.time.totalMinutes - obj.lastInteractedAt > DECAY_MINUTES) {
+      if (this.world.time.totalMinutes - (obj.lastInteractedAt ?? 0) > DECAY_MINUTES) {
         this.world.removeWorldObject(id);
         console.log(`[Engine] WorldObject decayed: "${obj.name}" (no interaction for 7 days)`);
       }
@@ -1201,7 +1383,9 @@ export class SimulationEngine {
         nearby, nearbyAreas,
         nearbyWorldObjects.length > 0 ? nearbyWorldObjects : undefined,
         culturalNames.size > 0 ? culturalNames : undefined,
-      ).catch(() => {});
+      ).catch((err: unknown) => {
+        console.warn(`[Engine] perceive failed for ${agent.id}:`, (err as Error).message);
+      });
     }
   }
 
@@ -1257,7 +1441,7 @@ export class SimulationEngine {
           c1.enterConversation();
           c2.enterConversation();
           console.log(`[Engine] Intentional conversation: ${a1.config.name} <-> ${a2.config.name}${purpose ? ` (purpose: "${purpose.substring(0, 40)}")` : ''}`);
-          return;
+          break; // break inner loop — allow other pairs to start conversations this tick
         }
 
 
@@ -1286,7 +1470,8 @@ export class SimulationEngine {
         })
         .catch((err: unknown) => {
           console.error('[Engine] Error advancing conversation:', err);
-          // Release agents on error
+          // Release agents on error and mark conversation ended to prevent orphaning
+          this.world.endConversation(conv.id);
           for (const pid of conv.participants) {
             const controller = this.controllers.get(pid);
             if (controller) {
@@ -1319,7 +1504,7 @@ export class SimulationEngine {
           importance: 3,
           timestamp: Date.now(),
           relatedAgentIds: conv.participants,
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (bystander):', (err as Error).message); });
       }
     }
   }
@@ -1364,6 +1549,10 @@ export class SimulationEngine {
 
       const season = this.world.weather.season;
       const seasonDef = SEASONS[season];
+      if (!seasonDef) {
+        console.warn(`[Engine] checkSeasonAdvance: unknown season "${season}" — skipping announcement`);
+        return;
+      }
 
       // Board post — agents see this in plan context
       this.world.addBoardPost({
@@ -1391,7 +1580,7 @@ export class SimulationEngine {
           importance: 8,
           timestamp: Date.now(),
           relatedAgentIds: [],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (season change):', (err as Error).message); });
       }
     }
   }
@@ -1498,7 +1687,7 @@ export class SimulationEngine {
         importance: 9,
         timestamp: Date.now(),
         relatedAgentIds: [agentId],
-      });
+      }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (agent death broadcast):', (err as Error).message); });
 
       // Personalized grief concern based on relationship
       const dossier = cognition.fourStream?.getDossier(agentId);
@@ -1523,13 +1712,30 @@ export class SimulationEngine {
 
   getSnapshot(): WorldSnapshot {
     const snapshot = this.world.getSnapshot();
-    // Enrich agents with worldView and sync memory streams from cognition
-    for (const agent of snapshot.agents) {
+    // Enrich agents with worldView and sync memory streams from cognition.
+    // Shallow-copy each agent's config to avoid mutating the originals in world.agents —
+    // deleting private fields from the original would strip soul/backstory from LLM prompts
+    // for the remainder of the process lifetime. (OWASP API3: Broken Object Property Level Auth)
+    for (let i = 0; i < snapshot.agents.length; i++) {
+      const agent = snapshot.agents[i];
       const cognition = this.cognitions.get(agent.id);
       if (cognition) {
         agent.worldView = cognition.worldView;
         cognition.fourStream?.syncAllToAgent();
       }
+      // Shallow-copy config — strip private fields only from the snapshot copy,
+      // keeping the original agent.config intact for LLM prompts.
+      const rawCfg = agent.config as unknown as Record<string, unknown>;
+      const safeCfg = { ...rawCfg };
+      delete safeCfg['soul'];
+      delete safeCfg['backstory'];
+      delete safeCfg['fears'];
+      delete safeCfg['desires'];
+      delete safeCfg['speechPattern'];
+      delete safeCfg['coreValues'];
+      delete safeCfg['contradictions'];
+      delete safeCfg['goal'];
+      snapshot.agents[i] = { ...agent, config: safeCfg as unknown as typeof agent.config };
     }
     snapshot.narratives = this.narrator.getRecentNarratives();
     snapshot.storylines = this.storylineDetector.getStorylines();
@@ -1549,7 +1755,15 @@ export class SimulationEngine {
         state: a.state,
         currentAction: a.currentAction,
         mood: a.mood ?? 'neutral',
-        config: a.config,
+        // Cherry-pick only public fields — same policy as getSnapshot() and /api/agents.
+        // OWASP API3:2023: never expose soul/backstory/fears/desires/speechPattern via any path.
+        config: {
+          name: a.config.name,
+          age: a.config.age,
+          occupation: a.config.occupation,
+          personality: a.config.personality,
+          spriteId: a.config.spriteId,
+        },
       }));
   }
 
@@ -1572,7 +1786,8 @@ export class SimulationEngine {
         `Currently: ${agent.currentAction || 'idle'}. Mood: ${agent.mood}. Location: ${agent.state}.`
       );
       return output.thought || null;
-    } catch {
+    } catch (err) {
+      console.warn(`[Engine] generateAgentThought failed for ${agentId}:`, (err as Error).message);
       return null;
     }
   }
@@ -1615,9 +1830,9 @@ export class SimulationEngine {
       const controller = this.controllers.get(agentId);
       if (controller?.apiExhausted) continue;
       // Skip agents who are busy
-      if ((controller as any)?.state === 'conversing' ||
-          (controller as any)?.state === 'deciding' ||
-          (controller as any)?.state === 'reflecting') continue;
+      if (controller?.state === 'conversing' ||
+          controller?.state === 'deciding' ||
+          controller?.state === 'reflecting') continue;
       eligible.push(agentId);
     }
 
@@ -1714,7 +1929,7 @@ export class SimulationEngine {
       if (controller?.apiExhausted) continue;
 
       // Skip agents in conversation — they're busy
-      if ((controller as any)?.state === 'conversing') {
+      if (controller?.state === 'conversing') {
         console.log(`[RuleVote] ${agent.config.name} abstained (in conversation)`);
         continue;
       }
@@ -1792,7 +2007,7 @@ Answer with ONLY one word: "support" or "oppose".`,
           id: crypto.randomUUID(), agentId, type: 'action_outcome',
           content: `I voted ${vote === 'like' ? 'for' : 'against'} ${proposerName}'s rule: "${rulePost.content.slice(0, 60)}"`,
           importance: 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule vote):', (err as Error).message); });
 
         this.broadcaster.agentAction(agentId, `voted ${vote === 'like' ? 'for' : 'against'} ${proposerName}'s rule`);
       } catch (err) {
@@ -1869,7 +2084,7 @@ Answer with ONLY one word: "support" or "oppose".`,
               : `Vote passed (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`,
             importance: id === rulePost.authorId ? 9 : 7,
             timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
-          });
+          }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule passed):', (err as Error).message); });
         }
       }
 
@@ -1948,7 +2163,7 @@ Answer with ONLY one word: "support" or "oppose".`,
             ? `My rule was REJECTED (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`
             : `Vote rejected (${likeCount}-${dislikeCount}): "${rulePost.content.slice(0, 50)}". ${voteBreakdown}`,
           importance: isProposer ? 9 : 5, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
-        });
+        }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (rule rejected):', (err as Error).message); });
       }
 
       // Personalized post-vote concerns for rejected rules
@@ -2172,6 +2387,8 @@ Answer with ONLY one word: "support" or "oppose".`,
         ).then((outcomeDesc: string) => {
           const controller = this.controllers.get(actorId);
           if (controller) controller.lastOutcomeDescription = outcomeDesc;
+        }).catch((err: unknown) => {
+          console.warn('[Engine] executeSocialAction failed:', (err as Error).message);
         });
       },
       requestConversation: requestConv,
@@ -2188,7 +2405,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     // Create new provider and cognition — preserve worldViewParts
     const llmProvider = this.getThrottledProvider(newApiKey, newModel);
     const memoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRules());
@@ -2206,12 +2423,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       this.resumeAgent(agentId);
     }
 
-    // Save to persistence
-    if (this.persistence) {
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys).catch(err =>
-        console.error('[Persistence] Save after API key update failed:', err)
-      );
-    }
+    this.saveAllFireAndForget('updateAgentApiKey');
 
     console.log(`[Engine] API key updated for ${agent.config.name} (model: ${newModel})`);
     return true;
@@ -2222,41 +2434,49 @@ Answer with ONLY one word: "support" or "oppose".`,
    * Keeps agents (same configs, same API keys) but erases all accumulated state.
    */
   async freshStart(): Promise<void> {
+    // Only the leader Pod may wipe world state. A follower calling this would
+    // corrupt the RDS row that the leader is actively reading/writing.
+    if (!this.leaderElection.isLeader) {
+      throw new Error('[Engine] freshStart() called on a follower Pod — only the leader may reset world state');
+    }
+    // Block periodic saves for the duration of the wipe so save_requested cannot
+    // interleave with the DELETE+INSERT sequence inside freshStart.
+    // try-finally guarantees the flag is cleared even if an exception is thrown
+    // mid-way (e.g. RDS write fails during memory seeding), preventing a permanent
+    // stall of the persistence layer.
+    this.isReloadingState = true;
     const wasRunning = this.isRunning;
     this.pause();
     console.log('[Engine] Fresh start — wiping world state and memories');
+    try {
 
     // 0. Kill old controllers/cognitions FIRST to stop all in-flight writes
     this.controllers.clear();
     this.cognitions.clear();
     if (this.decisionQueue) this.decisionQueue.clear();
 
-    // Let any in-flight Supabase writes from the old life settle
+    // Let any in-flight RDS writes from the old life settle
     await new Promise(resolve => setTimeout(resolve, 2000));
     console.log('[FreshStart] Old controllers cleared, in-flight writes settled');
 
-    // 1. Wipe Supabase data (memories, world_state, agent_controllers) but keep agent rows
+    // 1. Wipe RDS data (memories, world_state, agent_controllers) but keep agent rows
     if (this.persistence) {
-      // Delete all memories
-      const { error: memErr } = await this.persistence.client
-        .from('memories')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000'); // delete all rows
-      if (memErr) console.error('[FreshStart] Failed to delete memories:', memErr.message);
-      else console.log('[FreshStart] All memories deleted');
-
-      // Reset world state to empty
-      const { error: wsErr } = await this.persistence.client
-        .from('world_state')
-        .upsert({ id: 'current', data: {}, updated_at: new Date().toISOString() });
-      if (wsErr) console.error('[FreshStart] Failed to reset world_state:', wsErr.message);
-
-      // Delete agent controllers (will be recreated)
-      const { error: ctrlErr } = await this.persistence.client
-        .from('agent_controllers')
-        .delete()
-        .neq('agent_id', '00000000-0000-0000-0000-000000000000');
-      if (ctrlErr) console.error('[FreshStart] Failed to delete controllers:', ctrlErr.message);
+      try {
+        await this.persistence.deleteAllMemories();
+        console.log('[FreshStart] All memories deleted');
+      } catch (err) {
+        console.error('[FreshStart] Failed to delete memories:', err);
+      }
+      try {
+        await this.persistence.resetWorldState();
+      } catch (err) {
+        console.error('[FreshStart] Failed to reset world_state:', err);
+      }
+      try {
+        await this.persistence.deleteAllControllers();
+      } catch (err) {
+        console.error('[FreshStart] Failed to delete controllers:', err);
+      }
     }
 
     // 2. Reset world to day 1
@@ -2289,10 +2509,15 @@ Answer with ONLY one word: "support" or "oppose".`,
     this.cognitions.clear();
     this.lastConversationPair.clear();
     this.tickCount = 0;
+    this.weatherStableUntil = 0;
+    this.lastWeeklySummaryDay = 0;
+    this.cachedWeeklySummary = null;
+    this.weeklySummaryGenerating = false;
 
     const sharedMemoryStore = this.persistence
-      ? new SupabaseMemoryStore(this.persistence.client)
+      ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
+    this.sharedMemoryStore = sharedMemoryStore instanceof RdsMemoryStore ? sharedMemoryStore : null;
 
     for (const agent of this.world.agents.values()) {
       // Reset agent state
@@ -2317,17 +2542,20 @@ Answer with ONLY one word: "support" or "oppose".`,
       agent.institutionIds = [];
       agent.joinedDay = 1;
 
-      // Recreate cognition with fresh worldView
+      // Recreate cognition with fresh worldView — BYOK key only, no global fallback.
       const keyData = this.agentApiKeys.get(agent.id);
-      const effectiveKey = keyData?.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy-key';
+      const effectiveKey = keyData?.apiKey ?? '';
       const effectiveModel = keyData?.model || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+      if (!effectiveKey) {
+        console.warn(`[Engine] Agent ${agent.config.name} fresh-started without a BYOK key — LLM calls will be skipped`);
+      }
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
       const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts, this.getGameRules());
       this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
-      // Seed identity memories — await so they exist in Supabase before first decide()
+      // Seed identity memories — await so they exist in RDS before first decide()
       const identityText = agent.config.soul || agent.config.backstory || '';
       await cognition.addMemory({
         id: crypto.randomUUID(), agentId: agent.id, type: 'reflection',
@@ -2351,7 +2579,10 @@ Answer with ONLY one word: "support" or "oppose".`,
       // Create fresh controller
       const controller = new AgentController(
         agent, cognition, this.world, this.broadcaster, 7, 23, 'plaza',
-        this.createActionExecutor(), this.mapConfig,
+        this.createActionExecutor(),
+        this.cognitions,
+        this.controllers,
+        this.mapConfig,
       );
       controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
       controller.bus = this.bus;
@@ -2363,11 +2594,12 @@ Answer with ONLY one word: "support" or "oppose".`,
 
     this.refreshNameMaps();
 
-    // 4. Save fresh state to Supabase
+    // 4. Save fresh state to RDS
     if (this.persistence) {
       try {
-        await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
-        console.log('[FreshStart] Fresh state saved to Supabase');
+        const newVersion = await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+        this.worldStateVersion = newVersion;
+        console.log('[FreshStart] Fresh state saved to RDS');
       } catch (err) {
         console.error('[FreshStart] Save failed:', err);
       }
@@ -2376,10 +2608,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     // 5. Final cleanup — delete any stale memories that landed after first wipe, then re-seed
     if (this.persistence) {
       // Nuke everything
-      await this.persistence.client
-        .from('memories')
-        .delete()
-        .neq('id', '00000000-0000-0000-0000-000000000000');
+      await this.persistence.deleteAllMemories();
       // Re-seed identity memories for all agents
       for (const [agentId, cognition] of this.cognitions.entries()) {
         const agent = this.world.getAgent(agentId);
@@ -2399,12 +2628,15 @@ Answer with ONLY one word: "support" or "oppose".`,
       console.log('[FreshStart] Final cleanup + re-seed complete');
     }
 
-    // 6. Resume if was running
-    if (wasRunning) {
-      this.start();
+      // 6. Resume if was running
+      if (wasRunning) {
+        this.start();
+      }
+      console.log('[Engine] Fresh start complete — day 1, all agents reset');
+    } finally {
+      // Always re-enable periodic saves — even if an exception aborted the wipe.
+      this.isReloadingState = false;
     }
-
-    console.log('[Engine] Fresh start complete — day 1, all agents reset');
   }
 
   get isConfigured(): boolean {
@@ -2414,6 +2646,120 @@ Answer with ONLY one word: "support" or "oppose".`,
 
   get isRunning(): boolean {
     return this.tickInterval !== null;
+  }
+
+  /** True when this Pod holds the Redis leader lock (or Redis is not configured). */
+  get isLeader(): boolean {
+    return this.leaderElection.isLeader;
+  }
+
+  /**
+   * Fire-and-forget save that keeps worldStateVersion in sync after unconditional upserts.
+   *
+   * Every saveAll() call (addAgent, suspend, resume, resurrect, apikey update) increments
+   * the version column in DB via unconditional upsert. If we don't mirror that increment
+   * in this.worldStateVersion, the next periodic save (save_requested) would present a
+   * stale expectedVersion → VersionConflictError → unnecessary reload loop.
+   *
+   * @param label  Short descriptor for error log context.
+   * @param then   Optional async continuation (e.g. seedMemories).
+   */
+  private saveAllFireAndForget(label: string, then?: () => Promise<void>): void {
+    if (!this.persistence) {
+      if (then) void then();
+      return;
+    }
+    void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
+      .then((newVersion: number) => {
+        this.worldStateVersion = newVersion;
+        if (then) return then();
+      })
+      .catch((err: unknown) => {
+        console.error(`[Persistence] Save after ${label} failed:`, (err as Error).message);
+        // Do NOT call then() here. If persistence is enabled, `then` is typically
+        // seedMemories() which writes to RDS via memories.agent_id FK. If the
+        // agent row was not persisted due to this failure, FK constraint violation
+        // would follow immediately.
+      });
+  }
+
+  /**
+   * Write the current world snapshot to Redis so follower Pods can serve
+   * read-only API responses (getSnapshot, agent list, board, etc.) without
+   * touching the DB or diverging from the leader's authoritative state.
+   *
+   * Key: ai-village:world:snapshot  TTL: 120 s
+   * If Redis is unavailable the failure is logged but does not throw — followers
+   * will fall back to their last cached snapshot or return stale data, which is
+   * acceptable for a read-only view.
+   */
+  private async writeRedisSnapshot(): Promise<void> {
+    const redis = getRedis();
+    if (!redis) return; // single-Pod dev mode — no Redis, nothing to write
+
+    try {
+      const snapshot = this.getSnapshot();
+      await redis.set(
+        'ai-village:world:snapshot',
+        JSON.stringify(snapshot),
+        'EX',
+        120,
+      );
+    } catch (err) {
+      // Non-fatal: followers serve the previous snapshot until the next write.
+      console.error('[Engine] writeRedisSnapshot failed:', (err as Error).message);
+    }
+  }
+
+  /**
+   * Readiness check: verify the DB pool can serve a query.
+   * Used by /api/ready (readinessProbe) so k8s removes the Pod from
+   * Service traffic on DB outage without restarting it (livenessProbe is separate).
+   *
+   * Circuit-breaker pattern (AWS Well-Architected OE + OWASP Logging 7.1):
+   *   - Circuit opens after DB_HEALTH_CIRCUIT_THRESHOLD consecutive failures.
+   *   - While open, return false immediately without hitting DB (avoids pile-on).
+   *   - Log only the 1st failure, the circuit-open event, and recovery — not every probe.
+   */
+  async isDbHealthy(): Promise<boolean> {
+    if (!this.persistence) return true; // no persistence configured — always ready
+
+    // Circuit open: suppress DB calls until reset timeout expires
+    if (this.dbHealthCircuitOpenAt > 0) {
+      if (Date.now() - this.dbHealthCircuitOpenAt < SimulationEngine.DB_HEALTH_CIRCUIT_RESET_MS) {
+        return false;
+      }
+      // Reset — allow one probe through to check recovery
+      this.dbHealthCircuitOpenAt = 0;
+    }
+
+    try {
+      await this.persistence.pool.query('SELECT 1');
+      if (this.dbHealthFailureCount > 0) {
+        console.info('[DbHealth] Database connection restored after', this.dbHealthFailureCount, 'failure(s)');
+        this.dbHealthFailureCount = 0;
+      }
+      return true;
+    } catch (err) {
+      this.dbHealthFailureCount++;
+
+      if (this.dbHealthFailureCount === 1) {
+        console.error('[DbHealth] Database health check failed:', (err as Error).message);
+      }
+      if (this.dbHealthFailureCount >= SimulationEngine.DB_HEALTH_CIRCUIT_THRESHOLD) {
+        this.dbHealthCircuitOpenAt = Date.now();
+        console.error(
+          '[DbHealth] Circuit breaker opened after',
+          this.dbHealthFailureCount,
+          'consecutive failures — suppressing further DB probes for',
+          SimulationEngine.DB_HEALTH_CIRCUIT_RESET_MS / 1_000,
+          's',
+        );
+        this.dbHealthFailureCount = 0; // reset so next half-open probe counts from 1 again
+      }
+
+      return false;
+    }
   }
 }
 

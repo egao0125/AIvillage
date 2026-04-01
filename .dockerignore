@@ -1,6 +1,6 @@
 node_modules
 dist
-.env
+.env*
 *.log
 .DS_Store
 .git
@@ -8,6 +8,8 @@ dist
 docs
 assets
 scripts
+tasks
 CONTRIBUTING.md
 LICENSE
 README.md
+fly.toml
