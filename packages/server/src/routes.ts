@@ -597,13 +597,13 @@ Relationships: ${mentalModels}`;
     res.json({ maps });
   });
 
-  router.post('/api/config/map', (req, res) => {
+  router.post('/api/config/map', async (req, res) => {
     const { mapId } = req.body;
     if (!mapId || !MAP_REGISTRY[mapId]) {
       res.status(400).json({ error: 'Unknown map' });
       return;
     }
-    engine.setMapConfig(mapId);
+    await engine.setMapConfig(mapId);
     res.json({ ok: true, mapId });
   });
 

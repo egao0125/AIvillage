@@ -104,11 +104,51 @@ export class SimulationEngine {
 
   private cachedGameRules: string | null = null;
 
-  setMapConfig(mapId: string): void {
+  async setMapConfig(mapId: string): Promise<void> {
+    const oldMapId = this.mapConfig.id;
+    if (mapId === oldMapId) return;
+
+    const wasRunning = this.isRunning;
+    this.pause();
+
+    // 1. Save current map's state to DB
+    if (this.persistence && this.leaderElection.isLeader) {
+      try {
+        const newVersion = await this.persistence.saveAll(
+          this.world, this.controllers, this.agentApiKeys, oldMapId,
+        );
+        this.worldStateVersion = newVersion;
+        console.log(`[Engine] Saved ${oldMapId} state before switching`);
+      } catch (err) {
+        console.error(`[Engine] Failed to save ${oldMapId} state:`, (err as Error).message);
+      }
+    }
+
+    // 2. Clear in-memory state
+    this.controllers.clear();
+    this.cognitions.clear();
+    this.throttles.clear();
+    if (this.decisionQueue) this.decisionQueue.clear();
+    this.world.agents.clear();
+    this.world.conversations.clear();
+    this.lastConversationPair.clear();
+    this.worldStateVersion = 0;
+
+    // 3. Switch map config + provider
     this.mapConfig = getMapConfig(mapId);
-    this.cachedGameRules = null; // invalidate cache
-    setActiveMap(mapId); // switch map provider for pathfinding/areas
+    this.cachedGameRules = null;
+    setActiveMap(mapId);
     console.log(`[Engine] Map set to: ${this.mapConfig.name} (${this.mapConfig.id})`);
+
+    // 4. Load new map's state from DB
+    if (this.persistence) {
+      await this.loadFromRds();
+    }
+
+    // 5. Resume if was running
+    if (wasRunning) {
+      this.start();
+    }
   }
 
   private getGameRules(): string {
