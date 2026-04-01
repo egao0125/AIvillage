@@ -40,8 +40,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 12,
-        padding: '14px 16px',
+        gap: 8,
+        padding: '8px 12px',
         cursor: 'pointer',
         background: selected ? COLORS.bgHover : 'transparent',
         borderLeft: selected
@@ -62,15 +62,15 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       {/* Agent avatar circle */}
       <div
         style={{
-          width: 40,
-          height: 40,
+          width: 28,
+          height: 28,
           borderRadius: '50%',
           background: isDead ? '#333' : isAway ? '#555' : color,
-          border: '2px solid rgba(255,255,255,0.2)',
+          border: '1px solid rgba(255,255,255,0.2)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: '16px',
+          fontSize: '11px',
           fontWeight: 'bold',
           flexShrink: 0,
           opacity: isDead || isAway ? 0.5 : 1,
@@ -83,9 +83,9 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         <div
           style={{
             fontFamily: FONTS.pixel,
-            fontSize: '11px',
+            fontSize: '8px',
             color: COLORS.text,
-            marginBottom: 4,
+            marginBottom: 2,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -95,7 +95,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           {repScore !== 0 && (
             <span style={{
               marginLeft: 6,
-              fontSize: '9px',
+              fontSize: '7px',
               fontFamily: FONTS.pixel,
               color: repScore > 0 ? COLORS.active : COLORS.warning,
             }}>
@@ -106,7 +106,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         <div
           style={{
             fontFamily: FONTS.body,
-            fontSize: '13px',
+            fontSize: '11px',
             color: COLORS.textDim,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
