@@ -57,6 +57,9 @@ export class ArenaScene extends Phaser.Scene {
       map.addTilesetImage('Tileset_Ground', 'Tileset_Ground'),
       map.addTilesetImage('Tileset_Sand', 'Tileset_Sand'),
       map.addTilesetImage('Tileset_Road', 'Tileset_Road'),
+      map.addTilesetImage('Atlas_Trees_Bushes', 'Atlas_Trees_Bushes'),
+      map.addTilesetImage('Atlas_Rocks', 'Atlas_Rocks'),
+      map.addTilesetImage('Tileset_Shadow', 'Tileset_Shadow'),
     ].filter((ts): ts is Phaser.Tilemaps.Tileset => ts !== null);
 
     if (tilesets.length === 0) {
@@ -65,11 +68,13 @@ export class ArenaScene extends Phaser.Scene {
     }
 
     // Create all layers from the TMJ dynamically (user may add more in Tiled)
-    for (const layerData of map.layers) {
+    // Depth: Ground=0, Vegetation=1, Structures=2 (agents at 10, labels at 2000+)
+    for (let i = 0; i < map.layers.length; i++) {
+      const layerData = map.layers[i];
       const layer = map.createLayer(layerData.name, tilesets);
       if (layer) {
         layer.setScale(2); // 16px tiles → 32px display
-        layer.setDepth(0);
+        layer.setDepth(i);
       }
     }
 
