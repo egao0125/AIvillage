@@ -1,7 +1,7 @@
 import React from 'react';
 import { useActiveMode } from '../../core/hooks';
 import { TopNav } from './TopNav';
-import { App as WatchContent } from '../App';
+import { WatchView } from './WatchView';
 import { COLORS, FONTS } from '../styles';
 
 const Placeholder: React.FC<{ mode: string }> = ({ mode }) => (
@@ -37,7 +37,7 @@ export const AppShell: React.FC = () => {
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      {activeMode === 'watch' && <WatchContent />}
+      {activeMode === 'watch' && <WatchView />}
       {activeMode === 'inspect' && <Placeholder mode="inspect" />}
       {activeMode === 'analyze' && <Placeholder mode="analyze" />}
     </div>

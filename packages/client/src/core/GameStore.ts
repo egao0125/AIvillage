@@ -53,6 +53,13 @@ interface GameState {
   actionLog: Map<string, ActionLogEntry[]>;
   socialViewOpen: boolean;
   activeMode: 'watch' | 'inspect' | 'analyze';
+  inspectTarget: InspectTarget | null;
+}
+
+export interface InspectTarget {
+  type: 'agent' | 'relationship' | 'event' | 'location' | 'institution';
+  id: string;
+  secondaryId?: string;
 }
 
 export interface ChatEntry {
@@ -99,6 +106,7 @@ class GameStore {
     actionLog: new Map(),
     socialViewOpen: false,
     activeMode: 'watch',
+    inspectTarget: null,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -582,6 +590,20 @@ class GameStore {
 
   setMode(mode: 'watch' | 'inspect' | 'analyze'): void {
     this.state = { ...this.state, activeMode: mode };
+    this.notify();
+  }
+
+  inspectAgent(agentId: string): void {
+    this.state = {
+      ...this.state,
+      activeMode: 'inspect',
+      inspectTarget: { type: 'agent', id: agentId },
+    };
+    this.notify();
+  }
+
+  backToWatch(): void {
+    this.state = { ...this.state, activeMode: 'watch', inspectTarget: null };
     this.notify();
   }
 

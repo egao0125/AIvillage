@@ -1,0 +1,194 @@
+import React, { useEffect, useRef, useState } from 'react';
+import Phaser from 'phaser';
+import { createGameConfig } from '../../game/config';
+import { COLORS, FONTS } from '../styles';
+import { TopNav } from './TopNav';
+import { SetupPage } from '../components/SetupPage';
+import { SpectatorChat } from '../components/SpectatorChat';
+import { NarrativeBar } from '../components/NarrativeBar';
+import { AgentRoster } from '../components/AgentRoster';
+import { VillageInfo } from '../components/VillageInfo';
+import { CharacterPage } from '../components/CharacterPage';
+import { RecapOverlay } from '../components/RecapOverlay';
+import { DevPanel } from '../components/DevPanel';
+import { SocialView } from '../social/SocialView';
+import { EventFeed } from '../feed/EventFeed';
+import { connectSocket } from '../../network/socket';
+import { useCharacterPageAgentId, useActiveRecap, useSocialViewOpen } from '../../core/hooks';
+
+const EVENT_FEED_WIDTH = 380;
+const DEV_TOOLS_ENABLED = true;
+
+export const WatchView: React.FC = () => {
+  const [entered, setEntered] = useState(false);
+  const [eventFeedOpen, setEventFeedOpen] = useState(true);
+  const [showSetup, setShowSetup] = useState(false);
+  const gameContainerRef = useRef<HTMLDivElement>(null);
+  const gameRef = useRef<Phaser.Game | null>(null);
+
+  const handleEnter = () => {
+    connectSocket();
+    setEntered(true);
+  };
+
+  useEffect(() => {
+    if (entered && gameContainerRef.current && !gameRef.current) {
+      const config = createGameConfig('game-container');
+      gameRef.current = new Phaser.Game(config);
+    }
+
+    return () => {
+      gameRef.current?.destroy(true);
+      gameRef.current = null;
+    };
+  }, [entered]);
+
+  const characterPageAgentId = useCharacterPageAgentId();
+  const activeRecap = useActiveRecap();
+  const socialViewOpen = useSocialViewOpen();
+
+  if (!entered) {
+    return <SetupPage onEnter={handleEnter} />;
+  }
+
+  const feedWidth = eventFeedOpen ? EVENT_FEED_WIDTH : 0;
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
+      {/* Canvas fills everything behind the panels */}
+      <div
+        id="game-container"
+        ref={gameContainerRef}
+        style={{ width: '100%', height: '100%' }}
+      />
+
+      {/* Top nav with mode selector */}
+      <TopNav />
+
+      {/* Overlay buttons on canvas */}
+      <AgentRoster />
+      <VillageInfo />
+
+      {/* Event Feed panel — right side */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: feedWidth,
+        zIndex: 10,
+        transition: 'width 0.25s ease',
+        overflow: 'hidden',
+        background: COLORS.bg,
+        borderLeft: eventFeedOpen ? `1px solid ${COLORS.border}` : 'none',
+      }}>
+        <div style={{
+          padding: '10px 14px',
+          borderBottom: `1px solid ${COLORS.border}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
+            EVENT FEED
+          </span>
+          <button
+            onClick={() => setEventFeedOpen(false)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: COLORS.textDim,
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontFamily: FONTS.body,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ height: 'calc(100% - 42px)', overflowY: 'auto' }}>
+          <EventFeed />
+        </div>
+      </div>
+
+      {/* Event Feed toggle when closed */}
+      {!eventFeedOpen && (
+        <button
+          onClick={() => setEventFeedOpen(true)}
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: 70,
+            width: 24,
+            height: 48,
+            background: COLORS.bg,
+            border: `1px solid ${COLORS.border}`,
+            borderRight: 'none',
+            borderRadius: '6px 0 0 6px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: COLORS.accent,
+            fontFamily: FONTS.pixel,
+            fontSize: '12px',
+            zIndex: 11,
+            padding: 0,
+          }}
+        >
+          ◀
+        </button>
+      )}
+
+      {/* Narrative bar — inline at bottom */}
+      <div style={{
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: feedWidth,
+        zIndex: 15,
+        transition: 'right 0.25s ease',
+      }}>
+        <NarrativeBar inline />
+      </div>
+
+      {/* Spectator chat — bottom-left */}
+      <div style={{ position: 'absolute', bottom: 8, left: 8, zIndex: 20 }}>
+        <SpectatorChat inline />
+      </div>
+
+      {/* Add agent button */}
+      <button
+        onClick={() => setShowSetup(true)}
+        style={{
+          position: 'absolute',
+          top: 14,
+          left: 200,
+          padding: '6px 14px',
+          background: COLORS.bg,
+          border: `1px solid ${COLORS.border}`,
+          borderRadius: 4,
+          cursor: 'pointer',
+          color: COLORS.textDim,
+          fontFamily: FONTS.pixel,
+          fontSize: '8px',
+          letterSpacing: 1,
+          zIndex: 10,
+        }}
+      >
+        + ADD AGENT
+      </button>
+
+      {/* Overlays — kept as-is */}
+      {characterPageAgentId && <CharacterPage />}
+      {activeRecap && <RecapOverlay />}
+      {socialViewOpen && <SocialView />}
+      {showSetup && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 100, overflowY: 'auto' }}>
+          <SetupPage onEnter={() => setShowSetup(false)} />
+        </div>
+      )}
+      {DEV_TOOLS_ENABLED && <DevPanel />}
+    </div>
+  );
+};
