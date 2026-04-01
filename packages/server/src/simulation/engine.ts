@@ -4,7 +4,7 @@ import { EventBus } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import type { MapConfig } from '@ai-village/shared';
-import { getAreaEntrance } from '../map/village.js';
+import { getAreaEntrance, setActiveMap } from '../map/map-provider.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
 import { World } from './world.js';
 import { EventBroadcaster } from './events.js';
@@ -12,9 +12,8 @@ import { ConversationManager } from './conversation/index.js';
 import { AgentController } from './agent-controller.js';
 import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
-import { AREAS } from '../map/village.js';
+import { getAreas } from '../map/map-provider.js';
 import { RdsPersistence, type ControllerData, VersionConflictError } from '../persistence/rds.js';
-import { SupabasePersistence } from '../persistence/supabase.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
 import { CharacterTimeline } from './character-timeline.js';
@@ -44,7 +43,6 @@ export class SimulationEngine {
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
   private persistence: RdsPersistence | null = null;
-  private supabaseFallback: SupabasePersistence | null = null;
   private weatherStableUntil: number = 0;
   private lastConversationPair: Map<string, number> = new Map();
   private narrator!: VillageNarrator;
@@ -100,24 +98,57 @@ export class SimulationEngine {
         console.error('[Engine] FATAL: RDS persistence disabled in production. Set DB_HOST, DB_USER, DB_PASSWORD to prevent data loss on pod restart.');
         process.exit(1);
       }
-      // Fallback: try Supabase for read-only data restore (local dev)
-      const supabaseUrl = process.env.SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (supabaseUrl && supabaseKey) {
-        this.supabaseFallback = new SupabasePersistence(supabaseUrl, supabaseKey);
-        console.log('[Engine] Supabase fallback enabled (read-only data restore)');
-      } else {
-        console.log('[Engine] RDS persistence disabled — using in-memory store (dev mode only)');
-      }
+      console.log('[Engine] RDS persistence disabled — using in-memory store (dev mode only)');
     }
   }
 
   private cachedGameRules: string | null = null;
 
-  setMapConfig(mapId: string): void {
+  async setMapConfig(mapId: string): Promise<void> {
+    const oldMapId = this.mapConfig.id;
+    if (mapId === oldMapId) return;
+
+    const wasRunning = this.isRunning;
+    this.pause();
+
+    // 1. Save current map's state to DB
+    if (this.persistence && this.leaderElection.isLeader) {
+      try {
+        const newVersion = await this.persistence.saveAll(
+          this.world, this.controllers, this.agentApiKeys, oldMapId,
+        );
+        this.worldStateVersion = newVersion;
+        console.log(`[Engine] Saved ${oldMapId} state before switching`);
+      } catch (err) {
+        console.error(`[Engine] Failed to save ${oldMapId} state:`, (err as Error).message);
+      }
+    }
+
+    // 2. Clear in-memory state
+    this.controllers.clear();
+    this.cognitions.clear();
+    this.throttles.clear();
+    if (this.decisionQueue) this.decisionQueue.clear();
+    this.world.agents.clear();
+    this.world.conversations.clear();
+    this.lastConversationPair.clear();
+    this.worldStateVersion = 0;
+
+    // 3. Switch map config + provider
     this.mapConfig = getMapConfig(mapId);
-    this.cachedGameRules = null; // invalidate cache
+    this.cachedGameRules = null;
+    setActiveMap(mapId);
     console.log(`[Engine] Map set to: ${this.mapConfig.name} (${this.mapConfig.id})`);
+
+    // 4. Load new map's state from DB
+    if (this.persistence) {
+      await this.loadFromRds();
+    }
+
+    // 5. Resume if was running
+    if (wasRunning) {
+      this.start();
+    }
   }
 
   private getGameRules(): string {
@@ -206,9 +237,6 @@ export class SimulationEngine {
     // Restore from RDS if persistence is enabled
     if (this.persistence) {
       await this.loadFromRds();
-    } else if (this.supabaseFallback) {
-      // Local dev: restore read-only data from Supabase
-      await this._loadFromSupabase();
     }
 
     // --- Infra 1: Wire event bus subscriptions ---
@@ -402,7 +430,7 @@ export class SimulationEngine {
       if (this.isReloadingState) return;
 
       const expectedVersion = this.worldStateVersion;
-      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, expectedVersion)
+      void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id, expectedVersion)
         .then((newVersion: number) => {
           this.worldStateVersion = newVersion;
           // Publish snapshot to Redis so follower Pods can serve getSnapshot() without RDS.
@@ -448,10 +476,11 @@ export class SimulationEngine {
 
     try {
       // Load all data in parallel
+      const mapId = this.mapConfig.id;
       const [worldStateResult, agents, controllerDataMap] = await Promise.all([
-        this.persistence.loadWorldState(),
-        this.persistence.loadAgents(),
-        this.persistence.loadAgentControllers(),
+        this.persistence.loadWorldState(mapId),
+        this.persistence.loadAgents(mapId),
+        this.persistence.loadAgentControllers(mapId),
       ]);
 
       if (worldStateResult) {
@@ -523,6 +552,8 @@ export class SimulationEngine {
 
       for (let i = 0; i < agents.length; i++) {
         const agent = agents[i];
+        // Backwards compat: tag agents loaded before map_id migration
+        if (!agent.mapId) agent.mapId = mapId;
         this.world.addAgent(agent);
 
         // Restore per-agent BYOK key from RDS only — no global fallback.
@@ -713,7 +744,7 @@ export class SimulationEngine {
           }
         }
         if (this.persistence) {
-          await this.persistence.saveAgents(this.world.agents);
+          await this.persistence.saveAgents(this.world.agents, this.mapConfig.id);
         }
         this.refreshNameMaps();
         await this.freshStart();
@@ -727,46 +758,6 @@ export class SimulationEngine {
       // Starting with an empty world after a DB failure would silently wipe simulation state.
       console.error('[Engine] Failed to load from RDS — aborting startup:', err);
       throw err;
-    }
-  }
-
-  /** Local dev fallback: restore world state + agents from Supabase (read-only) */
-  private async _loadFromSupabase(): Promise<void> {
-    if (!this.supabaseFallback) return;
-    try {
-      const [worldData, agents] = await Promise.all([
-        this.supabaseFallback.loadWorldState(),
-        this.supabaseFallback.loadAgents(),
-      ]);
-
-      if (worldData) {
-        this.world.time = worldData.time as typeof this.world.time;
-        this.world.weather = worldData.weather as typeof this.world.weather;
-        this.world.board = (worldData.board ?? []) as typeof this.world.board;
-        this.world.reputation = (worldData.reputation ?? []) as typeof this.world.reputation;
-        this.world.artifacts = (worldData.artifacts ?? []) as typeof this.world.artifacts;
-        this.world.technologies = (worldData.technologies ?? []) as typeof this.world.technologies;
-        this.world.conversations = recordToMap(worldData.conversations ?? {}) as typeof this.world.conversations;
-        this.world.elections = recordToMap(worldData.elections ?? {}) as typeof this.world.elections;
-        this.world.properties = recordToMap(worldData.properties ?? {}) as typeof this.world.properties;
-        this.world.items = recordToMap(worldData.items ?? {}) as typeof this.world.items;
-        this.world.institutions = recordToMap(worldData.institutions ?? {}) as typeof this.world.institutions;
-        this.world.buildings = recordToMap(worldData.buildings ?? {}) as typeof this.world.buildings;
-        if (worldData.villageMemory && Array.isArray(worldData.villageMemory)) {
-          this.world.villageMemory = worldData.villageMemory as typeof this.world.villageMemory;
-        }
-        console.log(`[Engine] World state restored from Supabase (day ${this.world.time.day}, hour ${this.world.time.hour})`);
-      }
-
-      if (agents.length > 0) {
-        for (const agent of agents) {
-          this.world.addAgent(agent);
-          console.log(`[Engine] Agent ${agent.config.name} restored from Supabase`);
-        }
-        console.log(`[Engine] Restored ${agents.length} agents from Supabase`);
-      }
-    } catch (err) {
-      console.warn('[Engine] Supabase fallback load failed:', err);
     }
   }
 
@@ -800,6 +791,7 @@ export class SimulationEngine {
       createdAt: Date.now(),
       joinedDay: this.world.time.day,
       ownerId: ownerId || 'anonymous',
+      mapId: this.mapConfig.id,
       mood: 'neutral',
       inventory: [],
       skills: [],
@@ -1299,7 +1291,7 @@ export class SimulationEngine {
         try {
           // Unconditional upsert (no expectedVersion): safe on graceful shutdown because
           // release() ran first, so the new leader has not yet started writing.
-          await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+          await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id);
           console.log('[Engine] Final state saved to RDS');
         } catch (err) {
           console.error('[Engine] Final save failed:', err);
@@ -1410,7 +1402,7 @@ export class SimulationEngine {
 
       const nearby = this.world.getNearbyAgents(agent.position, 5)
         .filter(a => a.id !== agentId);
-      const nearbyAreas = AREAS.filter(area => {
+      const nearbyAreas = getAreas().filter(area => {
         const cx = area.bounds.x + area.bounds.width / 2;
         const cy = area.bounds.y + area.bounds.height / 2;
         const dx = agent.position.x - cx;
@@ -2520,12 +2512,12 @@ Answer with ONLY one word: "support" or "oppose".`,
         console.error('[FreshStart] Failed to delete memories:', err);
       }
       try {
-        await this.persistence.resetWorldState();
+        await this.persistence.resetWorldState(this.mapConfig.id);
       } catch (err) {
         console.error('[FreshStart] Failed to reset world_state:', err);
       }
       try {
-        await this.persistence.deleteAllControllers();
+        await this.persistence.deleteAllControllers(this.mapConfig.id);
       } catch (err) {
         console.error('[FreshStart] Failed to delete controllers:', err);
       }
@@ -2649,7 +2641,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     // 4. Save fresh state to RDS
     if (this.persistence) {
       try {
-        const newVersion = await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys);
+        const newVersion = await this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id);
         this.worldStateVersion = newVersion;
         console.log('[FreshStart] Fresh state saved to RDS');
       } catch (err) {
@@ -2721,7 +2713,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       if (then) void then();
       return;
     }
-    void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys)
+    void this.persistence.saveAll(this.world, this.controllers, this.agentApiKeys, this.mapConfig.id)
       .then((newVersion: number) => {
         this.worldStateVersion = newVersion;
         if (then) return then();

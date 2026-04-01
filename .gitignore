@@ -10,7 +10,6 @@ coverage/
 package-lock.json
 docs/
 packages/server/src/test-*.ts
-packages/client/REFACTOR.md
 
 # Terraform — state, variables, and provider cache
 terraform/.terraform/

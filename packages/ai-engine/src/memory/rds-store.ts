@@ -173,7 +173,7 @@ export class RdsMemoryStore implements MemoryStore {
         `SELECT * FROM memories WHERE agent_id = $1 AND importance >= $2 ORDER BY importance DESC`,
         [agentId, minImportance],
       );
-      return result.rows.map(row => this.rowToMemory(row));
+      return result.rows.map((row: Record<string, unknown>) => this.rowToMemory(row));
     } catch (err) {
       console.error('[RdsMemoryStore] getByImportance() failed:', (err as Error).message);
       return [];
@@ -186,7 +186,7 @@ export class RdsMemoryStore implements MemoryStore {
         `SELECT * FROM memories WHERE agent_id = $1 AND timestamp < $2 ORDER BY timestamp DESC`,
         [agentId, timestamp],
       );
-      return result.rows.map(row => this.rowToMemory(row));
+      return result.rows.map((row: Record<string, unknown>) => this.rowToMemory(row));
     } catch (err) {
       console.error('[RdsMemoryStore] getOlderThan() failed:', (err as Error).message);
       return [];
