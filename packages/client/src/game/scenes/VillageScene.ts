@@ -369,6 +369,24 @@ export class VillageScene extends Phaser.Scene {
       }
     });
 
+    // Click background to deselect agent
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      // Only deselect on short clicks (not drags), left button, no game object hit
+      if (pointer.button !== 0) return;
+      const dx = Math.abs(pointer.x - pointer.downX);
+      const dy = Math.abs(pointer.y - pointer.downY);
+      if (dx > 5 || dy > 5) return; // was a drag, not a click
+      const hitObjects = this.input.hitTestPointer(pointer);
+      if (hitObjects.length === 0 && this.selectedAgentId) {
+        const prev = this.agentSprites.get(this.selectedAgentId);
+        if (prev) prev.setSelected(false);
+        this.selectedAgentId = null;
+        gameStore.selectAgent(null);
+        gameStore.closeDetail();
+        this.cameras.main.stopFollow();
+      }
+    });
+
     // Scroll to zoom — free range from 0.5x to 5x
     this.input.on(
       'wheel',
@@ -495,6 +513,7 @@ export class VillageScene extends Phaser.Scene {
     if (this.selectedAgentId === agentId) {
       this.selectedAgentId = null;
       gameStore.selectAgent(null);
+      gameStore.closeDetail();
       this.cameras.main.stopFollow();
       return;
     }
