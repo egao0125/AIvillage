@@ -17,6 +17,7 @@ export const VILLAGE_CONFIG: MapConfig = {
     shrinkingZone: false,
     stealth: false,
     board: true,
+    werewolf: false,
   },
   actions: [], // Village actions are built dynamically in agent-controller.ts
   buildGameRules,

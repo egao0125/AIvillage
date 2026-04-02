@@ -103,6 +103,13 @@ export interface Agent {
   // --- Commitment System ---
   commitments?: Commitment[];
   archivedCommitments?: Commitment[];
+
+  // --- Werewolf Game Mode ---
+  werewolfRole?: 'werewolf' | 'sheriff' | 'healer' | 'villager';
+  fellowWolves?: string[];
+  investigations?: { targetId: string; targetName: string; result: 'werewolf' | 'not_werewolf'; night: number }[];
+  lastGuarded?: string;
+  votingHistory?: { day: number; nomineeId: string; vote: 'exile' | 'save' }[];
 }
 
 // --- Strategy Tracking ---
@@ -595,7 +602,12 @@ export type ServerEvent =
   | { type: "building:update"; building: Building }
   | { type: "technology:discovered"; technology: Technology }
   | { type: "world_object:created"; worldObject: WorldObject }
-  | { type: "world_object:modified"; worldObject: WorldObject };
+  | { type: "world_object:modified"; worldObject: WorldObject }
+  | { type: "werewolf:phase"; phase: string; round: number }
+  | { type: "werewolf:kill"; agentId: string; saved: boolean }
+  | { type: "werewolf:vote"; exiled: string | null; role: string | null }
+  | { type: "werewolf:reveal"; agentId: string; role: string }
+  | { type: "werewolf:end"; winner: 'villagers' | 'werewolves' };
 
 export type ClientEvent =
   | { type: "viewport:update"; bounds: { x: number; y: number; width: number; height: number } }

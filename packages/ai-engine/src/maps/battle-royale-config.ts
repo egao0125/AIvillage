@@ -73,6 +73,7 @@ export const BATTLE_ROYALE_CONFIG: MapConfig = {
     shrinkingZone: true,
     stealth: true,
     board: false,
+    werewolf: false,
   },
   actions: [
     { id: 'move_to', label: 'Move (3 tiles)', category: 'movement' },
