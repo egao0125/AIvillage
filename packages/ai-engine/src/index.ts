@@ -157,6 +157,11 @@ ${placesLines}`;
     this.gameRulesOverride = gameRules;
   }
 
+  /** Replace game rules at runtime (used by werewolf to inject per-role rules) */
+  setGameRules(rules: string): void {
+    this.gameRulesOverride = rules;
+  }
+
   /** Public accessor for the LLM provider (used by FourStreamMemory for dossier/belief generation) */
   get llmProvider(): LLMProvider { return this.llm; }
 
@@ -1905,3 +1910,4 @@ export { AnthropicProvider } from './providers/anthropic.js';
 export { OpenAIProvider } from './providers/openai.js';
 export { ThrottledProvider } from './providers/throttled.js';
 export { ActionCache } from './action-cache.js';
+export { buildWerewolfRules } from './werewolf-rules.js';

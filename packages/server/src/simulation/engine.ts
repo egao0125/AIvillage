@@ -1,7 +1,7 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig, buildWerewolfRules } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import type { MapConfig } from '@ai-village/shared';
 import { getAreaEntrance, setActiveMap } from '../map/map-provider.js';
@@ -173,6 +173,20 @@ export class SimulationEngine {
       this.cachedGameRules = this.mapConfig.buildGameRules();
     }
     return this.cachedGameRules;
+  }
+
+  /**
+   * Per-agent game rules — werewolf map returns role-specific rules,
+   * other maps return the same shared rules for everyone.
+   */
+  private getGameRulesForAgent(agent: Agent): string {
+    if (this.mapConfig.systems?.werewolf && agent.werewolfRole) {
+      const fellowName = agent.fellowWolves?.length
+        ? this.world.getAgent(agent.fellowWolves[0])?.config.name
+        : undefined;
+      return buildWerewolfRules(agent.werewolfRole, fellowName, this.world.agents.size);
+    }
+    return this.getGameRules();
   }
 
   getMapConfig(): MapConfig {
@@ -624,7 +638,7 @@ export class SimulationEngine {
         const llmProvider = this.getThrottledProvider(savedKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = ctrlDataForWorldView?.worldViewParts;
-        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts, this.getGameRules());
+        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts, this.getGameRulesForAgent(agent));
         // Reset MY EXPERIENCE to prevent stale worldView from previous simulation runs
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
         const freshParts = buildStartingWorldViewParts(spawnArea);
@@ -667,6 +681,7 @@ export class SimulationEngine {
         }
 
         controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
         this.controllers.set(agent.id, controller);
       }
 
@@ -877,7 +892,7 @@ export class SimulationEngine {
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey ?? '', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -902,6 +917,7 @@ export class SimulationEngine {
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
     this.controllers.set(id, controller);
 
     console.log(
@@ -1048,7 +1064,7 @@ export class SimulationEngine {
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
     // Preserve worldViewParts from old cognition if available
     const oldCognition = this.cognitions.get(id);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -1069,6 +1085,7 @@ export class SimulationEngine {
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
     this.controllers.set(id, controller);
 
     // Set state to idle and place at plaza
@@ -1163,7 +1180,7 @@ export class SimulationEngine {
       Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
     ];
     const startingParts = buildStartingWorldViewParts(spawnArea);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -1184,6 +1201,7 @@ export class SimulationEngine {
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
     this.controllers.set(id, controller);
 
     // Seed fresh-start memories — MUST await so first decide() has grounding in RDS
@@ -2500,7 +2518,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(agentId, cognition);
 
@@ -2643,7 +2661,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       }
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
-      const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts, this.getGameRules());
+      const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
       this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
@@ -2679,6 +2697,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
       controller.bus = this.bus;
       controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
       this.controllers.set(agent.id, controller);
 
       console.log(`[FreshStart] Agent ${agent.config.name} reset at ${spawnArea}`);
