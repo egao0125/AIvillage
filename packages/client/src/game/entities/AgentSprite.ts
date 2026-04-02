@@ -12,6 +12,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private sprite: Phaser.GameObjects.Image;
   private nameLabel: Phaser.GameObjects.Text;
   private actionLabel: Phaser.GameObjects.Text;
+  private roleLabel: Phaser.GameObjects.Text | null = null;
   private speechBubble: SpeechBubble;
   private thoughtBubble: ThoughtBubble;
   private selectionRing: Phaser.GameObjects.Graphics;
@@ -169,6 +170,51 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     } else {
       this.scene.tweens.killTweensOf(this.selectionRing);
       this.selectionRing.setScale(1);
+    }
+  }
+
+  private static readonly ROLE_COLORS: Record<string, string> = {
+    werewolf: '#ef4444',
+    sheriff: '#fbbf24',
+    healer: '#4ade80',
+    villager: '#9ca3af',
+  };
+
+  setRole(role: string | null, visible: boolean): void {
+    if (!visible || !role) {
+      if (this.roleLabel) {
+        this.roleLabel.setVisible(false);
+      }
+      return;
+    }
+    const color = AgentSprite.ROLE_COLORS[role] ?? '#9ca3af';
+    if (!this.roleLabel) {
+      this.roleLabel = this.scene.add.text(0, -16, '', {
+        fontSize: '5px',
+        fontFamily: '"Press Start 2P", monospace',
+        color,
+        stroke: '#000000',
+        strokeThickness: 2,
+        resolution: 2,
+      });
+      this.roleLabel.setOrigin(0.5, 0.5);
+      this.add(this.roleLabel);
+    }
+    this.roleLabel.setText(role.toUpperCase());
+    this.roleLabel.setColor(color);
+    this.roleLabel.setVisible(true);
+  }
+
+  setDead(dead: boolean): void {
+    if (dead) {
+      this.setAlpha(0.3);
+      this.nameLabel.setColor('#666666');
+      this.actionLabel.setText('');
+      this.moodRing.setVisible(false);
+    } else {
+      this.setAlpha(1);
+      this.nameLabel.setColor('#ffffff');
+      this.moodRing.setVisible(true);
     }
   }
 

@@ -124,6 +124,10 @@ export function buildWolfNightPrompt(
     ? `You have agreed to target: ${agentNames.get(state.nightActions.wolfTarget) ?? 'unknown'}.`
     : `You have not yet chosen a target.`;
 
+  const urgency = state.round > 5
+    ? '\n\nThe village is growing suspicious. One more misstep and you could be caught. Act decisively.'
+    : '';
+
   return `NIGHT ${state.round}. You are a WEREWOLF.
 
 Your fellow werewolf: ${fellowName}.
@@ -131,10 +135,17 @@ ${targetLine}
 
 Alive targets: ${aliveTargets.join(', ')}
 
+Discuss with ${fellowName}. Agree on ONE target. When decided, use [ACTION: attack NAME] to confirm your choice.
+
+STRATEGIES:
+- Both go together to the target (faster, but more suspicious if seen)
+- You attack while ${fellowName} stays elsewhere as alibi
+- ${fellowName} attacks while you stay elsewhere as alibi
+
 ACTIONS:
 - move_to [location] — walk toward target
 - attack [name] — eliminate (within 2 tiles)
-- change_target [name] — switch target`;
+- change_target [name] — switch target${urgency}`;
 }
 
 export function buildSheriffNightPrompt(
@@ -226,6 +237,10 @@ export function buildDaySituationPrompt(
     }
   }
 
+  const urgency = state.round > 5
+    ? `\n\nURGENT: The village grows desperate. People are dying every night. Only ${aliveNames.length} remain. You MUST find the werewolves soon. Push for a vote today.`
+    : '';
+
   return `Day ${state.round}. ${dawnLine}
 Alive (${aliveNames.length}): ${aliveNames.join(', ')}
 Dead: ${deadNames.length > 0 ? deadNames.join(', ') : 'none'}
@@ -238,6 +253,8 @@ DAY ACTIONS:
 - share_info
 - reveal_role
 - whisper [name]
+- observe — watch who is nearby and talking
+- think — reflect on evidence and patterns
 - follow [name]
-- call_vote`;
+- call_vote${urgency}`;
 }

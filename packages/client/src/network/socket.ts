@@ -23,6 +23,7 @@ import type {
   Storyline,
   Recap,
   SocialLedgerEntry,
+  WerewolfGameOverPayload,
 } from '@ai-village/shared';
 
 let socket: Socket | null = null;
@@ -336,6 +337,27 @@ export function connectSocket(): Socket {
     eventBus.emit('viewport:catchup', data);
   });
 
+  // --- Werewolf events ---
+  socket.on('werewolf:phase', (data: { phase: string; round: number }) => {
+    gameStore.setWerewolfPhase(data.phase, data.round);
+    eventBus.emit('werewolf:phase', data);
+  });
+
+  socket.on('werewolf:reveal', (data: { agentId: string; role: string }) => {
+    gameStore.setWerewolfRole(data.agentId, data.role);
+    eventBus.emit('werewolf:reveal', data);
+  });
+
+  socket.on('werewolf:gameOver', (payload: WerewolfGameOverPayload) => {
+    gameStore.setWerewolfGameOver(payload);
+    eventBus.emit('werewolf:gameOver', payload);
+  });
+
+  socket.on('werewolf:newGame', () => {
+    gameStore.clearWerewolfState();
+    eventBus.emit('werewolf:newGame', {});
+  });
+
   // Update last-seen day periodically. Store the ID so it can be cleared on disconnect.
   lastSeenDayTimer = setInterval(() => {
     const time = gameStore.getState().time;
@@ -396,5 +418,10 @@ export function unwatchThoughts(): void {
 /** Infra 6: Report viewport rectangle to server for spatial event filtering */
 export function sendViewportUpdate(x: number, y: number, width: number, height: number): void {
   socket?.emit('viewport:update', { x, y, width, height });
+}
+
+/** Werewolf: request a new game with same agents */
+export function werewolfPlayAgain(): void {
+  socket?.emit('werewolf:playAgain');
 }
 

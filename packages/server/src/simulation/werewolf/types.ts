@@ -30,6 +30,13 @@ export interface VoteRecord {
   roleRevealed: string | null;
 }
 
+export interface WerewolfEvent {
+  day: number;
+  phase: 'night' | 'dawn' | 'day' | 'vote';
+  event: string;
+  agentIds?: string[];
+}
+
 export interface WerewolfGameState {
   phase: WerewolfPhase;
   round: number;
@@ -50,6 +57,8 @@ export interface WerewolfGameState {
   wolfConversationId: string | null;
   /** Whether a vote has already been called this day */
   voteCalled: boolean;
+  /** Chronological event log for game over screen */
+  eventLog: WerewolfEvent[];
 }
 
 /** Fresh night actions for each new night */

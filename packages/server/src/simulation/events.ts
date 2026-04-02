@@ -1,5 +1,5 @@
 import type { Server } from 'socket.io';
-import type { Agent, Artifact, BoardPost, Building, DriveState, Election, GameTime, Institution, Item, Mood, NarrativeEntry, Position, Property, Skill, SocialLedgerEntry, Technology, VitalState, Weather, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, Artifact, BoardPost, Building, DriveState, Election, GameTime, Institution, Item, Mood, NarrativeEntry, Position, Property, Skill, SocialLedgerEntry, Technology, VitalState, Weather, WerewolfGameOverPayload, WorldSnapshot } from '@ai-village/shared';
 import type { VillageNarrator } from './narrator.js';
 import type { CharacterTimeline } from './character-timeline.js';
 import type { ViewportManager } from './viewport-manager.js';
@@ -249,5 +249,13 @@ export class EventBroadcaster {
   werewolfEnd(winner: string): void {
     this.io.emit('werewolf:end', { winner });
     this.narrator?.logEvent(`Werewolf game over: ${winner} win!`);
+  }
+
+  werewolfGameOver(payload: WerewolfGameOverPayload): void {
+    this.io.emit('werewolf:gameOver', payload);
+  }
+
+  werewolfNewGame(): void {
+    this.io.emit('werewolf:newGame', {});
   }
 }

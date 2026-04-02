@@ -15,6 +15,7 @@ const TILE_SIZE = 32; // display size (16px source tiles scaled 2x)
 
 export class ArenaScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSprite> = new Map();
+  private deadAgentIds: Set<string> = new Set();
   private selectedAgentId: string | null = null;
   private dayNightOverlay!: Phaser.GameObjects.Rectangle;
   private conversationGraphics!: Phaser.GameObjects.Graphics;
@@ -46,6 +47,7 @@ export class ArenaScene extends Phaser.Scene {
 
     this.setupCamera();
     this.setupEventListeners();
+    this.setupStoreSubscription();
     this.syncInitialState();
   }
 
@@ -207,10 +209,18 @@ export class ArenaScene extends Phaser.Scene {
   private setupEventListeners(): void {
     this.cleanupFns.push(
       eventBus.on('world:snapshot', (snapshot: { agents: Agent[]; time?: GameTime }) => {
+        const isWerewolf = !!gameStore.getState().werewolfPhase;
         for (const agent of snapshot.agents) {
-          if (agent.alive === false) continue;
+          if (agent.alive === false && !isWerewolf) continue;
           if (!this.agentSprites.has(agent.id)) {
             this.spawnAgent(agent);
+            if (agent.alive === false) {
+              const sprite = this.agentSprites.get(agent.id);
+              if (sprite) {
+                sprite.setDead(true);
+                this.deadAgentIds.add(agent.id);
+              }
+            }
           } else {
             const sprite = this.agentSprites.get(agent.id)!;
             sprite.moveToTile(agent.position.x, agent.position.y);
@@ -240,7 +250,16 @@ export class ArenaScene extends Phaser.Scene {
       }),
 
       eventBus.on('agent:death', (data: { agentId: string; cause: string }) => {
-        this.despawnAgent(data.agentId);
+        // In werewolf mode, show dead agents as dimmed bodies instead of removing them
+        if (gameStore.getState().werewolfPhase) {
+          const sprite = this.agentSprites.get(data.agentId);
+          if (sprite) {
+            sprite.setDead(true);
+            this.deadAgentIds.add(data.agentId);
+          }
+        } else {
+          this.despawnAgent(data.agentId);
+        }
       }),
 
       eventBus.on('agent:leave', (data: { agentId: string }) => {
@@ -258,6 +277,25 @@ export class ArenaScene extends Phaser.Scene {
 
       eventBus.on('agent:select', (agentId: string) => {
         this.selectAgent(agentId);
+      }),
+
+      eventBus.on('werewolf:phase', (data: { phase: string; round: number }) => {
+        this.updateWerewolfRoleLabels();
+        // Clear dead bodies at night start
+        if (data.phase === 'night') {
+          for (const deadId of this.deadAgentIds) {
+            this.despawnAgent(deadId);
+          }
+          this.deadAgentIds.clear();
+        }
+      }),
+
+      eventBus.on('werewolf:reveal', (_data: { agentId: string; role: string }) => {
+        this.updateWerewolfRoleLabels();
+      }),
+
+      eventBus.on('werewolf:newGame', () => {
+        this.updateWerewolfRoleLabels();
       })
     );
   }
@@ -316,6 +354,20 @@ export class ArenaScene extends Phaser.Scene {
     }
   }
 
+  // ── Werewolf god mode role labels ────────────────────────────
+  private lastGodMode: boolean = false;
+
+  private updateWerewolfRoleLabels(): void {
+    const state = gameStore.getState();
+    const godMode = state.werewolfGodMode;
+    const roles = state.werewolfRoles;
+
+    for (const [agentId, sprite] of this.agentSprites) {
+      const role = roles.get(agentId) ?? null;
+      sprite.setRole(role, godMode);
+    }
+  }
+
   // ── Day/night ───────────────────────────────────────────────
   private updateDayNight(time: GameTime): void {
     const h = time.hour + time.minute / 60;
@@ -333,6 +385,17 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   // ── Initial sync ────────────────────────────────────────────
+  private setupStoreSubscription(): void {
+    const unsub = gameStore.subscribe(() => {
+      const godMode = gameStore.getState().werewolfGodMode;
+      if (godMode !== this.lastGodMode) {
+        this.lastGodMode = godMode;
+        this.updateWerewolfRoleLabels();
+      }
+    });
+    this.cleanupFns.push(unsub);
+  }
+
   private syncInitialState(): void {
     const state = gameStore.getState();
     for (const agent of state.agents.values()) {

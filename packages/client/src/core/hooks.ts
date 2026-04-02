@@ -16,6 +16,7 @@ import type {
   Storyline,
   Recap,
   VillageMemoryEntry,
+  WerewolfGameOverPayload,
 } from '@ai-village/shared';
 import { synthesizeEvents } from '../ui/feed/eventSynthesis';
 import type { VillageEvent } from '../ui/feed/types';
@@ -217,5 +218,33 @@ export function useActionLog(agentId: string): ActionLogEntry[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().actionLog.get(agentId) ?? EMPTY_ACTION_LOG
+  );
+}
+
+export function useWerewolfGameOver(): WerewolfGameOverPayload | null {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfGameOver
+  );
+}
+
+export function useWerewolfGodMode(): boolean {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfGodMode
+  );
+}
+
+export function useWerewolfPhase(): { phase: string | null; round: number } {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => ({ phase: gameStore.getState().werewolfPhase, round: gameStore.getState().werewolfRound })
+  );
+}
+
+export function useWerewolfRoles(): Map<string, string> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfRoles
   );
 }

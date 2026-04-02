@@ -19,6 +19,7 @@ import type {
   Recap,
   SocialLedgerEntry,
   VillageMemoryEntry,
+  WerewolfGameOverPayload,
 } from '@ai-village/shared';
 
 export interface ActionLogEntry {
@@ -52,6 +53,11 @@ interface GameState {
   actionLog: Map<string, ActionLogEntry[]>;
   activeMode: 'watch' | 'analyze';
   inspectTarget: InspectTarget | null;
+  werewolfGameOver: WerewolfGameOverPayload | null;
+  werewolfGodMode: boolean;
+  werewolfPhase: string | null;
+  werewolfRound: number;
+  werewolfRoles: Map<string, string>;
 }
 
 export interface InspectTarget {
@@ -104,6 +110,11 @@ class GameStore {
     actionLog: new Map(),
     activeMode: 'watch',
     inspectTarget: null,
+    werewolfGameOver: null,
+    werewolfGodMode: false,
+    werewolfPhase: null,
+    werewolfRound: 0,
+    werewolfRoles: new Map(),
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -599,6 +610,39 @@ class GameStore {
 
   setVillageMemory(villageMemory: VillageMemoryEntry[]): void {
     this.state = { ...this.state, villageMemory };
+    this.notify();
+  }
+
+  setWerewolfGameOver(payload: WerewolfGameOverPayload | null): void {
+    this.state = { ...this.state, werewolfGameOver: payload };
+    this.notify();
+  }
+
+  toggleWerewolfGodMode(): void {
+    this.state = { ...this.state, werewolfGodMode: !this.state.werewolfGodMode };
+    this.notify();
+  }
+
+  setWerewolfPhase(phase: string | null, round: number): void {
+    this.state = { ...this.state, werewolfPhase: phase, werewolfRound: round };
+    this.notify();
+  }
+
+  setWerewolfRole(agentId: string, role: string): void {
+    const roles = new Map(this.state.werewolfRoles);
+    roles.set(agentId, role);
+    this.state = { ...this.state, werewolfRoles: roles };
+    this.notify();
+  }
+
+  clearWerewolfState(): void {
+    this.state = {
+      ...this.state,
+      werewolfPhase: null,
+      werewolfRound: 0,
+      werewolfRoles: new Map(),
+      werewolfGameOver: null,
+    };
     this.notify();
   }
 }

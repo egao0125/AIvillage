@@ -27,7 +27,7 @@ export class ConversationManager {
   private actionPipeline: ActionPipeline;
   private postProcessor: PostConversationProcessor;
   /** Called when a conversation ends — engine uses this to notify bystanders */
-  onConversationEnd?: (conv: { participants: string[]; location: { x: number; y: number } }) => void;
+  onConversationEnd?: (conv: { participants: string[]; location: { x: number; y: number }; summary?: string }) => void;
 
   constructor(
     private world: World,
@@ -80,7 +80,9 @@ export class ConversationManager {
 
     // Dynamic maxTurns based on purpose
     let maxTurns: number;
-    if (purpose && ConversationManager.PURPOSE_SHORT.test(purpose)) {
+    if (purpose === 'werewolf_night_hunt') {
+      maxTurns = 4; // wolves agree on target quickly (2 exchanges)
+    } else if (purpose && ConversationManager.PURPOSE_SHORT.test(purpose)) {
       maxTurns = 6; // transactional — trade, give, teach, ask
     } else if (purpose) {
       maxTurns = 8; // has purpose but general
@@ -484,11 +486,22 @@ export class ConversationManager {
         }
       }
 
-      // Notify bystanders that a conversation happened (without revealing content)
+      // Notify bystanders that a conversation happened
       if (this.onConversationEnd) {
+        // Build a brief summary from the last few messages for overhearing
+        const msgs = active.conversation.messages;
+        const recentMsgs = msgs.slice(-4);
+        const summary = recentMsgs.length > 0
+          ? recentMsgs.map(m => {
+              const name = this.world.getAgent(m.agentId)?.config.name ?? 'someone';
+              const text = m.content.length > 80 ? m.content.substring(0, 80) + '...' : m.content;
+              return `${name}: "${text}"`;
+            }).join(' ')
+          : undefined;
         this.onConversationEnd({
           participants: active.conversation.participants,
           location: active.conversation.location,
+          summary,
         });
       }
     }

@@ -212,6 +212,48 @@ export class SimulationEngine {
     this.werewolfManager.startGame(agentIds);
   }
 
+  /**
+   * Reset and restart a werewolf game (Play Again flow).
+   * Revives all agents, re-assigns roles, rebuilds cognition rules, starts fresh.
+   */
+  resetWerewolfGame(): void {
+    if (!this.werewolfManager || !this.mapConfig.systems?.werewolf) {
+      console.warn('[Engine] Cannot reset werewolf game — werewolf system not active');
+      return;
+    }
+
+    // 1. Reset all agents to alive
+    for (const agent of this.world.agents.values()) {
+      agent.alive = true;
+      agent.state = 'idle';
+      agent.werewolfRole = undefined;
+      agent.fellowWolves = undefined;
+      agent.investigations = undefined;
+      agent.lastGuarded = undefined;
+      agent.votingHistory = undefined;
+      this.world.updateAgentState(agent.id, 'active', '');
+    }
+
+    // 2. Create new WerewolfPhaseManager
+    this.werewolfManager.dispose();
+    this.werewolfManager = new WerewolfPhaseManager(
+      this.bus, this.world, this.broadcaster, this.controllers, this.cognitions, this.conversationManager!,
+    );
+    // Re-link controllers to new manager
+    for (const ctrl of this.controllers.values()) {
+      ctrl.werewolfManager = this.werewolfManager;
+    }
+
+    // 3. Start fresh game (assigns roles, sets game rules, starts first night)
+    const agentIds = Array.from(this.world.agents.values()).map(a => a.id);
+    this.werewolfManager.startGame(agentIds);
+
+    // 4. Broadcast new game starting
+    this.broadcaster.werewolfNewGame();
+
+    console.log('[Engine] Werewolf game reset — new game started');
+  }
+
   async initialize(): Promise<void> {
     // Create broadcaster with viewport-aware filtering
     this.broadcaster = new EventBroadcaster(this.io);
@@ -303,6 +345,8 @@ export class SimulationEngine {
     this.bus.on('tick', (e) => {
       // Werewolf phase manager ticks before controllers (controls sleep/wake/actions)
       if (this.werewolfManager) {
+        // Don't tick anything when the werewolf game has ended
+        if (this.werewolfManager.phase === 'ended') return;
         try {
           this.werewolfManager.onTick(e.time);
         } catch (err) {
@@ -1518,10 +1562,11 @@ export class SimulationEngine {
         if (a1.alive === false || a2.alive === false) continue;
         if (a1.state === 'away' || a2.state === 'away') continue;
 
-        // Check conversation pair cooldown (1800 ticks ≈ allows ~2 conversations per pair per day)
+        // Check conversation pair cooldown — werewolf uses 5 ticks (rapid discussion is the game)
+        const pairCooldown = this.werewolfManager ? 5 : 1800;
         const pairKey = [a1.id, a2.id].sort().join(':');
         const lastTick = this.lastConversationPair.get(pairKey);
-        if (lastTick !== undefined && (this.tickCount - lastTick) < 1800) continue;
+        if (lastTick !== undefined && (this.tickCount - lastTick) < pairCooldown) continue;
 
         // Check if both are available (not sleeping, conversing, or API exhausted)
         const c1 = this.controllers.get(a1.id);
@@ -1593,11 +1638,14 @@ export class SimulationEngine {
   }
 
   /**
-   * Notify nearby bystanders that a conversation happened (without revealing content).
-   * Called when a conversation ends — replaces the old per-tick eavesdropping loop.
+   * Notify nearby bystanders that a conversation happened.
+   * Werewolf mode: share summary content within 3 tiles (overhearing mechanic).
+   * Normal mode: vague awareness within 5 tiles.
    */
-  notifyConversationBystanders(conv: { participants: string[]; location: { x: number; y: number } }): void {
-    const nearbyAgents = this.world.getNearbyAgents(conv.location, 5);
+  notifyConversationBystanders(conv: { participants: string[]; location: { x: number; y: number }; summary?: string }): void {
+    const isWerewolf = !!this.werewolfManager;
+    const radius = isWerewolf ? 3 : 5;
+    const nearbyAgents = this.world.getNearbyAgents(conv.location, radius);
     for (const bystander of nearbyAgents) {
       if (conv.participants.includes(bystander.id)) continue;
       if (bystander.state === 'sleeping') continue;
@@ -1606,12 +1654,17 @@ export class SimulationEngine {
         .filter(Boolean).join(' and ');
       const cog = this.cognitions.get(bystander.id);
       if (cog) {
+        // Werewolf: share what was actually said (overhearing)
+        const content = isWerewolf && conv.summary
+          ? `I overheard ${participantNames} discussing: ${conv.summary}`
+          : `I noticed ${participantNames} talking nearby.`;
+        const importance = isWerewolf && conv.summary ? 6 : 3;
         void cog.addMemory({
           id: crypto.randomUUID(),
           agentId: bystander.id,
           type: 'observation',
-          content: `I noticed ${participantNames} talking nearby.`,
-          importance: 3,
+          content,
+          importance,
           timestamp: Date.now(),
           relatedAgentIds: conv.participants,
         }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (bystander):', (err as Error).message); });

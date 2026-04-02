@@ -468,6 +468,11 @@ io.on('connection', (socket) => {
     socket.emit('viewport:catchup', { agents });
   });
 
+  // --- Werewolf Play Again ---
+  socket.on('werewolf:playAgain', () => {
+    engine.resetWerewolfGame();
+  });
+
   // Per-socket error handler — prevents an unhandled 'error' event from crashing the process.
   // Without this, a malformed packet triggers an uncaught ERR_UNHANDLED_ERROR and takes down
   // the entire server. (CVE-2024-38355 pattern / Node.js EventEmitter behavior)

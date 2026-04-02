@@ -350,8 +350,10 @@ export class AgentController {
 
       case 'moving': {
         // Move every 3 ticks so agents walk visibly instead of teleporting
+        // Werewolf night: active roles move at 3x speed (every tick) for urgency
+        const moveThreshold = (this.werewolfManager?.phase === 'night' && this.agent.werewolfRole && this.agent.werewolfRole !== 'villager') ? 1 : 3;
         this.moveTick++;
-        if (this.moveTick >= 3) {
+        if (this.moveTick >= moveThreshold) {
           this.moveTick = 0;
           this.advanceMovement();
         }
@@ -1555,7 +1557,8 @@ export class AgentController {
       case 'call_vote': {
         const targetId = resolveTarget(decision.targetName);
         if (targetId) {
-          wm.callVote(this.agent.id, targetId);
+          const voteReason = typeof decision.reason === 'string' ? decision.reason.slice(0, 200) : undefined;
+          wm.callVote(this.agent.id, targetId, voteReason);
         }
         return true;
       }
@@ -1651,6 +1654,51 @@ export class AgentController {
         this.activityTimer = 5;
         this.world.updateAgentState(this.agent.id, 'idle', 'resting');
         this.broadcaster.agentAction(this.agent.id, `rests — "${shortReason}"`);
+        return true;
+      }
+
+      case 'observe': {
+        // Watch who's nearby and talking — soft evidence for deduction
+        const nearbyAgents = this.world.getNearbyAgents(this.agent.position, 8)
+          .filter(a => a.id !== this.agent.id && a.alive !== false);
+        const observations = nearbyAgents.map(a => {
+          const isTalking = a.currentAction === 'conversing';
+          return `${a.config.name}${isTalking ? ' (talking)' : ''}`;
+        });
+        const obsText = observations.length > 0
+          ? `You observe nearby: ${observations.join(', ')}.`
+          : 'You look around but no one is nearby.';
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'observation',
+          content: obsText,
+          importance: 5,
+          timestamp: Date.now(),
+          relatedAgentIds: nearbyAgents.map(a => a.id),
+        }).catch(() => {});
+        this.state = 'performing';
+        this.activityTimer = 3;
+        this.world.updateAgentState(this.agent.id, 'active', 'observing');
+        this.broadcaster.agentAction(this.agent.id, 'observes surroundings');
+        return true;
+      }
+
+      case 'think': {
+        // Reflect on evidence — triggers belief reconsideration on next decide cycle
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'observation',
+          content: `You take a moment to think carefully about everything you know. Who has been acting suspicious? What patterns have you noticed?`,
+          importance: 4,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        }).catch(() => {});
+        this.state = 'performing';
+        this.activityTimer = 5;
+        this.world.updateAgentState(this.agent.id, 'active', 'thinking');
+        this.broadcaster.agentAction(this.agent.id, 'reflects on the evidence');
         return true;
       }
 

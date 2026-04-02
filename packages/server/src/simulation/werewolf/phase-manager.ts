@@ -103,6 +103,11 @@ export class WerewolfPhaseManager {
 
     console.log(`[Werewolf] Game started with ${agentIds.length} agents. Roles: ${[...roles.entries()].map(([id, r]) => `${this.agentNames.get(id)}=${r}`).join(', ')}`);
 
+    // Broadcast all roles (client accumulates, only displays when god mode on)
+    for (const [id, role] of roles) {
+      this.broadcaster.werewolfReveal(id, role);
+    }
+
     // Broadcast phase and start first night
     this.broadcaster.werewolfPhase('night', 1);
     this.state.phase = 'night';
@@ -204,10 +209,12 @@ export class WerewolfPhaseManager {
           { id: 'share_info', label: 'Share info publicly', category: 'social' },
           { id: 'reveal_role', label: 'Reveal your role', category: 'social' },
           { id: 'whisper', label: 'Whisper privately', category: 'social', requiresNearby: true },
+          { id: 'observe', label: 'Watch who is talking', category: 'social' },
+          { id: 'think', label: 'Reflect on evidence', category: 'rest' },
           { id: 'follow', label: 'Follow someone', category: 'movement', requiresNearby: true },
           { id: 'rest', label: 'Rest / Wait', category: 'rest' },
         );
-        if (!this.state.voteCalled) {
+        if (!this.state.voteCalled && this.state.phaseTimer >= 60) {
           actions.push({ id: 'call_vote', label: 'Call a vote', category: 'social' });
         }
         break;
@@ -288,6 +295,14 @@ export class WerewolfPhaseManager {
             }).catch(() => {});
           }
 
+          // Event log: sheriff investigation
+          this.state.eventLog.push({
+            day: this.state.round,
+            phase: 'night',
+            event: `${this.agentNames.get(agentId)} investigated ${this.agentNames.get(targetId)}: ${isWolf ? 'werewolf' : 'not werewolf'}`,
+            agentIds: [agentId, targetId],
+          });
+
           console.log(`[Werewolf] Sheriff investigates ${this.agentNames.get(targetId)} → ${isWolf ? 'WOLF' : 'clear'}`);
         }
         break;
@@ -317,9 +332,10 @@ export class WerewolfPhaseManager {
   /**
    * Handle call_vote during day phase.
    */
-  callVote(callerId: string, nomineeId: string): void {
+  callVote(callerId: string, nomineeId: string, reason?: string): void {
     if (this.state.phase !== 'day') return;
     if (this.state.voteCalled) return;
+    if (this.state.phaseTimer < 60) return; // Min 60 ticks of discussion before vote
     if (!this.state.alive.has(callerId) || !this.state.alive.has(nomineeId)) return;
 
     this.state.voteCalled = true;
@@ -327,7 +343,7 @@ export class WerewolfPhaseManager {
     this.state.phaseTimer = 0;
     this.broadcaster.werewolfPhase('vote', this.state.round);
 
-    this.voteManager.startVote(callerId, nomineeId);
+    this.voteManager.startVote(callerId, nomineeId, reason);
 
     console.log(`[Werewolf] ${this.agentNames.get(callerId)} calls vote against ${this.agentNames.get(nomineeId)}`);
   }
@@ -407,6 +423,7 @@ export class WerewolfPhaseManager {
       votingHistory: [],
       wolfConversationId: null,
       voteCalled: false,
+      eventLog: [],
     };
   }
 
@@ -476,11 +493,40 @@ export class WerewolfPhaseManager {
     };
 
     // Resolve wolf attack
+    const wolfIds = getWolfIds(this.state.roles).filter(id => this.state.alive.has(id));
     if (wolfTarget) {
       if (wolfTarget === healerGuard) {
         // Attack blocked by healer
         result.saved = true;
         this.broadcaster.werewolfKill(wolfTarget, true);
+
+        // Event log: healer save
+        const healerEntry = [...this.state.roles.entries()].find(([id, r]) => r === 'healer' && this.state.alive.has(id));
+        if (healerEntry) {
+          this.state.eventLog.push({
+            day: this.state.round,
+            phase: 'night',
+            event: `${this.agentNames.get(healerEntry[0])} saved ${this.agentNames.get(wolfTarget)} from attack`,
+            agentIds: [healerEntry[0], wolfTarget],
+          });
+        }
+
+        // Notify wolves their attack was blocked (no mutual identification)
+        for (const wid of wolfIds) {
+          const wolfCognition = this.cognitions.get(wid);
+          if (wolfCognition) {
+            void wolfCognition.addMemory({
+              id: crypto.randomUUID(),
+              agentId: wid,
+              type: 'observation',
+              content: `Night ${this.state.round}: Your attack on ${this.agentNames.get(wolfTarget)} was blocked. Someone was guarding them.`,
+              importance: 9,
+              timestamp: Date.now(),
+              relatedAgentIds: [wolfTarget],
+            }).catch(() => {});
+          }
+        }
+
         console.log(`[Werewolf] Healer saved ${this.agentNames.get(wolfTarget)}!`);
       } else {
         // Kill target
@@ -497,6 +543,16 @@ export class WerewolfPhaseManager {
 
         this.broadcaster.werewolfKill(wolfTarget, false);
         this.broadcaster.agentDeath(wolfTarget, 'werewolf attack');
+
+        // Event log: wolf kill
+        const wolfNames = wolfIds.map(id => this.agentNames.get(id) ?? id);
+        this.state.eventLog.push({
+          day: this.state.round,
+          phase: 'night',
+          event: `${wolfNames.join(' and ')} eliminated ${this.agentNames.get(wolfTarget)}`,
+          agentIds: [...wolfIds, wolfTarget],
+        });
+
         console.log(`[Werewolf] ${this.agentNames.get(wolfTarget)} was killed by werewolves`);
       }
     }
@@ -651,6 +707,14 @@ export class WerewolfPhaseManager {
       }).catch(() => {});
     }
 
+    // Event log: exile
+    this.state.eventLog.push({
+      day: this.state.round,
+      phase: 'vote',
+      event: `Village exiled ${name} (${role})`,
+      agentIds: [agentId],
+    });
+
     console.log(`[Werewolf] ${name} exiled — was ${role}`);
   }
 
@@ -664,6 +728,29 @@ export class WerewolfPhaseManager {
     }
 
     this.broadcaster.werewolfEnd(winner);
+
+    // Build and broadcast full game over payload
+    const roles = [...this.state.roles.entries()].map(([id, role]) => ({
+      agentId: id,
+      name: this.agentNames.get(id) ?? id,
+      role: role as 'werewolf' | 'sheriff' | 'healer' | 'villager',
+      alive: this.state.alive.has(id),
+    }));
+
+    const stats = {
+      totalDays: this.state.round,
+      totalKills: this.state.eventLog.filter(e => e.event.includes('eliminated')).length,
+      healerSaves: this.state.eventLog.filter(e => e.event.includes('saved')).length,
+      correctExiles: this.state.eventLog.filter(e => e.event.includes('exiled') && e.event.includes('werewolf')).length,
+      wrongExiles: this.state.eventLog.filter(e => e.event.includes('exiled') && !e.event.includes('werewolf')).length,
+    };
+
+    this.broadcaster.werewolfGameOver({
+      winner,
+      roles,
+      timeline: this.state.eventLog,
+      stats,
+    });
 
     console.log(`[Werewolf] GAME OVER — ${winner} win!`);
   }

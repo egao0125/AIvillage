@@ -7,6 +7,7 @@ export type {
   NightActions,
   NightResult,
   VoteRecord,
+  WerewolfEvent,
   WerewolfGameState,
 } from './types.js';
 export { freshNightActions } from './types.js';

@@ -607,7 +607,31 @@ export type ServerEvent =
   | { type: "werewolf:kill"; agentId: string; saved: boolean }
   | { type: "werewolf:vote"; exiled: string | null; role: string | null }
   | { type: "werewolf:reveal"; agentId: string; role: string }
-  | { type: "werewolf:end"; winner: 'villagers' | 'werewolves' };
+  | { type: "werewolf:end"; winner: 'villagers' | 'werewolves' }
+  | { type: "werewolf:gameOver"; payload: WerewolfGameOverPayload };
+
+export interface WerewolfGameOverPayload {
+  winner: 'villagers' | 'werewolves';
+  roles: {
+    agentId: string;
+    name: string;
+    role: 'werewolf' | 'sheriff' | 'healer' | 'villager';
+    alive: boolean;
+  }[];
+  timeline: {
+    day: number;
+    phase: 'night' | 'dawn' | 'day' | 'vote';
+    event: string;
+    agentIds?: string[];
+  }[];
+  stats: {
+    totalDays: number;
+    totalKills: number;
+    healerSaves: number;
+    correctExiles: number;
+    wrongExiles: number;
+  };
+}
 
 export type ClientEvent =
   | { type: "viewport:update"; bounds: { x: number; y: number; width: number; height: number } }

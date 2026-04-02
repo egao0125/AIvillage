@@ -71,6 +71,8 @@ const WEREWOLF_ACTIONS: MapAction[] = [
   { id: 'share_info', label: 'Share info publicly', category: 'social' },
   { id: 'reveal_role', label: 'Reveal your role', category: 'social' },
   { id: 'whisper', label: 'Whisper privately', category: 'social', requiresNearby: true },
+  { id: 'observe', label: 'Watch who is talking', category: 'social' },
+  { id: 'think', label: 'Reflect on evidence', category: 'rest' },
   { id: 'follow', label: 'Follow someone', category: 'movement', requiresNearby: true },
 
   // Vote trigger
