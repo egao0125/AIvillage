@@ -245,7 +245,7 @@ export class BootScene extends Phaser.Scene {
     const activeMap = this.registry.get('activeMap');
     console.log('[BootScene] preload — activeMap:', activeMap);
 
-    if (activeMap === 'battle_royale') {
+    if (activeMap === 'battle_royale' || activeMap === 'werewolf') {
       this.load.on('loaderror', (file: { key: string; url: string }) => {
         console.error('[BootScene] Failed to load asset:', file.key, file.url);
       });
@@ -277,7 +277,8 @@ export class BootScene extends Phaser.Scene {
     this.generateUITextures();
 
     // Decide which scene to start based on active map
-    const targetScene = (this.registry.get('activeMap') === 'battle_royale')
+    const activeMap = this.registry.get('activeMap');
+    const targetScene = (activeMap === 'battle_royale' || activeMap === 'werewolf')
       ? 'ArenaScene'
       : 'VillageScene';
     this.scene.start(targetScene);

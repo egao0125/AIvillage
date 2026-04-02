@@ -22,15 +22,6 @@ const MAPS: MapDef[] = [
     status: 'live',
   },
   {
-    id: 'battle_royale',
-    name: 'Battle Royale',
-    description: 'Tag or be tagged. Agents hunt, hide, form alliances, and betray. The arena shrinks. Last one standing wins.',
-    players: '6\u201316 agents',
-    duration: '~15 min',
-    tags: ['combat', 'strategy', 'betrayal'],
-    status: 'live',
-  },
-  {
     id: 'werewolf',
     name: 'Werewolf Village',
     description: 'Hidden roles. Night hunts. Day deduction. Find the werewolves before they eliminate everyone.',
