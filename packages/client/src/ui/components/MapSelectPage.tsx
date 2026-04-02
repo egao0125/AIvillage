@@ -69,7 +69,7 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
   return (
     <div
       style={{
-        background: '#050510',
+        background: '#f5f5f0',
         color: COLORS.text,
         minHeight: '100vh',
         display: 'flex',

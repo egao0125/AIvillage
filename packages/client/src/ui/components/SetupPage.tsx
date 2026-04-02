@@ -30,12 +30,12 @@ const MODELS = [
   { value: 'claude-opus-4-6', label: 'Opus 4.6 (smartest)' },
 ];
 
-const ACCENT = '#64ffda';
-const BG = '#050510';
-const CARD_BG = '#0f0f23';
-const INPUT_BG = '#1a1a2e';
-const LABEL_COLOR = '#8888aa';
-const BORDER_DIM = '#2a2a4a';
+const ACCENT = '#2a8a6a';
+const BG = '#f5f5f0';
+const CARD_BG = '#ffffff';
+const INPUT_BG = '#eeeee8';
+const LABEL_COLOR = '#777770';
+const BORDER_DIM = '#d0d0c8';
 
 const SOUL_PLACEHOLDER = `Write their inner voice. This is who they are — how they think, speak, and act.
 
@@ -101,23 +101,24 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
   // --- Check server status + existing auth on mount ---
   useEffect(() => {
     const init = async () => {
-      // Check if we have a valid token
-      const token = getToken();
-      if (token) {
-        try {
-          const authRes = await fetch('/api/auth/me', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (authRes.ok) {
-            const authData = await authRes.json();
-            setUser(authData.user);
-            if (authData.user?.id) setUserId(authData.user.id);
-          } else {
-            clearToken();
+      // Check if we have a valid token, or if server is in dev mode (no Cognito)
+      try {
+        const authRes = await fetch('/api/auth/me', {
+          headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+        });
+        if (authRes.ok) {
+          const authData = await authRes.json();
+          setUser(authData.user);
+          if (authData.user?.id) {
+            setUserId(authData.user.id);
+            // In dev mode, set a dummy token so auth headers work
+            if (!getToken()) setToken('dev-token');
           }
-        } catch {
+        } else {
           clearToken();
         }
+      } catch {
+        clearToken();
       }
 
       // Load existing agents

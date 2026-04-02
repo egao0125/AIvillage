@@ -103,6 +103,16 @@ export const AppShell: React.FC = () => {
           visibility: 'visible',
         }}
       />
+      {/* Vignette overlay — below all UI, above canvas */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          background: 'radial-gradient(ellipse at center, transparent 60%, rgba(148, 136, 110, 0.4) 100%)',
+          zIndex: 2,
+        }}
+      />
       {activeMode === 'watch' && <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />}
       {activeMode === 'analyze' && <AnalyzeView />}
       <TopNav

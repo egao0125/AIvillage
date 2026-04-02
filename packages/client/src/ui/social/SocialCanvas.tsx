@@ -75,7 +75,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
       onClick={(e) => {
         if (e.target === e.currentTarget && wasClick()) onBackgroundClick();
       }}
-      style={{ display: 'block', cursor: 'grab', background: '#0a0a1a' }}
+      style={{ display: 'block', cursor: 'grab', background: '#f0ede4' }}
     >
       <defs>
         <radialGradient id="node-gradient" cx="35%" cy="35%">

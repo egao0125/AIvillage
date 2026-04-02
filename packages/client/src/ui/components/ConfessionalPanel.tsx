@@ -34,7 +34,7 @@ export const ConfessionalPanel: React.FC = () => {
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        background: `radial-gradient(ellipse at center top, #2a1040 0%, #1a0a2e 40%, #0f0f23 100%)`,
+        background: `radial-gradient(ellipse at center top, #f0e8f5 0%, #f2f0ea 40%, #f5f5f0 100%)`,
       }}
     >
       {/* Header */}

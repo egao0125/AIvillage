@@ -1,4 +1,10 @@
 import Phaser from 'phaser';
+import { ISO_TILE_W, ISO_TILE_H } from '../iso';
+import {
+  ASTRO_FRAME_W, ASTRO_FRAME_H,
+  ASTRO_FRAMES_PER_DIR, ASTRO_DIRECTIONS,
+  ASTRO_IDLE_FPS, ASTRO_WALK_FPS, ASTRO_DIE_FPS,
+} from '../data/astronaut-config';
 
 // Fan-tasy Tileset spritesheet URLs — served from public/ directory.
 // Using absolute paths (not Vite imports) to avoid hashing/LFS issues in Docker builds.
@@ -251,6 +257,32 @@ export class BootScene extends Phaser.Scene {
           'ts_road:', this.textures.exists('ts_road'));
       });
     }
+
+    // Load astronaut spritesheets (single-row strips: 30 frames of 258×258)
+    this.load.spritesheet('astro_idle', '/astronaut/IDLE.png', {
+      frameWidth: ASTRO_FRAME_W,
+      frameHeight: ASTRO_FRAME_H,
+    });
+    this.load.spritesheet('astro_walk', '/astronaut/WALKING.png', {
+      frameWidth: ASTRO_FRAME_W,
+      frameHeight: ASTRO_FRAME_H,
+    });
+    this.load.spritesheet('astro_die', '/astronaut/DIE.png', {
+      frameWidth: ASTRO_FRAME_W,
+      frameHeight: ASTRO_FRAME_H,
+    });
+
+    // Load Kenney isometric prototype tiles (individual PNGs, 256×512)
+    this.load.image('kenney_floor', '/kenney_iso/Isometric/floor_E.png');
+    this.load.image('kenney_block', '/kenney_iso/Isometric/block_E.png');
+    this.load.image('kenney_wall', '/kenney_iso/Isometric/wall_E.png');
+    this.load.image('kenney_slab', '/kenney_iso/Isometric/slab_E.png');
+    this.load.image('kenney_blockHalf', '/kenney_iso/Isometric/blockHalf_E.png');
+    this.load.image('kenney_crate', '/kenney_iso/Isometric/crate_E.png');
+    this.load.image('kenney_fence', '/kenney_iso/Isometric/fence_E.png');
+    this.load.image('kenney_column', '/kenney_iso/Isometric/column_E.png');
+    this.load.image('kenney_doorway', '/kenney_iso/Isometric/doorway_E.png');
+    this.load.image('kenney_stairs', '/kenney_iso/Isometric/stairs_E.png');
   }
 
   create(): void {
@@ -260,6 +292,8 @@ export class BootScene extends Phaser.Scene {
     this.generateFurnitureTextures();
     this.generateAgentTextures();
     this.generateUITextures();
+    this.generateIsoDiamondTextures();
+    this.registerAstronautAnimations();
 
     // Decide which scene to start based on active map
     const targetScene = (this.registry.get('activeMap') === 'battle_royale')
@@ -2674,5 +2708,122 @@ export class BootScene extends Phaser.Scene {
     g.strokeEllipse(16, 16, 28, 14);
     g.generateTexture('ui_selection_ring', 32, 32);
     g.destroy();
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ISOMETRIC DIAMOND TILE TEXTURES (64×32)
+  // ═══════════════════════════════════════════════════════════
+  private generateIsoDiamondTextures(): void {
+    const W = ISO_TILE_W;
+    const H = ISO_TILE_H;
+    const hw = W / 2;
+    const hh = H / 2;
+
+    // Map terrain type → base color(s) for the diamond fill
+    const terrainColors: Record<string, number[]> = {
+      tile_grass:      [0x2d5a1e, 0x357024, 0x3a7a2a],
+      tile_path:       [0x9b7b5e, 0xa8876a, 0xb09070],
+      tile_water:      [0x1a4b7c, 0x2a6ba8, 0x3a7bc8],
+      tile_sand:       [0xd4b896, 0xc4a882, 0xe0c8a8],
+      tile_floor:      [0xb89070, 0xd0a880, 0x9a7050],
+      tile_floor_dark: [0x6a5040, 0x7a6050, 0x5a4030],
+      tile_wall:       [0xa09080, 0xb0a090, 0x8a8070],
+      tile_forest:     [0x1a3a12, 0x142e0e, 0x2a4a18],
+      tile_flowers:    [0x2d5a1e, 0x357024, 0x4a8c38],
+      tile_bridge:     [0x7a5c3a, 0x5a4020, 0x9a7c5a],
+      tile_crop:       [0x4a7a20, 0x5a8a30, 0x3a6a10],
+    };
+
+    for (const [key, colors] of Object.entries(terrainColors)) {
+      const isoKey = `iso_${key.replace('tile_', '')}`;
+      if (this.textures.exists(isoKey)) continue;
+
+      const g = this.add.graphics();
+      const rng = seeded(colors[0]);
+
+      // Draw filled diamond with subtle per-pixel color variation
+      for (let py = 0; py < H; py++) {
+        // Width of this scanline in the diamond
+        const ratio = py < hh ? py / hh : (H - 1 - py) / hh;
+        const span = Math.floor(ratio * hw);
+        const cx = hw;
+        for (let dx = -span; dx <= span; dx++) {
+          const c = colors[Math.floor(rng() * colors.length)];
+          px(g, cx + dx, py, c);
+        }
+      }
+
+      // Diamond outline for definition
+      g.lineStyle(1, darken(colors[0], 0.3), 0.5);
+      g.beginPath();
+      g.moveTo(hw, 0);
+      g.lineTo(W, hh);
+      g.lineTo(hw, H);
+      g.lineTo(0, hh);
+      g.closePath();
+      g.strokePath();
+
+      g.generateTexture(isoKey, W, H);
+      g.destroy();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ASTRONAUT ANIMATIONS
+  // ═══════════════════════════════════════════════════════════
+  private registerAstronautAnimations(): void {
+    if (!this.textures.exists('astro_idle') || !this.textures.exists('astro_walk')) {
+      console.warn('[BootScene] Astronaut spritesheets not loaded — skipping animation registration');
+      return;
+    }
+
+    // Looping animations: idle, walk
+    const loopSheets: [string, number][] = [
+      ['astro_idle', ASTRO_IDLE_FPS],
+      ['astro_walk', ASTRO_WALK_FPS],
+    ];
+
+    for (const [sheetKey, fps] of loopSheets) {
+      for (let dir = 0; dir < ASTRO_DIRECTIONS; dir++) {
+        const animKey = `${sheetKey}_${dir}`;
+        if (this.anims.exists(animKey)) continue;
+
+        const startFrame = dir * ASTRO_FRAMES_PER_DIR;
+        const frames = this.anims.generateFrameNumbers(sheetKey, {
+          start: startFrame,
+          end: startFrame + ASTRO_FRAMES_PER_DIR - 1,
+        });
+
+        this.anims.create({
+          key: animKey,
+          frames,
+          frameRate: fps,
+          repeat: -1,
+        });
+      }
+    }
+
+    // One-shot animation: death
+    if (this.textures.exists('astro_die')) {
+      for (let dir = 0; dir < ASTRO_DIRECTIONS; dir++) {
+        const animKey = `astro_die_${dir}`;
+        if (this.anims.exists(animKey)) continue;
+
+        const startFrame = dir * ASTRO_FRAMES_PER_DIR;
+        const frames = this.anims.generateFrameNumbers('astro_die', {
+          start: startFrame,
+          end: startFrame + ASTRO_FRAMES_PER_DIR - 1,
+        });
+
+        this.anims.create({
+          key: animKey,
+          frames,
+          frameRate: ASTRO_DIE_FPS,
+          repeat: 0, // play once
+        });
+      }
+    }
+
+    console.log('[BootScene] Astronaut animations registered');
   }
 }

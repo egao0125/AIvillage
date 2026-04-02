@@ -3,13 +3,43 @@ import { SpeechBubble } from './SpeechBubble';
 import { ThoughtBubble } from './ThoughtBubble';
 import { eventBus } from '../../core/EventBus';
 import { TILE_SIZE } from '../config';
+import { tileToScreen, screenToTile, isoDepth } from '../iso';
 
 const LERP_SPEED = 0.08;
 const NAME_FONT_SIZE = 6;
 const ACTION_FONT_SIZE = 5;
 
+/** Scale astronaut frames (258px) down to roughly tile-sized sprites. */
+const ASTRO_DISPLAY_SCALE = 0.3;
+
+/**
+ * Map screen-space delta to one of the 5 sprite directions + flipX.
+ * Sheet layout: 0=S, 1=SE, 2=E, 3=NE, 4=N.
+ * Mirror via flipX: SW=flip(SE), W=flip(E), NW=flip(NE).
+ */
+function angleToDirFlip(dx: number, dy: number): { dir: number; flip: boolean } {
+  if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return { dir: 0, flip: false };
+
+  const angle = Math.atan2(dy, dx);
+  const sector = Math.round(angle / (Math.PI / 4));
+  // sector: 0=E, 1=SE, 2=S, 3=SW, 4/-4=W, -3=NW, -2=N, -1=NE
+
+  switch (sector) {
+    case 2:  return { dir: 0, flip: false }; // S
+    case 1:  return { dir: 1, flip: false }; // SE
+    case 0:  return { dir: 2, flip: false }; // E
+    case -1: return { dir: 3, flip: false }; // NE
+    case -2: return { dir: 4, flip: false }; // N
+    case -3: return { dir: 3, flip: true };  // NW → flip NE
+    case -4:
+    case 4:  return { dir: 2, flip: true };  // W → flip E
+    case 3:  return { dir: 1, flip: true };  // SW → flip SE
+    default: return { dir: 0, flip: false };
+  }
+}
+
 export class AgentSprite extends Phaser.GameObjects.Container {
-  private sprite: Phaser.GameObjects.Image;
+  private sprite: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
   private nameLabel: Phaser.GameObjects.Text;
   private actionLabel: Phaser.GameObjects.Text;
   private speechBubble: SpeechBubble;
@@ -19,6 +49,10 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private targetX: number;
   private targetY: number;
   private isLerping: boolean = false;
+  private currentDir: number = 0;
+  private useAstro: boolean = false;
+  private targetTileX: number;
+  private targetTileY: number;
   agentId: string;
 
   private static readonly MOOD_COLORS: Record<string, number> = {
@@ -38,16 +72,18 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     name: string,
     spriteKey: string,
     tileX: number,
-    tileY: number
+    tileY: number,
+    tintColor?: number
   ) {
-    const worldX = tileX * TILE_SIZE + TILE_SIZE / 2;
-    const worldY = tileY * TILE_SIZE + TILE_SIZE / 2;
+    const { x: worldX, y: worldY } = tileToScreen(tileX, tileY);
     super(scene, worldX, worldY);
     scene.add.existing(this);
 
     this.agentId = agentId;
     this.targetX = worldX;
     this.targetY = worldY;
+    this.targetTileX = tileX;
+    this.targetTileY = tileY;
 
     // Selection ring (drawn behind sprite)
     this.selectionRing = scene.add.graphics();
@@ -60,28 +96,41 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.add(this.moodRing);
     this.drawMoodRing('neutral');
 
-    // Sprite
-    const textureKey = scene.textures.exists(spriteKey)
-      ? spriteKey
-      : 'agent_default';
-    this.sprite = scene.add.image(0, 0, textureKey);
-    this.sprite.setOrigin(0.5, 0.5);
+    // Ground shadow (dark ellipse under the character for contrast)
+    const shadow = scene.add.graphics();
+    shadow.fillStyle(0x000000, 0.25);
+    shadow.fillEllipse(0, -2, 24, 10);
+    this.add(shadow);
+
+    // Sprite — prefer astronaut animated sprite, fall back to procedural
+    this.useAstro = scene.textures.exists('astro_idle');
+    if (this.useAstro) {
+      const s = scene.add.sprite(0, -10, 'astro_idle', 0);
+      s.setScale(ASTRO_DISPLAY_SCALE);
+      s.setOrigin(0.5, 0.5);
+      s.play('astro_idle_0');
+      this.sprite = s;
+    } else {
+      const textureKey = scene.textures.exists(spriteKey) ? spriteKey : 'agent_default';
+      this.sprite = scene.add.image(0, 0, textureKey);
+      this.sprite.setOrigin(0.5, 0.5);
+    }
     this.add(this.sprite);
 
-    // Name label
-    this.nameLabel = scene.add.text(0, 18, name, {
+    // Name label (above sprite)
+    this.nameLabel = scene.add.text(0, -45, name, {
       fontSize: `${NAME_FONT_SIZE}px`,
       fontFamily: '"Press Start 2P", monospace',
-      color: '#ffffff',
-      stroke: '#000000',
-      strokeThickness: 2,
+      color: '#222222',
+      stroke: '#ffffff',
+      strokeThickness: 3,
       resolution: 2,
     });
     this.nameLabel.setOrigin(0.5, 0);
     this.add(this.nameLabel);
 
-    // Action label
-    this.actionLabel = scene.add.text(0, 28, '', {
+    // Action label (below name, still above sprite)
+    this.actionLabel = scene.add.text(0, -36, '', {
       fontSize: `${ACTION_FONT_SIZE}px`,
       fontFamily: '"Press Start 2P", monospace',
       color: '#aaaaaa',
@@ -93,11 +142,11 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.add(this.actionLabel);
 
     // Thought bubble (positioned above-left, below speech in z-order)
-    this.thoughtBubble = new ThoughtBubble(scene, -10, -25);
+    this.thoughtBubble = new ThoughtBubble(scene, -10, -55);
     this.add(this.thoughtBubble);
 
     // Speech bubble (positioned above sprite)
-    this.speechBubble = new SpeechBubble(scene, 0, -20);
+    this.speechBubble = new SpeechBubble(scene, 0, -50);
     this.add(this.speechBubble);
 
     // Make interactive
@@ -107,23 +156,24 @@ export class AgentSprite extends Phaser.GameObjects.Container {
       eventBus.emit('agent:select', agentId);
     });
 
-    this.setDepth(tileY + 10);
+    this.setDepth(isoDepth(tileX, tileY) * 10 + 5);
   }
 
   private drawSelectionRing(): void {
     this.selectionRing.clear();
-    // Golden pulsing ring
+    // Golden pulsing ring around character center (not at feet to avoid tile clipping)
     this.selectionRing.lineStyle(2, 0xffd700, 0.9);
-    this.selectionRing.strokeEllipse(0, 4, 28, 14);
+    this.selectionRing.strokeEllipse(0, -6, 30, 16);
     this.selectionRing.lineStyle(1, 0xffec80, 0.5);
-    this.selectionRing.strokeEllipse(0, 4, 32, 18);
+    this.selectionRing.strokeEllipse(0, -6, 34, 20);
   }
 
   private drawMoodRing(mood: string): void {
     this.moodRing.clear();
     const color = AgentSprite.MOOD_COLORS[mood] || 0x9ca3af;
+    // Small ring around character center
     this.moodRing.lineStyle(1.5, color, 0.7);
-    this.moodRing.strokeCircle(0, 0, 10);
+    this.moodRing.strokeEllipse(0, -6, 26, 14);
   }
 
   setMood(mood: string): void {
@@ -131,11 +181,25 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   }
 
   moveToTile(tileX: number, tileY: number): void {
-    this.targetX = tileX * TILE_SIZE + TILE_SIZE / 2;
-    this.targetY = tileY * TILE_SIZE + TILE_SIZE / 2;
+    const { x: sx, y: sy } = tileToScreen(tileX, tileY);
+    this.targetX = sx;
+    this.targetY = sy;
+    this.targetTileX = tileX;
+    this.targetTileY = tileY;
     this.isLerping = true;
+
     // Update depth for proper z-ordering
-    this.setDepth(tileY + 10);
+    this.setDepth(isoDepth(tileX, tileY) * 10 + 5);
+
+    // Determine walk direction
+    if (this.useAstro && this.sprite instanceof Phaser.GameObjects.Sprite) {
+      const dx = sx - this.x;
+      const dy = sy - this.y;
+      const { dir, flip } = angleToDirFlip(dx, dy);
+      this.currentDir = dir;
+      this.sprite.setFlipX(flip);
+      this.sprite.play(`astro_walk_${dir}`, true);
+    }
   }
 
   setAction(action: string): void {
@@ -172,6 +236,32 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     }
   }
 
+  /** Play death animation then fade out. Returns a promise that resolves when done. */
+  die(): Promise<void> {
+    this.isLerping = false;
+    return new Promise((resolve) => {
+      if (this.useAstro && this.sprite instanceof Phaser.GameObjects.Sprite) {
+        this.sprite.play(`astro_die_${this.currentDir}`);
+        this.sprite.once('animationcomplete', () => {
+          this.scene.tweens.add({
+            targets: this,
+            alpha: 0,
+            duration: 800,
+            onComplete: () => resolve(),
+          });
+        });
+      } else {
+        // Fallback: just fade out
+        this.scene.tweens.add({
+          targets: this,
+          alpha: 0,
+          duration: 1500,
+          onComplete: () => resolve(),
+        });
+      }
+    });
+  }
+
   update(_time: number, _delta: number): void {
     if (!this.isLerping) return;
 
@@ -183,11 +273,21 @@ export class AgentSprite extends Phaser.GameObjects.Container {
       this.x = this.targetX;
       this.y = this.targetY;
       this.isLerping = false;
+      this.setDepth(isoDepth(this.targetTileX, this.targetTileY) * 10 + 5);
+
+      // Switch to idle animation on arrival
+      if (this.useAstro && this.sprite instanceof Phaser.GameObjects.Sprite) {
+        this.sprite.play(`astro_idle_${this.currentDir}`, true);
+      }
       return;
     }
 
     // Smooth lerp
     this.x = Phaser.Math.Linear(this.x, this.targetX, LERP_SPEED);
     this.y = Phaser.Math.Linear(this.y, this.targetY, LERP_SPEED);
+
+    // Update depth continuously based on current interpolated screen position
+    const curTile = screenToTile(this.x, this.y);
+    this.setDepth(isoDepth(curTile.x, curTile.y) * 10 + 5);
   }
 }

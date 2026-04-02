@@ -169,6 +169,11 @@ export async function verifyToken(token: string): Promise<string | null> {
  */
 export function optionalAuth(_config?: unknown) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    // Dev bypass: when Cognito is not configured, assign a dev user
+    if (!COGNITO_USER_POOL_ID || COGNITO_USER_POOL_ID === 'local-dev') {
+      req.userId = 'dev-user';
+      return next();
+    }
     const authHdr = req.headers.authorization;
     const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
     if (!token) {
@@ -476,6 +481,11 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
 
   // GET /api/auth/me
   router.get('/api/auth/me', async (req: Request, res: Response) => {
+    // Dev bypass: when Cognito is not configured, return a dev user
+    if (!COGNITO_USER_POOL_ID || COGNITO_USER_POOL_ID === 'local-dev') {
+      res.json({ user: { id: 'dev-user', email: 'dev@localhost' } });
+      return;
+    }
     const authHdr = req.headers.authorization;
     const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
     if (!token) {

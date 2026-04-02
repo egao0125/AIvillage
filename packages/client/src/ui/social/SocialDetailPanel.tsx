@@ -27,7 +27,7 @@ export const SocialDetailPanel: React.FC<DetailProps & { onClose: () => void }> 
         right: 0,
         bottom: 0,
         width: 350,
-        background: 'rgba(15, 15, 35, 0.96)',
+        background: 'rgba(245, 245, 240, 0.96)',
         borderLeft: `1px solid ${COLORS.border}`,
         overflowY: 'auto',
         overscrollBehavior: 'contain',

@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { TILE_SIZE, MAP_WIDTH, MAP_HEIGHT } from '../config';
+import { MAP_WIDTH, MAP_HEIGHT } from '../config';
 import {
   TILE_MAP,
   TILE_TYPES,
@@ -13,20 +13,40 @@ import { eventBus } from '../../core/EventBus';
 import { gameStore } from '../../core/GameStore';
 import { sendViewportUpdate } from '../../network/socket';
 import { generateAgentTexture, agentColorsFromName } from './BootScene';
+import { tileToScreen, screenToTile, isoDepth, isoWorldBounds } from '../iso';
 import type { Agent, GameTime } from '@ai-village/shared';
 
-const TILE_TEXTURE_MAP: Record<number, string> = {
-  [TILE_TYPES.GRASS]: 'tile_grass',
-  [TILE_TYPES.PATH]: 'tile_path',
-  [TILE_TYPES.WATER]: 'tile_water',
-  [TILE_TYPES.SAND]: 'tile_sand',
-  [TILE_TYPES.FLOOR]: 'tile_floor',
-  [TILE_TYPES.WALL]: 'tile_wall',
-  [TILE_TYPES.FOREST]: 'tile_forest',
-  [TILE_TYPES.FLOWERS]: 'tile_flowers',
-  [TILE_TYPES.BRIDGE]: 'tile_bridge',
-  [TILE_TYPES.FLOOR_DARK]: 'tile_floor_dark',
-  [TILE_TYPES.CROP]: 'tile_crop',
+/** Kenney tile key + tint per terrain type.
+ *  Tiles are 256×512 PNGs; we scale to 0.25 to match our 64×32 iso grid.
+ *  Origin (0.5, 0.875) aligns the diamond base center with the tile position.
+ *
+ *  Depth layering (multiply isoDepth by 10 to create interleave slots):
+ *    floor:      isoDepth * 10
+ *    furniture:  isoDepth * 10 + 2
+ *    trees/deco: isoDepth * 10 + 3
+ *    agents:     isoDepth * 10 + 5
+ *    walls:      isoDepth * 10 + 7  (occlude agents behind them)
+ */
+const KENNEY_SCALE = 0.25;
+const KENNEY_ORIGIN_Y = 0.875;
+const DEPTH_MUL = 10;
+
+/** Parse CSS hex color to Phaser number */
+const hex = (css: string) => parseInt(css.replace('#', ''), 16);
+
+interface KenneyTileDef { key: string; tint?: number; yOffset?: number; depthBoost?: number }
+const KENNEY_TILE_MAP: Record<number, KenneyTileDef> = {
+  [TILE_TYPES.GRASS]:      { key: 'kenney_floor', tint: hex('#bbeebb') },
+  [TILE_TYPES.PATH]:       { key: 'kenney_floor', tint: hex('#eeeadd') },
+  [TILE_TYPES.WATER]:      { key: 'kenney_floor', tint: hex('#aaddee'), yOffset: 8 },
+  [TILE_TYPES.SAND]:       { key: 'kenney_floor', tint: hex('#ffeeaa') },
+  [TILE_TYPES.FLOOR]:      { key: 'kenney_floor', tint: hex('#faf5ee') },
+  [TILE_TYPES.WALL]:       { key: 'kenney_block', tint: hex('#fffaf2'), depthBoost: 7 },
+  [TILE_TYPES.FOREST]:     { key: 'kenney_floor', tint: hex('#99ddaa') },
+  [TILE_TYPES.FLOWERS]:    { key: 'kenney_floor', tint: hex('#cceecc') },
+  [TILE_TYPES.BRIDGE]:     { key: 'kenney_floor', tint: hex('#eeddaa') },
+  [TILE_TYPES.FLOOR_DARK]: { key: 'kenney_floor', tint: hex('#e0d8cc') },
+  [TILE_TYPES.CROP]:       { key: 'kenney_floor', tint: hex('#ccee88') },
 };
 
 export class VillageScene extends Phaser.Scene {
@@ -36,6 +56,8 @@ export class VillageScene extends Phaser.Scene {
   private dayNightOverlay!: Phaser.GameObjects.Rectangle;
   private conversationGraphics!: Phaser.GameObjects.Graphics;
   private cleanupFns: (() => void)[] = [];
+  /** Objects rendered on a separate no-bloom camera */
+  private uiObjects: Phaser.GameObjects.GameObject[] = [];
   // Infra 6: Viewport tracking — throttled to avoid spamming server
   private lastViewportKey: string = '';
   private viewportThrottleTime: number = 0;
@@ -54,15 +76,16 @@ export class VillageScene extends Phaser.Scene {
 
     // Conversation connector lines (rendered between agents who are talking)
     this.conversationGraphics = this.add.graphics();
-    this.conversationGraphics.setDepth(9);
+    this.conversationGraphics.setDepth(9999);
 
-    // Day/night overlay
+    // Day/night overlay — sized to isometric world bounds
+    const wb = isoWorldBounds(MAP_WIDTH, MAP_HEIGHT);
     this.dayNightOverlay = this.add
       .rectangle(
-        (MAP_WIDTH * TILE_SIZE) / 2,
-        (MAP_HEIGHT * TILE_SIZE) / 2,
-        MAP_WIDTH * TILE_SIZE,
-        MAP_HEIGHT * TILE_SIZE,
+        wb.centerX,
+        wb.centerY,
+        wb.width + 200, // extra padding so edges aren't visible
+        wb.height + 200,
         0x000033,
         0
       )
@@ -71,11 +94,43 @@ export class VillageScene extends Phaser.Scene {
     this.setupCamera();
     this.setupEventListeners();
     this.syncInitialState();
+
+    // Subtle bloom glow — main camera only (excludes UI text)
+    if (this.cameras.main.postFX) {
+      this.cameras.main.postFX.addBloom(0xffffff, 0.85, 0.15, 0.6, 1.5);
+    }
+
+    // No-bloom camera for text/agents: renders on top with transparent bg
+    const main = this.cameras.main;
+    const uiCam = this.cameras.add(0, 0, main.width, main.height);
+    uiCam.transparent = true;
+    uiCam.setScroll(main.scrollX, main.scrollY);
+    uiCam.setZoom(main.zoom);
+
+    // Main camera (bloom): hide UI text objects
+    for (const obj of this.uiObjects) {
+      main.ignore(obj);
+    }
+
+    // UI camera (clean): hide everything except UI text + agents
+    // We hide all current children, then agents get added to uiCam as they spawn
+    this.children.list.forEach((child) => {
+      if (!this.uiObjects.includes(child)) {
+        uiCam.ignore(child);
+      }
+    });
   }
 
   update(time: number, delta: number): void {
     for (const sprite of this.agentSprites.values()) {
       sprite.update(time, delta);
+    }
+    // Keep UI camera synced with main camera
+    const uiCam = this.cameras.cameras[1];
+    if (uiCam) {
+      const main = this.cameras.main;
+      uiCam.setScroll(main.scrollX, main.scrollY);
+      uiCam.setZoom(main.zoom);
     }
     this.drawConversationLines();
     this.emitViewportUpdate(time);
@@ -85,11 +140,16 @@ export class VillageScene extends Phaser.Scene {
   private emitViewportUpdate(time: number): void {
     if (time - this.viewportThrottleTime < 500) return;
     const cam = this.cameras.main;
-    // Convert pixel viewport to tile coordinates
-    const x = Math.floor(cam.scrollX / TILE_SIZE);
-    const y = Math.floor(cam.scrollY / TILE_SIZE);
-    const width = Math.ceil(cam.width / (TILE_SIZE * cam.zoom));
-    const height = Math.ceil(cam.height / (TILE_SIZE * cam.zoom));
+    // Convert pixel viewport to tile coordinates via isometric inverse
+    const topLeft = screenToTile(cam.scrollX, cam.scrollY);
+    const botRight = screenToTile(
+      cam.scrollX + cam.width / cam.zoom,
+      cam.scrollY + cam.height / cam.zoom
+    );
+    const x = Math.floor(topLeft.x);
+    const y = Math.floor(topLeft.y);
+    const width = Math.ceil(botRight.x - topLeft.x);
+    const height = Math.ceil(botRight.y - topLeft.y);
     const key = `${x},${y},${width},${height}`;
     if (key === this.lastViewportKey) return;
     this.lastViewportKey = key;
@@ -153,209 +213,143 @@ export class VillageScene extends Phaser.Scene {
     for (let y = 0; y < MAP_HEIGHT; y++) {
       for (let x = 0; x < MAP_WIDTH; x++) {
         const tileType = TILE_MAP[y]?.[x] ?? TILE_TYPES.GRASS;
+        const def = KENNEY_TILE_MAP[tileType] ?? { key: 'kenney_floor', tint: 0x88cc88 };
+        const { x: sx, y: sy } = tileToScreen(x, y);
+        const yOff = def.yOffset ?? 0;
+        const depthBoost = def.depthBoost ?? 0;
 
-        // Per-building floor color variant: buildingIndex % 3
-        // variant 0 = default texture, 1 = _b1, 2 = _b2
-        let texKey: string;
-        if (
-          (tileType === TILE_TYPES.FLOOR || tileType === TILE_TYPES.FLOOR_DARK) &&
-          tileBuilding[y][x] >= 0
-        ) {
-          const bVariant = tileBuilding[y][x] % 3;
-          const baseTex = TILE_TEXTURE_MAP[tileType] ?? 'tile_grass';
-          if (bVariant === 0) {
-            texKey = baseTex;
-          } else {
-            const candidateTex = `${baseTex}_b${bVariant}`;
-            texKey = this.textures.exists(candidateTex) ? candidateTex : baseTex;
-          }
-        } else {
-          // Non-floor tiles: use standard variant system
-          const variant = (x * 7 + y * 13) % 3;
-          const baseTex = TILE_TEXTURE_MAP[tileType] ?? 'tile_grass';
-          const variantTex = `${baseTex}_${variant}`;
-          texKey = this.textures.exists(variantTex) ? variantTex : baseTex;
-        }
+        const img = this.add
+          .image(sx, sy + yOff, def.key)
+          .setScale(KENNEY_SCALE)
+          .setOrigin(0.5, KENNEY_ORIGIN_Y)
+          .setDepth(isoDepth(x, y) * DEPTH_MUL + depthBoost);
 
-        this.add
-          .image(
-            x * TILE_SIZE + TILE_SIZE / 2,
-            y * TILE_SIZE + TILE_SIZE / 2,
-            texKey
-          )
-          .setDepth(0);
+        if (def.tint) img.setTint(def.tint);
       }
     }
   }
 
-  // ── 2.5D wall depth: front face + side face + ground shadows ──
+  // ── Building shadows (disabled for isometric MVP) ──
   private drawBuildingShadows(): void {
-    const g = this.add.graphics();
-    g.setDepth(1); // above floor, below furniture
-
-    const FRONT_H = 12; // south-facing front face height (px)
-    const SIDE_W = 8;   // east-facing side face width (px)
-    const FRONT_COLOR = 0x8a7e70;  // warm tan (south face)
-    const SIDE_COLOR = 0x9a8e80;   // lighter tan (east face)
-
-    for (let y = 0; y < MAP_HEIGHT; y++) {
-      for (let x = 0; x < MAP_WIDTH; x++) {
-        const tile = TILE_MAP[y]?.[x];
-        if (tile !== TILE_TYPES.WALL) continue;
-
-        const below = TILE_MAP[y + 1]?.[x];
-        const right = TILE_MAP[y]?.[x + 1];
-
-        // East side face: darker strip on right edge of wall tile
-        if (right !== undefined && right !== TILE_TYPES.WALL) {
-          g.fillStyle(SIDE_COLOR, 1);
-          g.fillRect(
-            (x + 1) * TILE_SIZE - SIDE_W,
-            y * TILE_SIZE,
-            SIDE_W,
-            TILE_SIZE
-          );
-          // Thin shadow to the right
-          g.fillStyle(0x000000, 0.08);
-          g.fillRect(
-            (x + 1) * TILE_SIZE,
-            y * TILE_SIZE,
-            3,
-            TILE_SIZE
-          );
-        }
-
-        // South front face: darker strip on bottom edge of wall tile
-        // (drawn after east so south wins at corners)
-        if (below !== undefined && below !== TILE_TYPES.WALL) {
-          // Front face gradient: lighter at top, darker at bottom
-          const fr = (FRONT_COLOR >> 16) & 0xff;
-          const fg = (FRONT_COLOR >> 8) & 0xff;
-          const fb = FRONT_COLOR & 0xff;
-          for (let fy = 0; fy < FRONT_H; fy++) {
-            const py = (y + 1) * TILE_SIZE - FRONT_H + fy;
-            const shade = 1 - (fy / FRONT_H) * 0.15; // darken toward bottom
-            const c = (Math.round(fr * shade) << 16) | (Math.round(fg * shade) << 8) | Math.round(fb * shade);
-            g.fillStyle(c, 1);
-            g.fillRect(x * TILE_SIZE, py, TILE_SIZE, 1);
-          }
-          // Ground shadow below wall
-          g.fillStyle(0x000000, 0.12);
-          g.fillRect(
-            x * TILE_SIZE,
-            (y + 1) * TILE_SIZE,
-            TILE_SIZE,
-            5
-          );
-        }
-      }
-    }
+    // TODO: Implement isometric wall extrusion / shadow rendering
   }
 
   // ── Building labels (12px, dark background panel, centered) ──
   private drawBuildingLabels(): void {
     for (const building of BUILDINGS) {
       if (!building.label) continue;
-      const cx = (building.x + building.w / 2) * TILE_SIZE;
-      const cy = (building.y + building.h / 2) * TILE_SIZE;
+      const centerTileX = building.x + building.w / 2;
+      const centerTileY = building.y + building.h / 2;
+      const { x: cx, y: cy } = tileToScreen(centerTileX, centerTileY);
 
       // Create label text first to measure it
       const label = this.add.text(cx, cy, building.label, {
         fontSize: '12px',
         fontFamily: '"Press Start 2P", monospace',
-        color: '#ffffff',
+        color: '#222222',
+        stroke: '#ffffff',
+        strokeThickness: 3,
         resolution: 2,
       });
       label.setOrigin(0.5, 0.5);
       label.setDepth(2001);
 
-      // Semi-transparent dark background panel
+      // Semi-transparent background panel
       const pad = 6;
       const bg = this.add.rectangle(
         cx, cy,
         label.width + pad * 2,
         label.height + pad * 2,
-        0x000000, 0.55
+        0xffffff, 0.6
       );
       bg.setOrigin(0.5, 0.5);
       bg.setDepth(2000);
+      // Track for no-bloom camera
+      this.uiObjects.push(label, bg);
     }
   }
 
-  // ── Furniture ───────────────────────────────────────────
+  // ── Furniture (Kenney iso tiles) ─────────────────────────
   private placeFurniture(): void {
-    const BUILDING_TINTS: Record<string, number> = {
-      'Church': 0xffe8c0, 'School': 0xe0e8f0, 'Cafe': 0xfff0d0,
-      'Bakery': 0xffe0b0, 'Town Hall': 0xf0e8e0, 'Workshop': 0xd8d0c8,
-      'Clinic': 0xf0f5ff, 'Tavern': 0xffd8a0, 'Market': 0xf8f0e0,
+    // Map old furniture types → Kenney tile + tint
+    const FURN_MAP: Record<string, { key: string; tint?: number }> = {
+      table:      { key: 'kenney_slab',      tint: 0xcc9966 },
+      chair:      { key: 'kenney_blockHalf',  tint: 0xbb8855 },
+      counter:    { key: 'kenney_slab',      tint: 0xaa8866 },
+      bookshelf:  { key: 'kenney_block',     tint: 0x886644 },
+      bed:        { key: 'kenney_slab',      tint: 0x8899cc },
+      oven:       { key: 'kenney_block',     tint: 0x666666 },
+      workbench:  { key: 'kenney_slab',      tint: 0xaa8855 },
+      barrel:     { key: 'kenney_crate',     tint: 0x886644 },
+      altar:      { key: 'kenney_slab',      tint: 0xddddcc },
+      desk:       { key: 'kenney_slab',      tint: 0xbb9966 },
+      pew:        { key: 'kenney_blockHalf',  tint: 0x997755 },
+      blackboard: { key: 'kenney_block',     tint: 0x334433 },
+      anvil:      { key: 'kenney_crate',     tint: 0x555555 },
+      fireplace:  { key: 'kenney_block',     tint: 0x884422 },
+      crate:      { key: 'kenney_crate' },
     };
 
     for (const item of FURNITURE) {
-      const texKey = `furn_${item.type}`;
-      if (!this.textures.exists(texKey)) continue;
-      const img = this.add.image(
-        item.x * TILE_SIZE + TILE_SIZE / 2,
-        item.y * TILE_SIZE + TILE_SIZE / 2,
-        texKey
-      );
-      img.setOrigin(0.5, 0.5);
-      img.setDepth(item.y + 1);
-
-      // Per-building tint
-      for (const b of BUILDINGS) {
-        if (item.x >= b.x && item.x < b.x + b.w && item.y >= b.y && item.y < b.y + b.h && b.label) {
-          const tint = BUILDING_TINTS[b.label];
-          if (tint) img.setTint(tint);
-          break;
-        }
-      }
+      const def = FURN_MAP[item.type] ?? { key: 'kenney_crate' };
+      const { x: sx, y: sy } = tileToScreen(item.x, item.y);
+      const img = this.add.image(sx, sy, def.key);
+      img.setScale(KENNEY_SCALE * 0.6);
+      img.setOrigin(0.5, KENNEY_ORIGIN_Y);
+      img.setDepth(isoDepth(item.x, item.y) * DEPTH_MUL + 2);
+      if (def.tint) img.setTint(def.tint);
     }
   }
 
-  // ── Trees ─────────────────────────────────────────────────
+  // ── Trees (Kenney iso columns, tinted green) ──────────────
   private placeTrees(): void {
-    for (const tree of TREES) {
-      const texKey = `tree_${tree.type}`;
-      if (!this.textures.exists(texKey)) continue;
+    const TREE_TINTS: Record<string, number> = {
+      oak: 0x558833,
+      pine: 0x336622,
+      cherry: 0xcc6688,
+    };
 
-      const img = this.add.image(
-        tree.x * TILE_SIZE + TILE_SIZE / 2,
-        tree.y * TILE_SIZE + TILE_SIZE / 2,
-        texKey
-      );
-      img.setOrigin(0.5, 0.85);
-      img.setDepth(tree.y + 2);
+    for (const tree of TREES) {
+      const { x: sx, y: sy } = tileToScreen(tree.x, tree.y);
+      const img = this.add.image(sx, sy, 'kenney_column');
+      img.setScale(KENNEY_SCALE * 0.8);
+      img.setOrigin(0.5, KENNEY_ORIGIN_Y);
+      img.setDepth(isoDepth(tree.x, tree.y) * DEPTH_MUL + 3);
+      img.setTint(TREE_TINTS[tree.type] ?? 0x558833);
     }
   }
 
-  // ── Decorations ───────────────────────────────────────────
+  // ── Decorations (Kenney iso crates/fences) ─────────────────
   private placeDecorations(): void {
-    for (const deco of DECORATIONS) {
-      const texKey = `deco_${deco.type}`;
-      if (!this.textures.exists(texKey)) continue;
+    const DECO_MAP: Record<string, { key: string; tint?: number }> = {
+      rock:     { key: 'kenney_crate',     tint: 0x888888 },
+      mushroom: { key: 'kenney_crate',     tint: 0xcc6644 },
+      bench:    { key: 'kenney_slab',      tint: 0x997755 },
+      lantern:  { key: 'kenney_fence',     tint: 0xffcc44 },
+    };
 
-      const img = this.add.image(
-        deco.x * TILE_SIZE + TILE_SIZE / 2,
-        deco.y * TILE_SIZE + TILE_SIZE / 2,
-        texKey
-      );
-      img.setOrigin(0.5, 0.5);
-      img.setDepth(deco.y + 1);
+    for (const deco of DECORATIONS) {
+      const def = DECO_MAP[deco.type] ?? { key: 'kenney_crate', tint: 0x888888 };
+      const { x: sx, y: sy } = tileToScreen(deco.x, deco.y);
+      const img = this.add.image(sx, sy, def.key);
+      img.setScale(KENNEY_SCALE * 0.5);
+      img.setOrigin(0.5, KENNEY_ORIGIN_Y);
+      img.setDepth(isoDepth(deco.x, deco.y) * DEPTH_MUL + 3);
+      if (def.tint) img.setTint(def.tint);
     }
   }
 
   // ── Camera ────────────────────────────────────────────────
   private setupCamera(): void {
-    const worldW = MAP_WIDTH * TILE_SIZE;
-    const worldH = MAP_HEIGHT * TILE_SIZE;
+    const wb = isoWorldBounds(MAP_WIDTH, MAP_HEIGHT);
 
     // No camera bounds — allow free panning
     const cam = this.cameras.main;
 
-    // Initial zoom: fit the entire map in view
-    const fitZoom = Math.min(cam.width / worldW, cam.height / worldH);
+    // Initial zoom: fit the entire isometric diamond in view
+    const fitZoom = Math.min(cam.width / wb.width, cam.height / wb.height);
     cam.setZoom(Math.max(fitZoom, 0.5));
-    cam.centerOn(worldW / 2, worldH / 2);
+    cam.centerOn(wb.centerX, wb.centerY);
 
     // Drag to pan — also stops following selected agent
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
@@ -471,10 +465,10 @@ export class VillageScene extends Phaser.Scene {
   private spawnAgent(agent: Agent): void {
     if (this.agentSprites.has(agent.id)) return;
 
-    // Generate a unique texture for this agent based on their name
+    // Generate a unique texture for this agent based on their name (fallback)
     const texKey = `agent_${agent.id}`;
+    const { shirt, hair } = agentColorsFromName(agent.config.name);
     if (!this.textures.exists(texKey)) {
-      const { shirt, hair } = agentColorsFromName(agent.config.name);
       generateAgentTexture(this, texKey, shirt, hair);
     }
 
@@ -484,26 +478,23 @@ export class VillageScene extends Phaser.Scene {
       agent.config.name,
       texKey,
       agent.position.x,
-      agent.position.y
+      agent.position.y,
+      shirt // tint color for astronaut sprite differentiation
     );
     if (agent.currentAction) agentSprite.setAction(agent.currentAction);
     if (agent.mood) agentSprite.setMood(agent.mood);
     this.agentSprites.set(agent.id, agentSprite);
+
   }
 
   private despawnAgent(agentId: string): void {
     const sprite = this.agentSprites.get(agentId);
     if (!sprite) return;
 
-    // Fade out then destroy
-    this.tweens.add({
-      targets: sprite,
-      alpha: 0,
-      duration: 1500,
-      onComplete: () => {
-        sprite.destroy();
-        this.agentSprites.delete(agentId);
-      },
+    // Play death animation then destroy
+    sprite.die().then(() => {
+      sprite.destroy();
+      this.agentSprites.delete(agentId);
     });
   }
 
