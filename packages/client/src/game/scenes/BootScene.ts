@@ -9,6 +9,11 @@ const TILESET_ROAD_URL = '/tilesets/Tileset_Road.png';
 const ATLAS_TREES_URL = '/tilesets/Atlas_Trees_Bushes.png';
 const ATLAS_ROCKS_URL = '/tilesets/Atlas_Rocks.png';
 const TILESET_SHADOW_URL = '/tilesets/Tileset_Shadow.png';
+const ATLAS_BUILDINGS_BLUE_URL = '/tilesets/Atlas_Buildings_Wood_Blue.png';
+const ATLAS_BUILDINGS_ORANGE_URL = '/tilesets/Atlas_Buildings_Wood_Orange.png';
+const ATLAS_BUILDINGS_GREEN_URL = '/tilesets/Atlas_Buildings_Wood_Green.png';
+const ATLAS_BUILDINGS_HAY_URL = '/tilesets/Atlas_Buildings_Hay.png';
+const ATLAS_BUILDINGS_RED_URL = '/tilesets/Atlas_Buildings_Wood_Red.png';
 
 const T = 32; // tile size
 
@@ -252,6 +257,11 @@ export class BootScene extends Phaser.Scene {
       this.load.image('Atlas_Trees_Bushes', ATLAS_TREES_URL);
       this.load.image('Atlas_Rocks', ATLAS_ROCKS_URL);
       this.load.image('Tileset_Shadow', TILESET_SHADOW_URL);
+      this.load.image('Atlas_Buildings_Blue', ATLAS_BUILDINGS_BLUE_URL);
+      this.load.image('Atlas_Buildings_Orange', ATLAS_BUILDINGS_ORANGE_URL);
+      this.load.image('Atlas_Buildings_Green', ATLAS_BUILDINGS_GREEN_URL);
+      this.load.image('Atlas_Buildings_Hay', ATLAS_BUILDINGS_HAY_URL);
+      this.load.image('Atlas_Buildings_Red', ATLAS_BUILDINGS_RED_URL);
       this.load.on('complete', () => {
         console.log('[BootScene] Arena tilemap + tilesets loaded');
       });

@@ -60,6 +60,11 @@ export class ArenaScene extends Phaser.Scene {
       map.addTilesetImage('Atlas_Trees_Bushes', 'Atlas_Trees_Bushes'),
       map.addTilesetImage('Atlas_Rocks', 'Atlas_Rocks'),
       map.addTilesetImage('Tileset_Shadow', 'Tileset_Shadow'),
+      map.addTilesetImage('Atlas_Buildings_Blue', 'Atlas_Buildings_Blue'),
+      map.addTilesetImage('Atlas_Buildings_Orange', 'Atlas_Buildings_Orange'),
+      map.addTilesetImage('Atlas_Buildings_Green', 'Atlas_Buildings_Green'),
+      map.addTilesetImage('Atlas_Buildings_Hay', 'Atlas_Buildings_Hay'),
+      map.addTilesetImage('Atlas_Buildings_Red', 'Atlas_Buildings_Red'),
     ].filter((ts): ts is Phaser.Tilemaps.Tileset => ts !== null);
 
     if (tilesets.length === 0) {
