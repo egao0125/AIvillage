@@ -30,6 +30,15 @@ const MAPS: MapDef[] = [
     tags: ['combat', 'strategy', 'betrayal'],
     status: 'live',
   },
+  {
+    id: 'werewolf',
+    name: 'Werewolf Village',
+    description: 'Hidden roles. Night hunts. Day deduction. Find the werewolves before they eliminate everyone.',
+    players: '8\u201312 agents',
+    duration: '~15 min',
+    tags: ['social deduction', 'hidden roles', 'voting'],
+    status: 'live',
+  },
 ];
 
 interface Props {

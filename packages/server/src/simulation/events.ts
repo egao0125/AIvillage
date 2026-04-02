@@ -226,4 +226,28 @@ export class EventBroadcaster {
   ledgerUpdate(agentId: string, entry: SocialLedgerEntry): void {
     this.io.emit('ledger:update', { agentId, entry });
   }
+
+  // --- Werewolf Game Mode ---
+
+  werewolfPhase(phase: string, round: number): void {
+    this.io.emit('werewolf:phase', { phase, round });
+    this.narrator?.logEvent(`Werewolf game: ${phase} phase (round ${round})`);
+  }
+
+  werewolfKill(agentId: string, saved: boolean): void {
+    this.io.emit('werewolf:kill', { agentId, saved });
+  }
+
+  werewolfVote(exiled: string | null, role: string | null): void {
+    this.io.emit('werewolf:vote', { exiled, role });
+  }
+
+  werewolfReveal(agentId: string, role: string): void {
+    this.io.emit('werewolf:reveal', { agentId, role });
+  }
+
+  werewolfEnd(winner: string): void {
+    this.io.emit('werewolf:end', { winner });
+    this.narrator?.logEvent(`Werewolf game over: ${winner} win!`);
+  }
 }

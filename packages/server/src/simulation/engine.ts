@@ -22,6 +22,7 @@ import { RecapGenerator } from './recap-generator.js';
 import { LeaderElection } from '../cluster/leader-election.js';
 import { getRedis } from '../redis.js';
 import { SOUL_REWRITES, AGENTS_TO_REMOVE } from './soul-rewrite.js';
+import { WerewolfPhaseManager } from './werewolf/index.js';
 
 export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
@@ -54,6 +55,9 @@ export class SimulationEngine {
   private weeklySummaryGenerating: boolean = false;
   /** Shared RdsMemoryStore for agents loaded from persistence — held so cleanup() can be called on removeAgent() */
   private sharedMemoryStore: RdsMemoryStore | null = null;
+
+  /** Werewolf game mode — phase manager drives the night/day/vote cycle */
+  private werewolfManager: WerewolfPhaseManager | null = null;
 
   // Circuit breaker state for isDbHealthy() readiness probe.
   // Prevents log flooding (k8s calls every 10s) while still surfacing the first failure
@@ -138,6 +142,19 @@ export class SimulationEngine {
     this.mapConfig = getMapConfig(mapId);
     this.cachedGameRules = null;
     setActiveMap(mapId);
+
+    // 3b. Werewolf — instantiate or dispose phase manager
+    if (this.werewolfManager) {
+      this.werewolfManager.dispose();
+      this.werewolfManager = null;
+    }
+    if (this.mapConfig.systems?.werewolf) {
+      this.werewolfManager = new WerewolfPhaseManager(
+        this.bus, this.world, this.broadcaster,
+        this.controllers, this.cognitions, this.conversationManager,
+      );
+    }
+
     console.log(`[Engine] Map set to: ${this.mapConfig.name} (${this.mapConfig.id})`);
 
     // 4. Load new map's state from DB
@@ -160,6 +177,25 @@ export class SimulationEngine {
 
   getMapConfig(): MapConfig {
     return this.mapConfig;
+  }
+
+  getWerewolfManager(): WerewolfPhaseManager | null {
+    return this.werewolfManager;
+  }
+
+  /**
+   * Start a werewolf game with all currently alive agents.
+   * Only works when the active map has werewolf system enabled.
+   */
+  startWerewolfGame(): void {
+    if (!this.werewolfManager) {
+      console.warn('[Engine] Cannot start werewolf game — werewolf system not active');
+      return;
+    }
+    const agentIds = Array.from(this.world.agents.values())
+      .filter(a => a.alive !== false && a.state !== 'away')
+      .map(a => a.id);
+    this.werewolfManager.startGame(agentIds);
   }
 
   async initialize(): Promise<void> {
@@ -251,6 +287,15 @@ export class SimulationEngine {
 
     // Tick controllers — per-agent try-catch so one bad agent doesn't pause the sim
     this.bus.on('tick', (e) => {
+      // Werewolf phase manager ticks before controllers (controls sleep/wake/actions)
+      if (this.werewolfManager) {
+        try {
+          this.werewolfManager.onTick(e.time);
+        } catch (err) {
+          console.error(`[Engine] werewolfManager.onTick() threw — skipping:`, (err as Error).message);
+        }
+      }
+
       for (const [agentId, controller] of this.controllers.entries()) {
         try {
           controller.tick(e.time);
@@ -1440,6 +1485,9 @@ export class SimulationEngine {
       for (let j = i + 1; j < agents.length; j++) {
         const a1 = agents[i];
         const a2 = agents[j];
+
+        // Werewolf night: only wolf-wolf conversations allowed
+        if (this.werewolfManager?.shouldBlockConversation(a1.id, a2.id)) continue;
 
         // Check distance (within 3 tiles — close enough to visually see the connection)
         const dx = a1.position.x - a2.position.x;
