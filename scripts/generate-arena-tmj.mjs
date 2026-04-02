@@ -623,6 +623,17 @@ function computeRoadMask(map) {
     }
   }
 
+  // Plaza around the high clearing — paved stone area
+  const plaza = LOCATIONS.high_clearing;
+  const PLAZA_RX = 6, PLAZA_RY = 4; // half-widths
+  for (let y = plaza.cy - PLAZA_RY; y <= plaza.cy + PLAZA_RY; y++) {
+    for (let x = plaza.cx - PLAZA_RX; x <= plaza.cx + PLAZA_RX; x++) {
+      if (x >= 0 && x < W && y >= 0 && y < H && isLand(map[y][x])) {
+        isRoad[y][x] = true;
+      }
+    }
+  }
+
   return isRoad;
 }
 
