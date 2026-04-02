@@ -64,6 +64,7 @@ export class AgentController {
   private lastHungerConcernBand: number = 0;
   public lastOutcomeDescription: string = '';
   decisionQueue?: DecisionQueue;  // Infra 3: injected by engine
+  werewolfManager?: import('./werewolf/phase-manager.js').WerewolfPhaseManager;  // injected by engine when werewolf map active
   // Refactor v2: structured decision system
   public currentGoals: string[] = [];
   private decidingInProgress: boolean = false;
@@ -1130,10 +1131,14 @@ export class AgentController {
   }
 
   private shouldWake(time: GameTime): boolean {
+    // Werewolf: PhaseManager controls sleep/wake, not time
+    if (this.mapConfig.systems?.werewolf) return false;
     return time.hour === this.wakeHour && time.minute === 0;
   }
 
   private shouldSleep(time: GameTime): boolean {
+    // Werewolf: PhaseManager controls sleep/wake, not time
+    if (this.mapConfig.systems?.werewolf) return false;
     // Trigger once at exact sleep hour — sleepTriggered flag prevents re-firing
     return time.hour === this.sleepHour && time.minute === 0;
   }
@@ -1395,12 +1400,278 @@ export class AgentController {
   }
 
   // =====================================================================
+  // Werewolf: Phase-aware situation builder
+  // =====================================================================
+
+  private buildWerewolfSituation(trigger: string, recentOutcome?: string): AgentSituation {
+    const wm = this.werewolfManager!;
+    const phase = wm.phase;
+    const role = this.agent.werewolfRole;
+    const area = getAreaAt(this.agent.position);
+    const areaId = area?.id ?? 'plaza';
+
+    // Map werewolf action categories to AvailableAction categories
+    const catMap: Record<string, 'physical' | 'movement' | 'social' | 'rest' | 'creative'> = {
+      movement: 'movement', combat: 'physical', survival: 'physical', social: 'social', rest: 'rest',
+    };
+
+    // Get phase-filtered actions from the phase manager
+    const mapActions = wm.getActionsForAgent(this.agent.id);
+    const availableActions: AvailableAction[] = mapActions.map(a => ({
+      id: a.id,
+      label: a.label,
+      category: catMap[a.category ?? 'social'] ?? 'social',
+    }));
+
+    // Nearby agents (living, non-sleeping during day; all visible during night for active roles)
+    const nearby = this.world.getNearbyAgents(this.agent.position, 5)
+      .filter(a => a.id !== this.agent.id && a.alive !== false);
+    const nearbyForSituation = nearby.map(a => ({
+      name: a.config.name,
+      activity: a.state ?? 'idle',
+      id: a.id,
+    }));
+
+    // Build phase-specific situation text
+    let situationText = '';
+
+    if (phase === 'night') {
+      const nightPrompt = wm.getNightPrompt(this.agent.id);
+      situationText = nightPrompt ?? 'You are sleeping. Wait for dawn.';
+    } else if (phase === 'day') {
+      const dayPrompt = wm.getDayPrompt();
+      // Add private knowledge based on role
+      let privateKnowledge = '';
+      if (role === 'sheriff' && this.agent.investigations?.length) {
+        privateKnowledge = '\n\nYOUR INVESTIGATION RESULTS (PRIVATE):\n' +
+          this.agent.investigations.map(inv =>
+            `- Night ${inv.night}: ${inv.targetName} — ${inv.result === 'werewolf' ? 'WEREWOLF!' : 'NOT a werewolf'}`
+          ).join('\n');
+      } else if (role === 'healer' && this.agent.lastGuarded) {
+        const guardedAgent = this.world.getAgent(this.agent.lastGuarded);
+        privateKnowledge = `\n\nLast night you guarded: ${guardedAgent?.config.name ?? 'someone'}.`;
+      } else if (role === 'werewolf') {
+        privateKnowledge = '\n\nRemember: you are pretending to be a villager. Do not reveal your role.';
+      }
+
+      // Vote history
+      let voteHistory = '';
+      if (this.agent.votingHistory?.length) {
+        voteHistory = '\n\nYOUR PREVIOUS VOTES:\n' +
+          this.agent.votingHistory.map(v => {
+            const nomineeName = this.world.getAgent(v.nomineeId)?.config.name ?? 'someone';
+            return `- Day ${v.day}: ${nomineeName} — you voted: ${v.vote}`;
+          }).join('\n');
+      }
+
+      situationText = dayPrompt + privateKnowledge + voteHistory;
+    } else if (phase === 'vote') {
+      situationText = 'VOTE PHASE. Cast your vote: vote_exile or vote_save.';
+    }
+
+    // Build inventory as structured objects
+    const invGroups: Record<string, { name: string; type: string; qty: number }> = {};
+    for (const item of this.agent.inventory) {
+      const key = item.name;
+      if (!invGroups[key]) invGroups[key] = { name: item.name, type: item.type ?? 'item', qty: 0 };
+      invGroups[key].qty++;
+    }
+
+    return {
+      location: area?.name ?? 'plaza',
+      areaId,
+      time: { day: wm.round, hour: this.world.time.hour },
+      hoursUntilDark: 0,
+      hoursUntilSleep: 0,
+      season: 'spring',
+      vitals: this.agent.vitals ?? { hunger: 0, energy: 100, health: 100 },
+      inventory: Object.values(invGroups),
+      nearbyAgents: nearbyForSituation,
+      availableActions,
+      recentOutcome: recentOutcome ?? '',
+      trigger: trigger || situationText,
+    };
+  }
+
+  /**
+   * Handle werewolf-specific actions. Returns true if handled, false to fall through.
+   */
+  private executeWerewolfAction(actionId: string, decision: { actionId: string; targetName?: string; reason?: string }, shortReason: string): boolean {
+    const wm = this.werewolfManager!;
+
+    // Resolve target name → agent ID
+    const resolveTarget = (name?: string): string | null => {
+      if (!name) return null;
+      const lower = name.toLowerCase();
+      for (const agent of this.world.agents.values()) {
+        if (agent.config.name.toLowerCase() === lower && agent.alive !== false) return agent.id;
+      }
+      return null;
+    };
+
+    switch (actionId) {
+      case 'attack': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'attack', targetId);
+          this.broadcaster.agentAction(this.agent.id, `attacks — "${shortReason}"`);
+          this.state = 'performing';
+          this.activityTimer = 3;
+        }
+        return true;
+      }
+
+      case 'change_target': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'change_target', targetId);
+          this.broadcaster.agentAction(this.agent.id, `changes target — "${shortReason}"`);
+        }
+        return true;
+      }
+
+      case 'investigate': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'investigate', targetId);
+          this.broadcaster.agentAction(this.agent.id, `investigates — "${shortReason}"`);
+          this.state = 'performing';
+          this.activityTimer = 3;
+        }
+        return true;
+      }
+
+      case 'guard': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'guard', targetId);
+          this.broadcaster.agentAction(this.agent.id, `guards — "${shortReason}"`);
+          this.state = 'performing';
+          this.activityTimer = 3;
+        }
+        return true;
+      }
+
+      case 'call_vote': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.callVote(this.agent.id, targetId);
+        }
+        return true;
+      }
+
+      case 'vote_exile': {
+        wm.recordVote(this.agent.id, 'exile');
+        this.broadcaster.agentAction(this.agent.id, `votes to EXILE — "${shortReason}"`);
+        return true;
+      }
+
+      case 'vote_save': {
+        wm.recordVote(this.agent.id, 'save');
+        this.broadcaster.agentAction(this.agent.id, `votes to SAVE — "${shortReason}"`);
+        return true;
+      }
+
+      case 'accuse': {
+        // Public accusation — broadcast to all
+        this.broadcaster.agentAction(this.agent.id, `accuses ${decision.targetName ?? 'someone'} — "${shortReason}"`);
+        // Add memory to all nearby agents
+        const nearby = this.world.getNearbyAgents(this.agent.position, 8);
+        for (const a of nearby) {
+          if (a.id === this.agent.id || a.alive === false) continue;
+          const cog = this.agentCognitions?.get(a.id);
+          if (cog) {
+            void cog.addMemory({
+              id: crypto.randomUUID(),
+              agentId: a.id,
+              type: 'observation',
+              content: `${this.agent.config.name} publicly accused ${decision.targetName ?? 'someone'}: "${shortReason}"`,
+              importance: 8,
+              timestamp: Date.now(),
+              relatedAgentIds: [this.agent.id],
+            }).catch(() => {});
+          }
+        }
+        this.state = 'performing';
+        this.activityTimer = 3;
+        return true;
+      }
+
+      case 'defend':
+      case 'share_info':
+      case 'reveal_role': {
+        this.broadcaster.agentAction(this.agent.id, `${actionId.replace('_', ' ')} — "${shortReason}"`);
+        // Public statement — memory for nearby
+        const nearbyAgents = this.world.getNearbyAgents(this.agent.position, 8);
+        for (const a of nearbyAgents) {
+          if (a.id === this.agent.id || a.alive === false) continue;
+          const cog = this.agentCognitions?.get(a.id);
+          if (cog) {
+            void cog.addMemory({
+              id: crypto.randomUUID(),
+              agentId: a.id,
+              type: 'observation',
+              content: `${this.agent.config.name} ${actionId.replace('_', ' ')}: "${shortReason}"`,
+              importance: 7,
+              timestamp: Date.now(),
+              relatedAgentIds: [this.agent.id],
+            }).catch(() => {});
+          }
+        }
+        this.state = 'performing';
+        this.activityTimer = 3;
+        return true;
+      }
+
+      case 'whisper': {
+        // Private conversation — use existing conversation system
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          this.pendingConversationTarget = targetId;
+          this.pendingConversationPurpose = shortReason;
+          this.broadcaster.agentAction(this.agent.id, `whispers to ${decision.targetName}`);
+        }
+        return true;
+      }
+
+      case 'follow': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          const target = this.world.getAgent(targetId);
+          if (target) {
+            this.startMoveTo(target.position);
+            this.broadcaster.agentAction(this.agent.id, `follows ${decision.targetName}`);
+          }
+        }
+        return true;
+      }
+
+      case 'rest': {
+        this.state = 'performing';
+        this.activityTimer = 5;
+        this.world.updateAgentState(this.agent.id, 'idle', 'resting');
+        this.broadcaster.agentAction(this.agent.id, `rests — "${shortReason}"`);
+        return true;
+      }
+
+      default:
+        // Not a werewolf-specific action — fall through to standard handler
+        return false;
+    }
+  }
+
+  // =====================================================================
   // Refactor v2: Structured Decision System
   // =====================================================================
 
   /** Surface unresolved interpersonal dynamics for the decide prompt */
   /** Step 3: Build the full situation object for the LLM decide() call */
   private buildSituation(trigger: string, recentOutcome?: string): AgentSituation {
+    // Werewolf map: phase-aware situation builder
+    if (this.mapConfig.systems?.werewolf && this.werewolfManager) {
+      return this.buildWerewolfSituation(trigger, recentOutcome);
+    }
+
     const area = getAreaAt(this.agent.position);
     const areaId = area?.id ?? 'plaza';
     const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
@@ -2013,6 +2284,12 @@ export class AgentController {
     const shortReason = decision.reason?.length > 80
       ? this.truncateAtSentence(decision.reason, 80)
       : (decision.reason || '');
+
+    // --- Werewolf Actions ---
+    if (this.mapConfig.systems?.werewolf && this.werewolfManager) {
+      const handled = this.executeWerewolfAction(actionId, decision, shortReason);
+      if (handled) return;
+    }
 
     // --- Gather ---
     if (actionId.startsWith('gather_')) {

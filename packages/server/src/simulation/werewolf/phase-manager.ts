@@ -1,6 +1,7 @@
 import type { Agent, GameTime, MapAction, Position } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import type { AgentCognition } from '@ai-village/ai-engine';
+import { buildWerewolfRules } from '@ai-village/ai-engine';
 import type { World } from '../world.js';
 import type { EventBroadcaster } from '../events.js';
 import type { AgentController } from '../agent-controller.js';
@@ -9,7 +10,6 @@ import type { WerewolfGameState, NightResult } from './types.js';
 import { freshNightActions } from './types.js';
 import { assignRoles, getWolfIds } from './role-assigner.js';
 import {
-  buildWerewolfRolePrompt,
   buildWolfNightPrompt,
   buildSheriffNightPrompt,
   buildHealerNightPrompt,
@@ -87,22 +87,18 @@ export class WerewolfPhaseManager {
       }
     }
 
-    // Inject role-specific system prompt into each agent's cognition
+    // Set per-role game rules via gameRulesOverride on each agent's cognition.
+    // This replaces the shared game rules with role-specific ones so each agent
+    // sees different instructions (wolf vs sheriff vs healer vs villager).
     for (const id of agentIds) {
       const cognition = this.cognitions.get(id);
       if (!cognition) continue;
-      const rolePrompt = buildWerewolfRolePrompt(id, this.agentNames.get(id) ?? '', this.state, this.agentNames);
-      void cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: id,
-        type: 'observation',
-        content: rolePrompt,
-        importance: 10,
-        timestamp: Date.now(),
-        relatedAgentIds: [],
-      }).catch((err: unknown) => {
-        console.warn(`[Werewolf] addMemory failed for ${id}:`, (err as Error).message);
-      });
+      const role = roles.get(id)!;
+      const fellowWolfName = role === 'werewolf'
+        ? this.agentNames.get(wolfIds.find(wid => wid !== id) ?? '') ?? undefined
+        : undefined;
+      const perRoleRules = buildWerewolfRules(role, fellowWolfName, agentIds.length);
+      cognition.setGameRules(perRoleRules);
     }
 
     console.log(`[Werewolf] Game started with ${agentIds.length} agents. Roles: ${[...roles.entries()].map(([id, r]) => `${this.agentNames.get(id)}=${r}`).join(', ')}`);
