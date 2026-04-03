@@ -235,10 +235,20 @@ export function useWerewolfGodMode(): boolean {
   );
 }
 
+// Cached snapshot to avoid creating a new object every call (useSyncExternalStore
+// compares by reference — a fresh object each time causes infinite re-renders).
+let _phaseCache: { phase: string | null; round: number } = { phase: null, round: 0 };
+
 export function useWerewolfPhase(): { phase: string | null; round: number } {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
-    () => ({ phase: gameStore.getState().werewolfPhase, round: gameStore.getState().werewolfRound })
+    () => {
+      const s = gameStore.getState();
+      if (s.werewolfPhase !== _phaseCache.phase || s.werewolfRound !== _phaseCache.round) {
+        _phaseCache = { phase: s.werewolfPhase, round: s.werewolfRound };
+      }
+      return _phaseCache;
+    }
   );
 }
 
@@ -246,5 +256,33 @@ export function useWerewolfRoles(): Map<string, string> {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().werewolfRoles
+  );
+}
+
+export function useWerewolfKills(): Array<{ agentId: string; saved: boolean; round: number }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfKills
+  );
+}
+
+export function useWerewolfVotes(): Array<{ round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfVotes
+  );
+}
+
+export function useWerewolfNightActions(): Array<{ round: number; type: string; agentId: string; targetId: string; result?: string }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfNightActions
+  );
+}
+
+export function useWerewolfMeetingTranscripts(): Array<{ round: number; transcript: Array<{ name: string; message: string }> }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfMeetingTranscripts
   );
 }

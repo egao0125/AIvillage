@@ -129,13 +129,24 @@ app.use(express.json({ limit: '16kb' }));
 
 const engine = new SimulationEngine(io);
 
-// Auth: Cognito is required in all environments — without these, JWT verification
+// Auth: Cognito is required in production — without these, JWT verification
 // produces invalid JWKS URLs and signup/login fail with cryptic errors at runtime.
 if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
-  console.error('[Security] FATAL: COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID must be set.');
-  process.exit(1);
+  if (isProduction) {
+    console.error('[Security] FATAL: COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID must be set.');
+    process.exit(1);
+  }
+  console.warn('[Security] Cognito not configured — auth disabled (dev mode only)');
+  // Dev-only stub: fake auth endpoints so the client UI works without Cognito
+  const devUser = { id: 'dev-user', email: 'dev@localhost' };
+  app.post('/api/auth/signup', (_req, res) => res.json({ token: 'dev-token', user: devUser }));
+  app.post('/api/auth/login', (_req, res) => res.json({ token: 'dev-token', user: devUser }));
+  app.get('/api/auth/me', (_req, res) => res.json({ user: devUser }));
+  app.post('/api/auth/logout', (_req, res) => res.json({ message: 'Logged out' }));
+  app.post('/api/auth/refresh', (_req, res) => res.json({ token: 'dev-token' }));
+} else {
+  app.use(createAuthRouter());
 }
-app.use(createAuthRouter());
 app.use('/api', optionalAuth());
 
 // Follower-guard: simulation state mutations must only execute on the leader Pod.
@@ -468,7 +479,11 @@ io.on('connection', (socket) => {
     socket.emit('viewport:catchup', { agents });
   });
 
-  // --- Werewolf Play Again ---
+  // --- Werewolf ---
+  socket.on('werewolf:start', () => {
+    engine.startWerewolfGame();
+  });
+
   socket.on('werewolf:playAgain', () => {
     engine.resetWerewolfGame();
   });

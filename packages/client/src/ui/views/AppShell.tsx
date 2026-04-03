@@ -1,21 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Phaser from 'phaser';
 import { createGameConfig } from '../../game/config';
-import { useActiveMode } from '../../core/hooks';
-import { connectSocket } from '../../network/socket';
+import { useActiveMode, useWerewolfGameOver } from '../../core/hooks';
+import { connectSocket, werewolfPlayAgain } from '../../network/socket';
 import { clearToken } from '../../utils/auth';
+import { gameStore } from '../../core/GameStore';
 import { TopNav } from './TopNav';
 import { WatchView } from './WatchView';
 import { SetupPage } from '../components/SetupPage';
 import { MapSelectPage } from '../components/MapSelectPage';
 import { AgentCreator } from '../components/AgentCreator';
 import { AnalyzeView } from './AnalyzeView';
+import { WerewolfGameOver } from '../components/WerewolfGameOver';
+import { WerewolfSidebar } from '../components/WerewolfSidebar';
 
 export const AppShell: React.FC = () => {
   const [selectedMap, setSelectedMap] = useState<string | null>(() => sessionStorage.getItem('ai-village-map'));
   const [entered, setEntered] = useState(() => sessionStorage.getItem('ai-village-entered') === 'true');
   const [agentCreatorOpen, setAgentCreatorOpen] = useState(false);
   const activeMode = useActiveMode();
+  const werewolfGameOver = useWerewolfGameOver();
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
 
@@ -61,10 +65,19 @@ export const AppShell: React.FC = () => {
     setSelectedMap(null);
   };
 
-  // Reconnect socket on refresh if already entered
+  // Reconnect socket + re-sync map config on refresh if already entered
   useEffect(() => {
     if (entered) {
       connectSocket();
+      // Re-sync server map config — on page refresh the server may have restarted
+      // and reverted to 'village' while sessionStorage still has the previous map.
+      if (selectedMap) {
+        fetch('/api/config/map', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mapId: selectedMap }),
+        }).catch(() => {});
+      }
     }
   }, []);
 
@@ -103,13 +116,26 @@ export const AppShell: React.FC = () => {
           visibility: 'visible',
         }}
       />
-      {activeMode === 'watch' && <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />}
+      {activeMode === 'watch' && (selectedMap === 'werewolf' ? <WerewolfSidebar /> : <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />)}
       {activeMode === 'analyze' && <AnalyzeView />}
       <TopNav
         onChangeMap={handleChangeMap}
         onLogout={handleLogout}
       />
       <AgentCreator open={agentCreatorOpen} onClose={() => setAgentCreatorOpen(false)} />
+      {werewolfGameOver && (
+        <WerewolfGameOver
+          payload={werewolfGameOver}
+          onPlayAgain={() => {
+            gameStore.setWerewolfGameOver(null);
+            werewolfPlayAgain();
+          }}
+          onBackToMenu={() => {
+            gameStore.setWerewolfGameOver(null);
+            handleBackToMaps();
+          }}
+        />
+      )}
     </div>
   );
 };

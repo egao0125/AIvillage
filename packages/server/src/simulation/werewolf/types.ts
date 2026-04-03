@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 export type WerewolfRole = 'werewolf' | 'sheriff' | 'healer' | 'villager';
-export type WerewolfPhase = 'setup' | 'night' | 'dawn' | 'day' | 'vote' | 'ended';
+export type WerewolfPhase = 'setup' | 'night' | 'dawn' | 'day' | 'meeting' | 'vote' | 'ended';
 
 export interface NightActions {
   wolfTarget: string | null;
@@ -32,7 +32,7 @@ export interface VoteRecord {
 
 export interface WerewolfEvent {
   day: number;
-  phase: 'night' | 'dawn' | 'day' | 'vote';
+  phase: 'night' | 'dawn' | 'day' | 'meeting' | 'vote';
   event: string;
   agentIds?: string[];
 }
@@ -57,6 +57,10 @@ export interface WerewolfGameState {
   wolfConversationId: string | null;
   /** Whether a vote has already been called this day */
   voteCalled: boolean;
+  /** ID of the group conversation during town meeting */
+  meetingConversationId: string | null;
+  /** Agent awaiting execution at 17:00 after vote */
+  pendingExileId: string | null;
   /** Chronological event log for game over screen */
   eventLog: WerewolfEvent[];
 }

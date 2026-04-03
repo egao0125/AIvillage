@@ -169,6 +169,11 @@ export async function verifyToken(token: string): Promise<string | null> {
  */
 export function optionalAuth(_config?: unknown) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    // Dev mode: skip JWT verification when Cognito is not configured
+    if (!COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID) {
+      req.userId = 'dev-user';
+      return next();
+    }
     const authHdr = req.headers.authorization;
     const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
     if (!token) {

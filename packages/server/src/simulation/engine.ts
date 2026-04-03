@@ -206,6 +206,10 @@ export class SimulationEngine {
       console.warn('[Engine] Cannot start werewolf game — werewolf system not active');
       return;
     }
+    // Reset world clock to Day 1, 21:00 — first night starts immediately
+    this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
+    this.broadcaster.worldTime(this.world.time);
+
     const agentIds = Array.from(this.world.agents.values())
       .filter(a => a.alive !== false && a.state !== 'away')
       .map(a => a.id);
@@ -244,11 +248,15 @@ export class SimulationEngine {
       ctrl.werewolfManager = this.werewolfManager;
     }
 
-    // 3. Start fresh game (assigns roles, sets game rules, starts first night)
+    // 3. Reset world clock to Day 1, 21:00 — first night starts immediately
+    this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
+    this.broadcaster.worldTime(this.world.time);
+
+    // 4. Start fresh game (assigns roles, sets game rules, starts first night)
     const agentIds = Array.from(this.world.agents.values()).map(a => a.id);
     this.werewolfManager.startGame(agentIds);
 
-    // 4. Broadcast new game starting
+    // 5. Broadcast new game starting
     this.broadcaster.werewolfNewGame();
 
     console.log('[Engine] Werewolf game reset — new game started');
@@ -334,8 +342,9 @@ export class SimulationEngine {
     // --- Infra 1: Wire event bus subscriptions ---
     // Registration order = execution order within a tick.
 
-    // Midnight: reset counters, decay objects
+    // Midnight: reset counters, decay objects (skip for werewolf)
     this.bus.on('midnight', () => {
+      if (this.werewolfManager) return;
       this.world.resetDailyCounters();
       this.world.spoilFood();
       this.decayWorldObjects();
@@ -365,14 +374,18 @@ export class SimulationEngine {
 
     // Hourly resource regeneration (Fix 1: wire resource depletion)
     this.bus.on('hour_changed', () => {
+      if (this.werewolfManager) return;
       const seasonIdx = Math.floor((this.world.time.day - 1) / 30) % 4;
       const seasonName = (['spring', 'summer', 'autumn', 'winter'] as const)[seasonIdx];
       const seasonDef = SEASONS[seasonName];
       this.world.regenerateResourcePoolsHourly(seasonDef.gatherMultipliers);
     });
 
-    // Perception
-    this.bus.on('perception_cycle', () => this.runPerception());
+    // Perception (skip for werewolf — agents use werewolf-specific situation prompts)
+    this.bus.on('perception_cycle', () => {
+      if (this.werewolfManager) return;
+      this.runPerception();
+    });
 
     // Proximity → conversations (single subscriber preserves ordering)
     this.bus.on('tick', () => {
@@ -509,6 +522,7 @@ export class SimulationEngine {
 
     // Board post reactions — each alive agent generates a 1-2 sentence comment
     this.bus.on('board_post_created', (e) => {
+      if (this.werewolfManager) return; // Skip for werewolf
       void this.generatePostReactions(e.post).catch((err: unknown) => {
         console.warn('[Engine] generatePostReactions failed:', (err as Error).message);
       });
@@ -516,6 +530,7 @@ export class SimulationEngine {
 
     // Nightly vote — at hour 21, vote on all pending proposals
     this.bus.on('hour_changed', (e) => {
+      if (this.werewolfManager) return; // Skip for werewolf
       if (e.hour === 21) {
         void this.resolveNightlyVotes().catch((err: unknown) => {
           console.warn('[Engine] resolveNightlyVotes failed:', (err as Error).message);
@@ -1446,37 +1461,38 @@ export class SimulationEngine {
     }
 
     // --- Direct calls for subsystems with complex timing ---
+    // Skip AI Village systems when running werewolf
+    if (!this.werewolfManager) {
+      this.checkElections();
 
-    // Eavesdropping removed — conversations are private. Bystander notice handled at conversation end.
-    this.checkElections();
+      if (this.tickCount % 600 === 0) {
+        this.updateWeather();
+      }
 
-    if (this.tickCount % 600 === 0) {
-      this.updateWeather();
-    }
+      if (this.tickCount % 1440 === 0) {
+        this.checkSeasonAdvance();
+        this.weatherDamageBuildings();
+      }
 
-    if (this.tickCount % 1440 === 0) {
-      this.checkSeasonAdvance();
-      this.weatherDamageBuildings();
-    }
-
-    // Auto weekly summary — every 120 ticks (~2 game hours)
-    if (this.tickCount % 120 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
-      console.log(`[WeeklySummary] Triggering for Day ${time.day} (last: ${this.lastWeeklySummaryDay})`);
-      this.weeklySummaryGenerating = true;
-      void this.generateWeeklySummary().then(summary => {
-        if (summary) {
-          this.cachedWeeklySummary = summary;
-          this.lastWeeklySummaryDay = time.day;
-          this.io.emit('weekly-summary:ready', { summary });
-          console.log(`[WeeklySummary] Generated for Day ${time.day} (${summary.length} chars)`);
-        } else {
-          console.log(`[WeeklySummary] Returned null — no API key or empty response`);
-        }
-        this.weeklySummaryGenerating = false;
-      }).catch(err => {
-        console.error(`[WeeklySummary] Failed:`, err);
-        this.weeklySummaryGenerating = false;
-      });
+      // Auto weekly summary — every 120 ticks (~2 game hours)
+      if (this.tickCount % 120 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
+        console.log(`[WeeklySummary] Triggering for Day ${time.day} (last: ${this.lastWeeklySummaryDay})`);
+        this.weeklySummaryGenerating = true;
+        void this.generateWeeklySummary().then(summary => {
+          if (summary) {
+            this.cachedWeeklySummary = summary;
+            this.lastWeeklySummaryDay = time.day;
+            this.io.emit('weekly-summary:ready', { summary });
+            console.log(`[WeeklySummary] Generated for Day ${time.day} (${summary.length} chars)`);
+          } else {
+            console.log(`[WeeklySummary] Returned null — no API key or empty response`);
+          }
+          this.weeklySummaryGenerating = false;
+        }).catch(err => {
+          console.error(`[WeeklySummary] Failed:`, err);
+          this.weeklySummaryGenerating = false;
+        });
+      }
     }
 
     // Periodic save every 300 ticks
@@ -1800,6 +1816,9 @@ export class SimulationEngine {
    * Separated so both killAgent() and the controller onDeath callback can use it.
    */
   private handleDeathAftermath(agent: Agent, cause: string): void {
+    // Skip obituaries/artifacts for werewolf — deaths handled by phase manager
+    if (this.werewolfManager) return;
+
     const agentId = agent.id;
     const name = agent.config.name;
     const areaId = this.world.getAreaAt(agent.position)?.id;

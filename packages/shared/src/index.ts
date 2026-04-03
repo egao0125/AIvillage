@@ -620,7 +620,7 @@ export interface WerewolfGameOverPayload {
   }[];
   timeline: {
     day: number;
-    phase: 'night' | 'dawn' | 'day' | 'vote';
+    phase: 'night' | 'dawn' | 'day' | 'meeting' | 'vote';
     event: string;
     agentIds?: string[];
   }[];

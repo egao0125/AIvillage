@@ -58,6 +58,10 @@ interface GameState {
   werewolfPhase: string | null;
   werewolfRound: number;
   werewolfRoles: Map<string, string>;
+  werewolfKills: Array<{ agentId: string; saved: boolean; round: number }>;
+  werewolfVotes: Array<{ round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }>;
+  werewolfNightActions: Array<{ round: number; type: string; agentId: string; targetId: string; result?: string }>;
+  werewolfMeetingTranscripts: Array<{ round: number; transcript: Array<{ name: string; message: string }> }>;
 }
 
 export interface InspectTarget {
@@ -115,6 +119,10 @@ class GameStore {
     werewolfPhase: null,
     werewolfRound: 0,
     werewolfRoles: new Map(),
+    werewolfKills: [],
+    werewolfVotes: [],
+    werewolfNightActions: [],
+    werewolfMeetingTranscripts: [],
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -642,7 +650,31 @@ class GameStore {
       werewolfRound: 0,
       werewolfRoles: new Map(),
       werewolfGameOver: null,
+      werewolfKills: [],
+      werewolfVotes: [],
+      werewolfNightActions: [],
+      werewolfMeetingTranscripts: [],
     };
+    this.notify();
+  }
+
+  addWerewolfKill(kill: { agentId: string; saved: boolean; round: number }): void {
+    this.state = { ...this.state, werewolfKills: [...this.state.werewolfKills, kill] };
+    this.notify();
+  }
+
+  addWerewolfVote(vote: { round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }): void {
+    this.state = { ...this.state, werewolfVotes: [...this.state.werewolfVotes, vote] };
+    this.notify();
+  }
+
+  addWerewolfNightAction(action: { round: number; type: string; agentId: string; targetId: string; result?: string }): void {
+    this.state = { ...this.state, werewolfNightActions: [...this.state.werewolfNightActions, action] };
+    this.notify();
+  }
+
+  addWerewolfMeetingTranscript(entry: { round: number; transcript: Array<{ name: string; message: string }> }): void {
+    this.state = { ...this.state, werewolfMeetingTranscripts: [...this.state.werewolfMeetingTranscripts, entry] };
     this.notify();
   }
 }

@@ -1,6 +1,7 @@
 import React from 'react';
-import { useWerewolfGodMode, useWerewolfPhase } from '../../core/hooks';
+import { useWerewolfGodMode, useWerewolfPhase, useAgents } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
+import { werewolfStart } from '../../network/socket';
 import { COLORS, FONTS } from '../styles';
 
 const PHASE_INFO: Record<string, { label: string; color: string }> = {
@@ -11,26 +12,63 @@ const PHASE_INFO: Record<string, { label: string; color: string }> = {
   ended: { label: 'ENDED', color: '#6b7280' },
 };
 
+const btnStyle: React.CSSProperties = {
+  padding: '5px 10px',
+  background: COLORS.bg,
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 4,
+  cursor: 'pointer',
+  fontFamily: FONTS.pixel,
+  fontSize: '7px',
+  letterSpacing: 1,
+  transition: 'all 0.2s',
+};
+
 export const WerewolfControls: React.FC = () => {
   const godMode = useWerewolfGodMode();
   const { phase, round } = useWerewolfPhase();
+  const agents = useAgents();
 
-  if (!phase) return null;
+  const containerStyle: React.CSSProperties = {
+    position: 'absolute',
+    top: 12,
+    right: 392,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 110,
+  };
+
+  // Before game starts — show START button
+  if (!phase) {
+    const agentCount = agents.filter(a => a.alive !== false).length;
+    const canStart = agentCount >= 6;
+
+    return (
+      <div style={containerStyle}>
+        <span style={{ fontFamily: FONTS.pixel, fontSize: '7px', color: COLORS.textDim, letterSpacing: 1 }}>
+          {agentCount} AGENTS
+        </span>
+        <button
+          onClick={() => canStart && werewolfStart()}
+          style={{
+            ...btnStyle,
+            color: canStart ? '#4ade80' : COLORS.textDim,
+            border: `1px solid ${canStart ? '#4ade80' : COLORS.border}`,
+            cursor: canStart ? 'pointer' : 'not-allowed',
+            opacity: canStart ? 1 : 0.5,
+          }}
+        >
+          START GAME
+        </button>
+      </div>
+    );
+  }
 
   const info = PHASE_INFO[phase] ?? { label: phase.toUpperCase(), color: COLORS.textDim };
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        top: 12,
-        right: 12,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        zIndex: 20,
-      }}
-    >
+    <div style={containerStyle}>
       {/* Phase indicator */}
       <div
         style={{
@@ -64,16 +102,10 @@ export const WerewolfControls: React.FC = () => {
       <button
         onClick={() => gameStore.toggleWerewolfGodMode()}
         style={{
-          padding: '5px 10px',
+          ...btnStyle,
           background: godMode ? '#2a1a1a' : COLORS.bg,
-          border: `1px solid ${godMode ? '#ef4444' : COLORS.border}`,
-          borderRadius: 4,
-          cursor: 'pointer',
           color: godMode ? '#ef4444' : COLORS.textDim,
-          fontFamily: FONTS.pixel,
-          fontSize: '7px',
-          letterSpacing: 1,
-          transition: 'all 0.2s',
+          border: `1px solid ${godMode ? '#ef4444' : COLORS.border}`,
         }}
       >
         {godMode ? 'HIDE ROLES' : 'SHOW ROLES'}

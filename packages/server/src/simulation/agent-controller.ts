@@ -775,6 +775,9 @@ export class AgentController {
   }
 
   private tickVitals(): void {
+    // Skip vitals (hunger/starvation) when disabled by map config (e.g. werewolf)
+    if (!this.mapConfig.systems?.hunger) return;
+
     const v = this.agent.vitals;
     if (!v) return;
 
@@ -1440,7 +1443,7 @@ export class AgentController {
     if (phase === 'night') {
       const nightPrompt = wm.getNightPrompt(this.agent.id);
       situationText = nightPrompt ?? 'You are sleeping. Wait for dawn.';
-    } else if (phase === 'day') {
+    } else if (phase === 'day' || phase === 'meeting') {
       const dayPrompt = wm.getDayPrompt();
       // Add private knowledge based on role
       let privateKnowledge = '';

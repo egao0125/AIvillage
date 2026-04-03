@@ -19,12 +19,10 @@ import {
 import { WerewolfVoteManager } from './vote-manager.js';
 
 // ---------------------------------------------------------------------------
-// Phase timing (ticks) — from plan doc
+// Vote timeout (ticks) — only vote uses tick-based timeout; all other
+// phases are driven by the world clock (GameTime).
 // ---------------------------------------------------------------------------
-const NIGHT_TICKS = 60;
-const DAWN_TICKS = 1;    // brief announcement
-const DAY_TICKS = 200;
-const VOTE_TICKS = 120;
+const VOTE_TIMEOUT_TICKS = 300;  // ~25 seconds at 83ms tick (~2.5 game hours for vote resolution)
 
 // ---------------------------------------------------------------------------
 // WerewolfPhaseManager — drives the entire werewolf game loop
@@ -35,6 +33,8 @@ export class WerewolfPhaseManager {
   private voteManager: WerewolfVoteManager;
   /** agentId → display name */
   private agentNames: Map<string, string> = new Map();
+  /** Transcript of all speech during the current meeting — cleared each meeting */
+  private meetingTranscript: Array<{ name: string; message: string }> = [];
 
   constructor(
     private bus: EventBus,
@@ -118,30 +118,73 @@ export class WerewolfPhaseManager {
 
   /**
    * Called every engine tick when werewolf game is active.
+   * Phase transitions are driven by the world clock, not tick counts.
+   *
+   * Schedule:
+   *   21:00 → Night (villagers sleep, wolves/sheriff/healer act)
+   *   05:00 → Dawn  (results announced)
+   *   05:01 → Day   (free roam, conversations)
+   *   12:00 → Meeting (all agents gather at plaza for structured discussion)
+   *   12:30 → Afternoon (day resumes) if no vote called
+   *   21:00 → Next night
    */
-  onTick(_time: GameTime): void {
+  onTick(time: GameTime): void {
     if (this.state.phase === 'setup' || this.state.phase === 'ended') return;
 
     this.state.phaseTimer++;
+    const { hour, minute } = time;
 
     switch (this.state.phase) {
       case 'night':
-        if (this.allNightActionsComplete() || this.state.phaseTimer >= NIGHT_TICKS) {
+        // Night ends at 05:00 OR when all night actions complete
+        if ((hour === 5 && minute === 0) || this.allNightActionsComplete()) {
           this.resolveNight();
           this.transitionToDawn();
         }
         break;
 
       case 'dawn':
-        if (this.state.phaseTimer >= DAWN_TICKS) {
+        // Dawn is brief — transitions to day at 05:01
+        if (hour >= 5 && minute >= 1) {
           this.transitionToDay();
         }
         break;
 
       case 'day':
-        if (this.state.phaseTimer >= DAY_TICKS) {
-          // Day expired without a vote — go to night
+        // Meeting starts at 12:00
+        if (hour === 12 && minute === 0) {
+          this.transitionToMeeting();
+        }
+        // Execute condemned at 17:00 (or immediately if clock already past 17:00)
+        if (hour >= 17 && this.state.pendingExileId) {
+          const name = this.agentNames.get(this.state.pendingExileId) ?? 'someone';
+          console.log(`[Werewolf] Executing ${name} at ${hour}:${String(minute).padStart(2, '0')}`);
+          this.exileAgent(this.state.pendingExileId);
+          this.state.pendingExileId = null;
+          const winner = this.checkWin();
+          if (winner) {
+            this.endGame(winner);
+            return;
+          }
+        }
+        // Night starts at 21:00
+        if (hour === 21 && minute === 0) {
           this.advanceToNextNight();
+        }
+        break;
+
+      case 'meeting':
+        // At 12:50, inject final warning to encourage nominations
+        if (hour === 12 && minute === 50 && !this.state.voteCalled) {
+          this.injectVoteWarning();
+        }
+        // At 13:00, auto-start vote if none was called
+        if (hour === 13 && minute === 0 && !this.state.voteCalled) {
+          this.autoCallVote();
+        }
+        // Safety: if clock passed 13:30 without resolving, force vote
+        if (hour >= 13 && minute >= 30 && !this.state.voteCalled) {
+          this.autoCallVote();
         }
         break;
 
@@ -150,18 +193,57 @@ export class WerewolfPhaseManager {
         if (this.voteManager.isComplete()) {
           const result = this.voteManager.getResult();
           if (result.exiled) {
-            this.exileAgent(result.exiled);
-            const winner = this.checkWin();
-            if (winner) {
-              this.endGame(winner);
-              return;
+            // Defer exile to 17:00 — store pending and announce
+            this.state.pendingExileId = result.exiled;
+            const name = this.agentNames.get(result.exiled) ?? 'someone';
+            const role = this.state.roles.get(result.exiled) ?? 'villager';
+            this.broadcaster.werewolfVote(result.exiled, role);
+            // Memory: condemned but execution at dusk
+            for (const id of this.state.alive) {
+              const cognition = this.cognitions.get(id);
+              if (!cognition) continue;
+              void cognition.addMemory({
+                id: crypto.randomUUID(),
+                agentId: id,
+                type: 'observation',
+                content: `The vote has concluded: ${name} is condemned. They will be executed at dusk (17:00).`,
+                importance: 10,
+                timestamp: Date.now(),
+                relatedAgentIds: [result.exiled],
+              }).catch(() => {});
             }
+            console.log(`[Werewolf] ${name} condemned — execution scheduled for 17:00`);
           }
-          this.advanceToNextNight();
-        } else if (this.state.phaseTimer >= VOTE_TICKS) {
-          // Vote timed out — no exile
-          this.broadcaster.werewolfVote(null, null);
-          this.advanceToNextNight();
+          // After vote → afternoon free time until execution/night
+          this.transitionToAfternoon();
+        } else if (this.state.phaseTimer >= VOTE_TIMEOUT_TICKS) {
+          // Vote timed out — force resolve with votes collected so far
+          console.log(`[Werewolf] Vote timed out — forcing resolution with ${this.voteManager.getVoteCount()} votes`);
+          this.voteManager.forceResolve();
+          const result = this.voteManager.getResult();
+          if (result.exiled) {
+            this.state.pendingExileId = result.exiled;
+            const name = this.agentNames.get(result.exiled) ?? 'someone';
+            const role = this.state.roles.get(result.exiled) ?? 'villager';
+            this.broadcaster.werewolfVote(result.exiled, role);
+            for (const id of this.state.alive) {
+              const cognition = this.cognitions.get(id);
+              if (!cognition) continue;
+              void cognition.addMemory({
+                id: crypto.randomUUID(),
+                agentId: id,
+                type: 'observation',
+                content: `The vote has concluded: ${name} is condemned. They will be executed at dusk (17:00).`,
+                importance: 10,
+                timestamp: Date.now(),
+                relatedAgentIds: [result.exiled],
+              }).catch(() => {});
+            }
+            console.log(`[Werewolf] ${name} condemned — execution scheduled for 17:00`);
+          } else {
+            this.broadcaster.werewolfVote(null, null);
+          }
+          this.transitionToAfternoon();
         }
         break;
     }
@@ -214,7 +296,20 @@ export class WerewolfPhaseManager {
           { id: 'follow', label: 'Follow someone', category: 'movement', requiresNearby: true },
           { id: 'rest', label: 'Rest / Wait', category: 'rest' },
         );
-        if (!this.state.voteCalled && this.state.phaseTimer >= 60) {
+        break;
+
+      case 'meeting':
+        actions.push(
+          { id: 'talk', label: 'Talk to nearby agent', category: 'social', requiresNearby: true },
+          { id: 'accuse', label: 'Publicly accuse', category: 'social' },
+          { id: 'defend', label: 'Defend publicly', category: 'social' },
+          { id: 'share_info', label: 'Share info publicly', category: 'social' },
+          { id: 'reveal_role', label: 'Reveal your role', category: 'social' },
+          { id: 'whisper', label: 'Whisper privately', category: 'social', requiresNearby: true },
+          { id: 'observe', label: 'Watch who is talking', category: 'social' },
+          { id: 'think', label: 'Reflect on evidence', category: 'rest' },
+        );
+        if (!this.state.voteCalled) {
           actions.push({ id: 'call_vote', label: 'Call a vote', category: 'social' });
         }
         break;
@@ -333,17 +428,22 @@ export class WerewolfPhaseManager {
    * Handle call_vote during day phase.
    */
   callVote(callerId: string, nomineeId: string, reason?: string): void {
-    if (this.state.phase !== 'day') return;
+    if (this.state.phase !== 'day' && this.state.phase !== 'meeting') return;
     if (this.state.voteCalled) return;
-    if (this.state.phaseTimer < 60) return; // Min 60 ticks of discussion before vote
     if (!this.state.alive.has(callerId) || !this.state.alive.has(nomineeId)) return;
+
+    // Stop capturing meeting speech — we have the full transcript
+    this.broadcaster.setOnSpeakHook(undefined);
 
     this.state.voteCalled = true;
     this.state.phase = 'vote';
     this.state.phaseTimer = 0;
     this.broadcaster.werewolfPhase('vote', this.state.round);
 
-    this.voteManager.startVote(callerId, nomineeId, reason);
+    // Send meeting transcript to clients for sidebar display
+    this.broadcaster.werewolfMeetingTranscript(this.state.round, this.meetingTranscript);
+
+    this.voteManager.startVote(callerId, nomineeId, reason, this.meetingTranscript);
 
     console.log(`[Werewolf] ${this.agentNames.get(callerId)} calls vote against ${this.agentNames.get(nomineeId)}`);
   }
@@ -399,6 +499,7 @@ export class WerewolfPhaseManager {
   }
 
   dispose(): void {
+    this.broadcaster.setOnSpeakHook(undefined);
     this.state.phase = 'ended';
   }
 
@@ -423,6 +524,8 @@ export class WerewolfPhaseManager {
       votingHistory: [],
       wolfConversationId: null,
       voteCalled: false,
+      meetingConversationId: null,
+      pendingExileId: null,
       eventLog: [],
     };
   }
@@ -495,6 +598,11 @@ export class WerewolfPhaseManager {
     // Resolve wolf attack
     const wolfIds = getWolfIds(this.state.roles).filter(id => this.state.alive.has(id));
     if (wolfTarget) {
+      // Broadcast wolf target for god-mode sidebar
+      for (const wid of wolfIds) {
+        this.broadcaster.werewolfNightAction('wolfTarget', wid, wolfTarget);
+      }
+
       if (wolfTarget === healerGuard) {
         // Attack blocked by healer
         result.saved = true;
@@ -570,6 +678,23 @@ export class WerewolfPhaseManager {
     // Update lastGuarded for healer
     this.state.lastGuarded = this.state.nightActions.healerGuard;
 
+    // Broadcast healer guard for god-mode sidebar
+    if (this.state.nightActions.healerGuard) {
+      const healerId = [...this.state.roles.entries()].find(([id, r]) => r === 'healer' && this.state.alive.has(id))?.[0];
+      if (healerId) {
+        this.broadcaster.werewolfNightAction('healerGuard', healerId, this.state.nightActions.healerGuard);
+      }
+    }
+
+    // Broadcast sheriff investigation for god-mode sidebar
+    if (this.state.nightActions.sheriffTarget) {
+      const sheriffId = [...this.state.roles.entries()].find(([id, r]) => r === 'sheriff' && this.state.alive.has(id))?.[0];
+      const targetRole = this.state.roles.get(this.state.nightActions.sheriffTarget);
+      if (sheriffId) {
+        this.broadcaster.werewolfNightAction('sheriffResult', sheriffId, this.state.nightActions.sheriffTarget, targetRole === 'werewolf' ? 'werewolf' : 'innocent');
+      }
+    }
+
     this.state.lastNightResult = result;
   }
 
@@ -643,6 +768,130 @@ export class WerewolfPhaseManager {
     this.state.phaseTimer = 0;
     this.broadcaster.werewolfPhase('night', this.state.round);
     this.transitionToNight();
+  }
+
+  private transitionToMeeting(): void {
+    this.state.phase = 'meeting';
+    this.state.phaseTimer = 0;
+    this.state.voteCalled = false;
+    this.voteWarningInjected = false;
+    this.meetingTranscript = [];
+    this.broadcaster.werewolfPhase('meeting', this.state.round);
+
+    // Start capturing all speech during the meeting
+    this.broadcaster.setOnSpeakHook((_agentId, name, message) => {
+      this.meetingTranscript.push({ name, message });
+    });
+
+    // Inject meeting prompt to all alive agents
+    for (const id of this.state.alive) {
+      const cognition = this.cognitions.get(id);
+      if (!cognition) continue;
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: id,
+        type: 'observation',
+        content: this.buildMeetingPrompt(),
+        importance: 10,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      }).catch(() => {});
+    }
+
+    // Event log
+    this.state.eventLog.push({
+      day: this.state.round,
+      phase: 'day',
+      event: 'Town meeting called at the plaza',
+      agentIds: [],
+    });
+
+    console.log(`[Werewolf] Town Meeting begins (Round ${this.state.round})`);
+  }
+
+  private transitionToAfternoon(): void {
+    this.broadcaster.setOnSpeakHook(undefined);
+    this.state.phase = 'day';
+    this.state.phaseTimer = 0;
+    this.state.voteCalled = false;
+    this.broadcaster.werewolfPhase('day', this.state.round);
+    console.log(`[Werewolf] Afternoon — free time until nightfall`);
+  }
+
+  private buildMeetingPrompt(): string {
+    const aliveNames = [...this.state.alive].map(id => this.agentNames.get(id) ?? id);
+    const deadNames = this.state.dead.map(id => this.agentNames.get(id) ?? id);
+    const lastNight = this.state.lastNightResult;
+    let dawnLine = '';
+    if (lastNight?.killed) {
+      dawnLine = `Last night: ${this.agentNames.get(lastNight.killed) ?? 'someone'} was found dead.`;
+    } else {
+      dawnLine = 'Last night: Everyone survived.';
+    }
+
+    const urgency = this.state.round > 5
+      ? '\n\nURGENT: The village grows desperate. People are dying every night. You MUST find the werewolves soon.'
+      : '';
+
+    return `TOWN MEETING — Day ${this.state.round}. ${dawnLine}
+The bell rings at noon. Everyone gathers at the plaza for the daily meeting.
+
+Alive (${aliveNames.length}): ${aliveNames.join(', ')}
+Dead: ${deadNames.length > 0 ? deadNames.join(', ') : 'none'}
+
+This is the time to discuss suspicions, share evidence, and decide if someone should be exiled.
+You may accuse someone and call a vote. Defend yourself if accused.
+If no vote is called by the end of the meeting, the village returns to their afternoon activities.
+
+MEETING ACTIONS:
+- talk [name] — discuss with someone
+- accuse [name] — publicly accuse
+- defend — defend yourself
+- share_info — share evidence
+- reveal_role — reveal your role
+- call_vote [name] — call for an exile vote
+- observe — watch reactions
+- think — reflect on evidence${urgency}`;
+  }
+
+  /** Warn agents that the meeting is ending — push them to nominate someone. */
+  private voteWarningInjected = false;
+  private injectVoteWarning(): void {
+    if (this.voteWarningInjected) return;
+    this.voteWarningInjected = true;
+
+    for (const id of this.state.alive) {
+      const cognition = this.cognitions.get(id);
+      if (!cognition) continue;
+      void cognition.addMemory({
+        id: crypto.randomUUID(),
+        agentId: id,
+        type: 'observation',
+        content: 'The meeting is almost over! If you have suspicions, call a vote NOW before time runs out. Use call_vote [name] to nominate someone.',
+        importance: 10,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+      }).catch(() => {});
+    }
+  }
+
+  /** Auto-call a vote when the meeting ends without anyone nominating. */
+  private autoCallVote(): void {
+    // Pick a nominee: random alive agent (excluding wolves would be unfair, so truly random)
+    const aliveIds = [...this.state.alive];
+    if (aliveIds.length < 2) return;
+
+    // Pick a random nominee and a random caller (different agents)
+    const nomineeIdx = Math.floor(Math.random() * aliveIds.length);
+    const nomineeId = aliveIds[nomineeIdx];
+    const remainingIds = aliveIds.filter(id => id !== nomineeId);
+    const callerId = remainingIds[Math.floor(Math.random() * remainingIds.length)];
+
+    const callerName = this.agentNames.get(callerId) ?? 'Someone';
+    const nomineeName = this.agentNames.get(nomineeId) ?? 'someone';
+
+    console.log(`[Werewolf] Auto-vote: ${callerName} nominates ${nomineeName} (meeting ended without nomination)`);
+    this.callVote(callerId, nomineeId, 'The meeting is ending and the village must decide.');
   }
 
   private allNightActionsComplete(): boolean {

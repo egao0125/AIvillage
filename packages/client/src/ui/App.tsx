@@ -78,7 +78,7 @@ export const App: React.FC = () => {
         <TimeDisplay />
       </div>
       {/* Werewolf controls — top-right overlay */}
-      <WerewolfControls />
+      {selectedMap === 'werewolf' && <WerewolfControls />}
       {/* Narrative bar — bottom overlay */}
       <NarrativeBar sidebarWidth={0} />
       {/* Recap overlay — full screen cinematic */}

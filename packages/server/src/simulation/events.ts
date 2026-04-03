@@ -96,10 +96,18 @@ export class EventBroadcaster {
     }
   }
 
+  /** Optional hook called on every agent:speak — used by werewolf to build meeting transcript */
+  private onSpeakHook?: (agentId: string, name: string, message: string, conversationId: string) => void;
+
+  setOnSpeakHook(fn: ((agentId: string, name: string, message: string, conversationId: string) => void) | undefined): void {
+    this.onSpeakHook = fn;
+  }
+
   agentSpeak(agentId: string, name: string, message: string, conversationId: string): void {
     this.emitForAgent('agent:speak', { agentId, name, message, conversationId }, agentId);
     this.narrator?.logEvent(`${name} said: "${message.substring(0, 80)}"`);
     this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'conversation', description: `Said: "${message.substring(0, 100)}"`, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
+    this.onSpeakHook?.(agentId, name, message, conversationId);
   }
 
   agentAction(agentId: string, action: string, emoji?: string): void {
@@ -242,6 +250,14 @@ export class EventBroadcaster {
     this.io.emit('werewolf:vote', { exiled, role });
   }
 
+  werewolfNightAction(type: string, agentId: string, targetId: string, result?: string): void {
+    this.io.emit('werewolf:nightAction', { type, agentId, targetId, result });
+  }
+
+  werewolfVoteDetail(round: number, callerId: string, nomineeId: string, votes: Record<string, string>, result: string): void {
+    this.io.emit('werewolf:voteDetail', { round, callerId, nomineeId, votes, result });
+  }
+
   werewolfReveal(agentId: string, role: string): void {
     this.io.emit('werewolf:reveal', { agentId, role });
   }
@@ -253,6 +269,10 @@ export class EventBroadcaster {
 
   werewolfGameOver(payload: WerewolfGameOverPayload): void {
     this.io.emit('werewolf:gameOver', payload);
+  }
+
+  werewolfMeetingTranscript(round: number, transcript: Array<{ name: string; message: string }>): void {
+    this.io.emit('werewolf:meetingTranscript', { round, transcript });
   }
 
   werewolfNewGame(): void {

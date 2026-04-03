@@ -23,6 +23,8 @@ export class WerewolfVoteManager {
   private result: { exiled: string | null; roleRevealed: string | null } = { exiled: null, roleRevealed: null };
   private votePhase: VoteSubPhase = 'resolved';
   private votePhaseTimer: number = 0;
+  /** Full meeting transcript — all speech that happened before the vote was called */
+  private meetingTranscript: Array<{ name: string; message: string }> = [];
 
   constructor(
     private state: WerewolfGameState,
@@ -32,10 +34,11 @@ export class WerewolfVoteManager {
     private cognitions: Map<string, AgentCognition>,
   ) {}
 
-  startVote(callerId: string, nomineeId: string, reason?: string): void {
+  startVote(callerId: string, nomineeId: string, reason?: string, meetingTranscript?: Array<{ name: string; message: string }>): void {
     this.callerId = callerId;
     this.nomineeId = nomineeId;
     this.reason = reason ?? '';
+    this.meetingTranscript = meetingTranscript ?? [];
     this.votes.clear();
     this.resolved = false;
     this.result = { exiled: null, roleRevealed: null };
@@ -92,7 +95,7 @@ export class WerewolfVoteManager {
 
   recordVote(voterId: string, vote: 'exile' | 'save'): void {
     if (this.resolved) return;
-    if (this.votePhase !== 'voting') return; // only accept during voting phase
+    // Accept votes during any sub-phase (agents decide asynchronously via LLM)
     if (!this.state.alive.has(voterId)) return;
     this.votes.set(voterId, vote);
 
@@ -107,6 +110,9 @@ export class WerewolfVoteManager {
       });
     }
 
+    const voterName = this.world.getAgent(voterId)?.config.name ?? voterId;
+    console.log(`[WerewolfVote] ${voterName} votes ${vote} (${this.votes.size}/${this.state.alive.size})`);
+
     // Check if all alive agents have voted
     if (this.votes.size >= this.state.alive.size) {
       this.resolve();
@@ -115,6 +121,16 @@ export class WerewolfVoteManager {
 
   isComplete(): boolean {
     return this.resolved;
+  }
+
+  getVoteCount(): number {
+    return this.votes.size;
+  }
+
+  /** Force resolve with whatever votes have been collected so far */
+  forceResolve(): void {
+    if (this.resolved) return;
+    this.resolve();
   }
 
   getResult(): { exiled: string | null; roleRevealed: string | null } {
@@ -132,17 +148,41 @@ export class WerewolfVoteManager {
       ? `${callerName} accuses ${nomineeName}: "${this.reason}"`
       : `${callerName} accuses ${nomineeName} of being a werewolf.`;
 
+    // Build meeting transcript block (everything said during the meeting before the vote)
+    let transcriptBlock = '';
+    if (this.meetingTranscript.length > 0) {
+      const lines = this.meetingTranscript.map(t => `  ${t.name}: "${t.message}"`);
+      transcriptBlock = `\n\nMEETING TRANSCRIPT (what was said today):\n${lines.join('\n')}`;
+    }
+
     for (const id of this.state.alive) {
       const cognition = this.cognitions.get(id);
       if (!cognition) continue;
 
+      // Build private knowledge for this agent
+      let privateKnowledge = '';
+      const agent = this.world.getAgent(id);
+      const role = this.state.roles.get(id);
+
+      if (role === 'sheriff' && agent?.investigations?.length) {
+        privateKnowledge = '\n\nYOUR PRIVATE KNOWLEDGE (sheriff investigations):\n' +
+          agent.investigations.map((inv: { night: number; targetName: string; result: string }) =>
+            `  Night ${inv.night}: ${inv.targetName} — ${inv.result === 'werewolf' ? 'WEREWOLF!' : 'NOT a werewolf'}`
+          ).join('\n');
+      } else if (role === 'healer' && agent?.lastGuarded) {
+        const guardedAgent = this.world.getAgent(agent.lastGuarded);
+        privateKnowledge = `\n\nYOUR PRIVATE KNOWLEDGE: Last night you guarded ${guardedAgent?.config.name ?? 'someone'}.`;
+      } else if (role === 'werewolf') {
+        privateKnowledge = '\n\nREMEMBER: You are a werewolf pretending to be a villager. Vote strategically — protect yourself and your fellow wolf.';
+      }
+
       let content: string;
       if (id === this.callerId) {
-        content = `You stand before the crowd. State your case against ${nomineeName}. ${accusation}`;
+        content = `VOTE DISCUSSION — You called the vote against ${nomineeName}.\n${accusation}\nState your case to the village.${transcriptBlock}${privateKnowledge}`;
       } else if (id === this.nomineeId) {
-        content = `You are accused! ${accusation}\nThis is your chance to defend yourself. Convince the village you are innocent.`;
+        content = `VOTE DISCUSSION — You are accused!\n${accusation}\nThis is your chance to defend yourself. Convince the village you are innocent.${transcriptBlock}${privateKnowledge}`;
       } else {
-        content = `The debate begins. ${accusation}\nDo you support this accusation or oppose it? Speak up before the vote.`;
+        content = `VOTE DISCUSSION — ${accusation}\nListen to both sides. Think about what you've observed and heard.${transcriptBlock}${privateKnowledge}`;
       }
 
       void cognition.addMemory({
@@ -156,7 +196,7 @@ export class WerewolfVoteManager {
       }).catch(() => {});
     }
 
-    console.log(`[WerewolfVote] Discussion phase — speeches injected`);
+    console.log(`[WerewolfVote] Discussion phase — speeches + transcript (${this.meetingTranscript.length} lines) injected`);
   }
 
   private injectVotePrompt(): void {
@@ -165,11 +205,30 @@ export class WerewolfVoteManager {
     for (const id of this.state.alive) {
       const cognition = this.cognitions.get(id);
       if (!cognition) continue;
+
+      // Remind agent of their private knowledge one more time before vote
+      const role = this.state.roles.get(id);
+      const agent = this.world.getAgent(id);
+      let reminder = '';
+      if (role === 'sheriff' && agent?.investigations?.length) {
+        const relevant = agent.investigations.find((inv: { targetId: string }) => inv.targetId === this.nomineeId);
+        if (relevant) {
+          reminder = `\nREMINDER: Your investigation showed ${nomineeName} is ${(relevant as { result: string }).result === 'werewolf' ? 'a WEREWOLF!' : 'NOT a werewolf'}.`;
+        }
+      } else if (role === 'werewolf') {
+        const nomineeRole = this.state.roles.get(this.nomineeId!);
+        if (nomineeRole === 'werewolf') {
+          reminder = '\nWARNING: The nominee is your fellow wolf! Vote to SAVE them.';
+        } else {
+          reminder = '\nThe nominee is not a wolf. Exiling them helps you win.';
+        }
+      }
+
       void cognition.addMemory({
         id: crypto.randomUUID(),
         agentId: id,
         type: 'observation',
-        content: `The discussion is over. Cast your vote now: vote_exile ${nomineeName} or vote_save ${nomineeName}. State your vote and a one-sentence reason.`,
+        content: `CAST YOUR VOTE NOW. Should ${nomineeName} be exiled?\n\nUse vote_exile to exile ${nomineeName} or vote_save to spare them.\nState your vote and a one-sentence reason.${reminder}`,
         importance: 10,
         timestamp: Date.now(),
         relatedAgentIds: this.nomineeId ? [this.nomineeId] : [],
@@ -219,6 +278,19 @@ export class WerewolfVoteManager {
         });
       }
     }
+
+    // Broadcast detailed vote results for sidebar
+    const votesObj: Record<string, string> = {};
+    for (const [id, v] of this.votes) {
+      votesObj[id] = v;
+    }
+    this.broadcaster.werewolfVoteDetail(
+      this.state.round,
+      this.callerId!,
+      this.nomineeId!,
+      votesObj,
+      majority ? 'exiled' : 'saved',
+    );
 
     const nomineeName = this.nomineeId ? (this.world.getAgent(this.nomineeId)?.config.name ?? 'someone') : 'no one';
     console.log(`[WerewolfVote] Result: ${exileCount} exile, ${saveCount} save → ${majority ? `${nomineeName} EXILED` : `${nomineeName} SAVED`}`);

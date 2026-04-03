@@ -358,6 +358,32 @@ export function connectSocket(): Socket {
     eventBus.emit('werewolf:newGame', {});
   });
 
+  socket.on('werewolf:kill', (data: { agentId: string; saved: boolean }) => {
+    const round = gameStore.getState().werewolfRound;
+    gameStore.addWerewolfKill({ agentId: data.agentId, saved: data.saved, round });
+    eventBus.emit('werewolf:kill', data);
+  });
+
+  socket.on('werewolf:vote', (data: { exiled: string | null; role: string | null }) => {
+    eventBus.emit('werewolf:vote', data);
+  });
+
+  socket.on('werewolf:nightAction', (data: { type: string; agentId: string; targetId: string; result?: string }) => {
+    const round = gameStore.getState().werewolfRound;
+    gameStore.addWerewolfNightAction({ round, ...data });
+    eventBus.emit('werewolf:nightAction', data);
+  });
+
+  socket.on('werewolf:voteDetail', (data: { round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }) => {
+    gameStore.addWerewolfVote(data);
+    eventBus.emit('werewolf:voteDetail', data);
+  });
+
+  socket.on('werewolf:meetingTranscript', (data: { round: number; transcript: Array<{ name: string; message: string }> }) => {
+    gameStore.addWerewolfMeetingTranscript(data);
+    eventBus.emit('werewolf:meetingTranscript', data);
+  });
+
   // Update last-seen day periodically. Store the ID so it can be cleared on disconnect.
   lastSeenDayTimer = setInterval(() => {
     const time = gameStore.getState().time;
@@ -418,6 +444,11 @@ export function unwatchThoughts(): void {
 /** Infra 6: Report viewport rectangle to server for spatial event filtering */
 export function sendViewportUpdate(x: number, y: number, width: number, height: number): void {
   socket?.emit('viewport:update', { x, y, width, height });
+}
+
+/** Werewolf: start the game */
+export function werewolfStart(): void {
+  socket?.emit('werewolf:start');
 }
 
 /** Werewolf: request a new game with same agents */
