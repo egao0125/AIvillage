@@ -17,7 +17,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   children,
 }) => {
   const zIndex = position === 'stacked' ? 15 : 10;
-  const right = position === 'stacked' ? width : 0;
+  const isFull = width >= window.innerWidth;
+  const right = isFull ? 0 : position === 'stacked' ? width : 0;
 
   return (
     // Outer wrapper: solid background, no scroll — never reveals canvas
@@ -27,7 +28,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         top: 0,
         right,
         bottom: 0,
-        width,
+        width: isFull ? '100%' : width,
         background: COLORS.bg,
         borderLeft: `1px solid ${COLORS.border}`,
         zIndex,

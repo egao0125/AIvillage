@@ -11,6 +11,7 @@ import {
   useWerewolfNightActions,
   useWerewolfMeetingTranscripts,
   useAgents,
+  useIsMobile,
 } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 import { eventBus } from '../../core/EventBus';
@@ -291,6 +292,7 @@ export const WerewolfSidebar: React.FC = () => {
   const [events, setEvents] = useState<WerewolfEvent[]>([]);
   const [filterType, setFilterType] = useState<WerewolfEventType | null>(null);
 
+  const isMobile = useIsMobile();
   const chatLog = useChatLog();
   const agentsMap = useAgentsMap();
   const agents = useAgents();
@@ -496,7 +498,7 @@ export const WerewolfSidebar: React.FC = () => {
       position: 'absolute',
       top: 0,
       right: 0,
-      width: 420,
+      width: isMobile ? '100%' : 420,
       bottom: 0,
       background: COLORS.bg,
       borderLeft: `1px solid ${COLORS.border}`,

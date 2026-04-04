@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { gameStore, type ChatEntry, type ThoughtEntry, type ActionLogEntry, type InspectTarget } from './GameStore';
 import type {
   Agent,
@@ -67,6 +67,24 @@ export function useIsAdmin(): boolean {
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().isAdmin
   );
+}
+
+const MOBILE_BREAKPOINT = 768;
+
+export function useIsMobile(): boolean {
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < MOBILE_BREAKPOINT
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    setIsMobile(mq.matches);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  return isMobile;
 }
 
 export function useBoard(): BoardPost[] {

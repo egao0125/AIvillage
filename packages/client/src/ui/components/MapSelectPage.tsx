@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useIsMobile } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 
 interface MapDef {
@@ -38,6 +39,7 @@ interface Props {
 
 export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
   const [selected, setSelected] = useState<string | null>(null);
+  const isMobile = useIsMobile();
 
   const handleContinue = () => {
     if (selected) onSelect(selected);
@@ -94,9 +96,9 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
       {/* Map Grid */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(2, 1fr)',
+        gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
         gap: 16,
-        maxWidth: 740,
+        maxWidth: isMobile ? 400 : 740,
         width: '100%',
         animation: 'slideUp .5s ease-out .1s backwards',
       }}>

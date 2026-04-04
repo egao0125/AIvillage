@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAgents, useSelectedAgent, useBoard, useInstitutions } from '../../core/hooks';
+import { useAgents, useSelectedAgent, useBoard, useInstitutions, useIsMobile } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
@@ -17,6 +17,7 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
 
   const agents = useAgents();
   const selectedAgent = useSelectedAgent();
+  const isMobile = useIsMobile();
   const aliveAgents = agents.filter(a => a.alive !== false);
 
   const board = useBoard();
@@ -26,14 +27,14 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
   const infoCount = passedRules.length + activeInstitutions.length;
 
   return (
-    <div style={{ position: 'absolute', top: 48, left: 8, zIndex: 20, pointerEvents: 'auto' }}>
+    <div style={{ position: 'absolute', top: isMobile ? 52 : 48, left: isMobile ? 4 : 8, zIndex: 20, pointerEvents: 'auto' }}>
       {/* Toggle pill */}
       <button
         onClick={() => setOpen(prev => !prev)}
         style={{
-          padding: '5px 12px',
+          padding: isMobile ? '8px 14px' : '5px 12px',
           fontFamily: FONTS.pixel,
-          fontSize: '8px',
+          fontSize: isMobile ? '10px' : '8px',
           color: open ? COLORS.accent : COLORS.textDim,
           background: COLORS.bg,
           border: `1px solid ${open ? COLORS.accent : COLORS.border}`,
@@ -50,8 +51,8 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
         <div
           style={{
             marginTop: 4,
-            width: 300,
-            maxHeight: 450,
+            width: isMobile ? 'calc(100vw - 16px)' : 300,
+            maxHeight: isMobile ? '60vh' : 450,
             display: 'flex',
             flexDirection: 'column',
             background: COLORS.bg,

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useIsMobile } from '../../core/hooks';
 import { COLORS, FONTS } from '../styles';
 import { nameToColor, hexToString } from '../../utils/color';
 import { getToken, setToken, clearToken, authHeaders, setUserId, setEmail } from '../../utils/auth';
@@ -47,6 +48,7 @@ Example:
 // ---------------------------------------------------------------------------
 
 export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
+  const isMobile = useIsMobile();
   // --- Auth state ---
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -408,7 +410,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
         style={{
           maxWidth: 640,
           margin: '0 auto',
-          padding: '60px 24px 120px',
+          padding: isMobile ? '20px 16px 80px' : '60px 24px 120px',
           position: 'relative',
           zIndex: 1,
         }}

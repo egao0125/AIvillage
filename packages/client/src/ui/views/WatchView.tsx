@@ -8,9 +8,10 @@ import { DevPanel } from '../components/DevPanel';
 import { EventFeed } from '../feed/EventFeed';
 import { SidePanel } from '../shared/SidePanel';
 import { ContextPanel } from '../inspect/ContextPanel';
-import { useActiveRecap, useInspectTarget, useIsAdmin } from '../../core/hooks';
+import { useActiveRecap, useInspectTarget, useIsAdmin, useIsMobile } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 const PANEL_WIDTH = 420;
+const MOBILE_PANEL_WIDTH = '100vw';
 
 interface WatchViewProps {
   onAddAgent?: () => void;
@@ -21,8 +22,17 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
   const activeRecap = useActiveRecap();
   const inspectTarget = useInspectTarget();
   const isAdmin = useIsAdmin();
+  const isMobile = useIsMobile();
 
-  const sidebarWidth = inspectTarget ? PANEL_WIDTH : eventFeedOpen ? PANEL_WIDTH : 0;
+  // On mobile, default to feed closed so the game canvas is visible
+  const [mobileInitialized, setMobileInitialized] = useState(false);
+  if (isMobile && !mobileInitialized) {
+    setEventFeedOpen(false);
+    setMobileInitialized(true);
+  }
+
+  const panelWidth = isMobile ? window.innerWidth : PANEL_WIDTH;
+  const sidebarWidth = inspectTarget ? panelWidth : eventFeedOpen ? panelWidth : 0;
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -31,15 +41,15 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
 
       {/* Primary: Event Feed panel */}
       {eventFeedOpen && (
-        <SidePanel position="primary" width={PANEL_WIDTH}>
+        <SidePanel position="primary" width={panelWidth}>
           <div style={{
-            padding: '10px 14px',
+            padding: isMobile ? '12px 16px' : '10px 14px',
             borderBottom: `1px solid ${COLORS.border}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
-            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
+            <span style={{ fontFamily: FONTS.pixel, fontSize: isMobile ? '11px' : '9px', color: COLORS.accent, letterSpacing: 1 }}>
               EVENT FEED
             </span>
             <button
@@ -49,8 +59,9 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
                 border: 'none',
                 color: COLORS.textDim,
                 cursor: 'pointer',
-                fontSize: '14px',
+                fontSize: isMobile ? '20px' : '14px',
                 fontFamily: FONTS.body,
+                padding: isMobile ? '4px 8px' : 0,
               }}
             >
               ✕
@@ -60,9 +71,9 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
         </SidePanel>
       )}
 
-      {/* Stacked: Detail panel (ContextPanel) */}
+      {/* Stacked: Detail panel (ContextPanel) — on mobile, replace primary */}
       {inspectTarget && (
-        <SidePanel position="stacked" width={PANEL_WIDTH} onClose={() => gameStore.closeDetail()}>
+        <SidePanel position={isMobile ? 'primary' : 'stacked'} width={panelWidth} onClose={() => gameStore.closeDetail()}>
           <ContextPanel />
         </SidePanel>
       )}
@@ -74,10 +85,10 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
           style={{
             position: 'absolute',
             right: 0,
-            top: 50,
+            top: isMobile ? 48 : 50,
             pointerEvents: 'auto',
-            width: 24,
-            height: 48,
+            width: isMobile ? 36 : 24,
+            height: isMobile ? 56 : 48,
             background: COLORS.bg,
             border: `1px solid ${COLORS.border}`,
             borderRight: 'none',
@@ -88,7 +99,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
             justifyContent: 'center',
             color: COLORS.accent,
             fontFamily: FONTS.pixel,
-            fontSize: '12px',
+            fontSize: isMobile ? '16px' : '12px',
             zIndex: 11,
             padding: 0,
           }}
@@ -98,10 +109,10 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
       )}
 
       {/* Narrative bar — bottom overlay, avoids feed panel */}
-      <NarrativeBar sidebarWidth={sidebarWidth} />
+      {!isMobile && <NarrativeBar sidebarWidth={sidebarWidth} />}
 
-      {/* Spectator chat — floating bottom-left */}
-      <SpectatorChat />
+      {/* Spectator chat — hidden on mobile to avoid clutter */}
+      {!isMobile && <SpectatorChat />}
 
       {/* Overlays — kept as-is */}
       {activeRecap && <RecapOverlay />}
