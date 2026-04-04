@@ -141,7 +141,7 @@ const VillagerRoster: React.FC<{
 // ---------------------------------------------------------------------------
 
 const VoteTracker: React.FC<{
-  votes: Array<{ round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }>;
+  votes: Array<{ round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }>;
   getName: (id: string) => string;
   currentRound: number;
   phase: string | null;
@@ -165,9 +165,17 @@ const VoteTracker: React.FC<{
       </div>
       <div style={{ padding: '4px 14px 8px', maxHeight: 180, overflowY: 'auto' }}>
         {sorted.map((vote, i) => {
-          const exileCount = Object.values(vote.votes).filter(v => v === 'exile').length;
-          const saveCount = Object.values(vote.votes).filter(v => v === 'save').length;
           const isExiled = vote.result === 'exiled';
+          const exiledName = vote.exiledId ? getName(vote.exiledId) : null;
+
+          // Tally votes per target
+          const tally: Record<string, string[]> = {};
+          for (const [voterId, targetId] of Object.entries(vote.votes)) {
+            if (!tally[targetId]) tally[targetId] = [];
+            tally[targetId].push(getName(voterId));
+          }
+          // Sort by vote count descending
+          const tallyEntries = Object.entries(tally).sort(([, a], [, b]) => b.length - a.length);
 
           return (
             <div key={i} style={{
@@ -182,9 +190,6 @@ const VoteTracker: React.FC<{
                 }}>
                   R{vote.round}
                 </span>
-                <span style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.text }}>
-                  {getName(vote.nomineeId)}
-                </span>
                 <span style={{
                   fontFamily: FONTS.pixel, fontSize: '6px',
                   padding: '1px 6px', borderRadius: 3,
@@ -192,32 +197,26 @@ const VoteTracker: React.FC<{
                   color: isExiled ? '#ef4444' : '#4ade80',
                   letterSpacing: 0.3,
                 }}>
-                  {isExiled ? 'EXILED' : 'SAVED'}
-                </span>
-                <span style={{
-                  marginLeft: 'auto',
-                  fontFamily: FONTS.pixel, fontSize: '6px', color: COLORS.textDim,
-                }}>
-                  {exileCount}-{saveCount}
+                  {isExiled ? `${exiledName} EXILED` : 'NO EXILE'}
                 </span>
               </div>
-              {/* Individual votes */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                {Object.entries(vote.votes).map(([id, v]) => (
-                  <span key={id} style={{
-                    fontFamily: FONTS.body, fontSize: 10,
-                    padding: '1px 5px', borderRadius: 3,
-                    background: v === 'exile' ? '#ef444418' : '#4ade8018',
-                    color: v === 'exile' ? '#ef4444' : '#4ade80',
-                    border: `1px solid ${v === 'exile' ? '#ef444433' : '#4ade8033'}`,
-                  }}>
-                    {getName(id)}: {v}
-                  </span>
-                ))}
-              </div>
-              {/* Called by */}
-              <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, marginTop: 3 }}>
-                Called by {getName(vote.callerId)}
+              {/* Tally per target */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {tallyEntries.map(([targetId, voters]) => {
+                  const isTarget = targetId === vote.exiledId;
+                  return (
+                    <div key={targetId} style={{
+                      fontFamily: FONTS.body, fontSize: 10,
+                      padding: '2px 6px', borderRadius: 3,
+                      background: isTarget ? '#ef444418' : COLORS.bgCard,
+                      border: `1px solid ${isTarget ? '#ef444433' : COLORS.border + '33'}`,
+                      color: isTarget ? '#ef4444' : COLORS.text,
+                    }}>
+                      <span style={{ fontWeight: 600 }}>{getName(targetId)}</span>
+                      <span style={{ color: COLORS.textDim }}> — {voters.length} vote{voters.length !== 1 ? 's' : ''} ({voters.join(', ')})</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -361,18 +360,25 @@ export const WerewolfSidebar: React.FC = () => {
         }
       }),
 
-      eventBus.on('werewolf:voteDetail', (data: { round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }) => {
-        const callerName = getName(data.callerId);
-        const nomineeName = getName(data.nomineeId);
-        let exileCount = 0;
-        let saveCount = 0;
-        for (const v of Object.values(data.votes)) {
-          if (v === 'exile') exileCount++;
-          else saveCount++;
+      eventBus.on('werewolf:voteDetail', (data: { round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }) => {
+        // Tally votes per target
+        const tally: Record<string, string[]> = {};
+        for (const [voterId, targetId] of Object.entries(data.votes)) {
+          if (!tally[targetId]) tally[targetId] = [];
+          tally[targetId].push(getName(voterId));
         }
-        const voteBreakdown = Object.entries(data.votes)
-          .map(([id, v]) => `${getName(id)}: ${v}`)
-          .join(', ');
+
+        // Build breakdown: "Elena: 3 votes (Marcus, Sofia, Finn)"
+        const tallyLines = Object.entries(tally)
+          .sort(([, a], [, b]) => b.length - a.length)
+          .map(([targetId, voters]) => `${getName(targetId)}: ${voters.length} vote${voters.length !== 1 ? 's' : ''} (${voters.join(', ')})`)
+          .join('\n');
+
+        const exiledName = data.exiledId ? getName(data.exiledId) : null;
+        const topVotes = data.exiledId && tally[data.exiledId] ? tally[data.exiledId].length : 0;
+        const headline = data.result === 'exiled' && exiledName
+          ? `Vote: ${exiledName} EXILED (${topVotes} vote${topVotes !== 1 ? 's' : ''})`
+          : 'Vote: NO EXILE (tied)';
 
         addEvent({
           id: crypto.randomUUID(),
@@ -380,8 +386,8 @@ export const WerewolfSidebar: React.FC = () => {
           round: data.round,
           type: 'vote',
           icon: data.result === 'exiled' ? '\u{1F6A8}' : '\u{1F6E1}',
-          headline: `Vote on ${nomineeName}: ${data.result.toUpperCase()} (${exileCount}-${saveCount})`,
-          detail: `Called by ${callerName}\n${voteBreakdown}`,
+          headline,
+          detail: tallyLines,
         });
       }),
 
@@ -447,13 +453,16 @@ export const WerewolfSidebar: React.FC = () => {
       if (msgs.length < 2) continue; // wait for at least an exchange
       seenConvIds.current.add(convId);
       const participants = [...new Set(msgs.map(m => m.agentName))];
+      const isMeeting = msgs.some(m => m.phase === 'meeting');
       setEvents(prev => [{
         id: `conv-${convId}`,
         time: msgs[0]?.timestamp ?? Date.now(),
         round: gameStore.getState().werewolfRound,
-        type: 'conversation' as WerewolfEventType,
-        icon: '\u{1F4AC}',
-        headline: `${participants.join(' & ')} are talking`,
+        type: (isMeeting ? 'meeting' : 'conversation') as WerewolfEventType,
+        icon: isMeeting ? '\u{1F514}' : '\u{1F4AC}',
+        headline: isMeeting
+          ? `${participants.join(' & ')} spoke at the meeting`
+          : `${participants.join(' & ')} are talking`,
         conversationId: convId,
         agentNames: participants,
       }, ...prev].slice(0, 300));
@@ -462,6 +471,7 @@ export const WerewolfSidebar: React.FC = () => {
 
   // No auto-scroll — user controls their own scroll position
 
+  const totalCount = agents.length;
   const aliveCount = agents.filter(a => a.alive !== false).length;
   const deadCount = agents.filter(a => a.alive === false).length;
 
@@ -472,8 +482,10 @@ export const WerewolfSidebar: React.FC = () => {
     return true;
   });
 
-  // Count by type (for filter chips)
-  const typeCounts = new Map<WerewolfEventType, number>();
+  // Count by type (for filter chips) — seed all types so chips are always visible
+  const allTypes: WerewolfEventType[] = ['phase', 'conversation', 'meeting', 'vote', 'death', 'save', 'role'];
+  if (godMode) allTypes.push('night');
+  const typeCounts = new Map<WerewolfEventType, number>(allTypes.map(t => [t, 0]));
   for (const e of events) {
     if (e.type === 'night' && !godMode) continue;
     typeCounts.set(e.type, (typeCounts.get(e.type) ?? 0) + 1);
@@ -498,6 +510,7 @@ export const WerewolfSidebar: React.FC = () => {
         phase={phase}
         round={round}
         godMode={godMode}
+        totalCount={totalCount}
         aliveCount={aliveCount}
         deadCount={deadCount}
         roles={roles}
@@ -515,36 +528,34 @@ export const WerewolfSidebar: React.FC = () => {
       {/* ── Meeting Log ── */}
       <MeetingLog transcripts={meetingTranscripts} />
 
-      {/* ── Filter chips ── */}
-      {events.length > 0 && (
-        <div style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 4,
-          padding: '8px 10px',
-          borderBottom: `1px solid ${COLORS.border}`,
-          flexShrink: 0,
-        }}>
-          <FilterChip
-            label={`ALL (${events.filter(e => e.type !== 'night' || godMode).length})`}
-            active={filterType === null}
-            color={COLORS.accent}
-            onClick={() => setFilterType(null)}
-          />
-          {([...typeCounts.entries()] as [WerewolfEventType, number][]).map(([type, count]) => {
-            const badge = EVENT_BADGES[type];
-            return (
-              <FilterChip
-                key={type}
-                label={`${badge.icon} ${badge.label} (${count})`}
-                active={filterType === type}
-                color={badge.color}
-                onClick={() => setFilterType(prev => prev === type ? null : type)}
-              />
-            );
-          })}
-        </div>
-      )}
+      {/* ── Filter chips (always visible) ── */}
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 4,
+        padding: '8px 10px',
+        borderBottom: `1px solid ${COLORS.border}`,
+        flexShrink: 0,
+      }}>
+        <FilterChip
+          label={`ALL (${events.filter(e => e.type !== 'night' || godMode).length})`}
+          active={filterType === null}
+          color={COLORS.accent}
+          onClick={() => setFilterType(null)}
+        />
+        {([...typeCounts.entries()] as [WerewolfEventType, number][]).map(([type, count]) => {
+          const badge = EVENT_BADGES[type];
+          return (
+            <FilterChip
+              key={type}
+              label={`${badge.icon} ${badge.label} (${count})`}
+              active={filterType === type}
+              color={badge.color}
+              onClick={() => setFilterType(prev => prev === type ? null : type)}
+            />
+          );
+        })}
+      </div>
 
       {/* ── Event feed ── */}
       <div style={{ flex: 1, overflowY: 'auto', overscrollBehavior: 'contain' }}>
@@ -585,11 +596,12 @@ const SidebarHeader: React.FC<{
   phase: string | null;
   round: number;
   godMode: boolean;
+  totalCount: number;
   aliveCount: number;
   deadCount: number;
   roles: Map<string, string>;
   agentsMap: Map<string, { config: { name: string }; alive?: boolean }>;
-}> = ({ phase, round, godMode, aliveCount, deadCount, roles, agentsMap }) => {
+}> = ({ phase, round, godMode, totalCount, aliveCount, deadCount, roles, agentsMap }) => {
   return (
     <div style={{
       padding: '12px 14px',
@@ -617,16 +629,16 @@ const SidebarHeader: React.FC<{
         <div style={{ display: 'flex', gap: 6 }}>
           {!phase && (
             <button
-              onClick={() => aliveCount >= 6 && werewolfStart()}
+              onClick={() => totalCount >= 6 && werewolfStart()}
               style={{
                 padding: '4px 12px',
-                background: aliveCount >= 6 ? '#4ade8022' : 'transparent',
-                border: `1px solid ${aliveCount >= 6 ? '#4ade80' : COLORS.border}`,
+                background: totalCount >= 6 ? '#4ade8022' : 'transparent',
+                border: `1px solid ${totalCount >= 6 ? '#4ade80' : COLORS.border}`,
                 borderRadius: 4,
-                cursor: aliveCount >= 6 ? 'pointer' : 'not-allowed',
+                cursor: totalCount >= 6 ? 'pointer' : 'not-allowed',
                 fontFamily: FONTS.pixel, fontSize: '7px', letterSpacing: 1,
-                color: aliveCount >= 6 ? '#4ade80' : COLORS.textDim,
-                opacity: aliveCount >= 6 ? 1 : 0.5,
+                color: totalCount >= 6 ? '#4ade80' : COLORS.textDim,
+                opacity: totalCount >= 6 ? 1 : 0.5,
               }}
             >
               START GAME

@@ -59,7 +59,7 @@ interface GameState {
   werewolfRound: number;
   werewolfRoles: Map<string, string>;
   werewolfKills: Array<{ agentId: string; saved: boolean; round: number }>;
-  werewolfVotes: Array<{ round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }>;
+  werewolfVotes: Array<{ round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }>;
   werewolfNightActions: Array<{ round: number; type: string; agentId: string; targetId: string; result?: string }>;
   werewolfMeetingTranscripts: Array<{ round: number; transcript: Array<{ name: string; message: string }> }>;
 }
@@ -78,6 +78,8 @@ export interface ChatEntry {
   message: string;
   timestamp: number;
   conversationId: string;
+  /** Werewolf phase when this message was sent (e.g. 'meeting', 'day') */
+  phase?: string;
 }
 
 export interface ThoughtEntry {
@@ -663,7 +665,7 @@ class GameStore {
     this.notify();
   }
 
-  addWerewolfVote(vote: { round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }): void {
+  addWerewolfVote(vote: { round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }): void {
     this.state = { ...this.state, werewolfVotes: [...this.state.werewolfVotes, vote] };
     this.notify();
   }

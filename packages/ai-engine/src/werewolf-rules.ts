@@ -34,9 +34,8 @@ DAY ACTIONS:
 - reveal_role
 - whisper [name]
 - follow [name]
-- call_vote
 
-VOTE: vote_exile or vote_save.
+VOTE: At the end of the meeting, everyone votes. Use: vote [name]. Plurality wins.
 
 WIN: Villagers win when all werewolves exiled. Werewolves win when they equal or outnumber villagers.
 

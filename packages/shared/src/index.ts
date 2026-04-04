@@ -109,7 +109,7 @@ export interface Agent {
   fellowWolves?: string[];
   investigations?: { targetId: string; targetName: string; result: 'werewolf' | 'not_werewolf'; night: number }[];
   lastGuarded?: string;
-  votingHistory?: { day: number; nomineeId: string; vote: 'exile' | 'save' }[];
+  votingHistory?: { day: number; targetId: string; targetName: string }[];
 }
 
 // --- Strategy Tracking ---

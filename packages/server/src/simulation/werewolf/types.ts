@@ -23,10 +23,10 @@ export interface NightResult {
 
 export interface VoteRecord {
   day: number;
-  callerId: string;
-  nomineeId: string;
-  votes: Map<string, 'exile' | 'save'>;
-  result: 'exiled' | 'saved';
+  /** voterId → targetId (who they want to exile) */
+  votes: Map<string, string>;
+  result: 'exiled' | 'no_exile';
+  exiledId: string | null;
   roleRevealed: string | null;
 }
 

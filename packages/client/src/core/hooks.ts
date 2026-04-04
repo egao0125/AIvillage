@@ -266,7 +266,7 @@ export function useWerewolfKills(): Array<{ agentId: string; saved: boolean; rou
   );
 }
 
-export function useWerewolfVotes(): Array<{ round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }> {
+export function useWerewolfVotes(): Array<{ round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }> {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().werewolfVotes

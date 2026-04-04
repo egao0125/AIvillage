@@ -210,8 +210,21 @@ export class SimulationEngine {
     this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
     this.broadcaster.worldTime(this.world.time);
 
+    // Revive all agents (they may be dead from a previous game)
+    for (const agent of this.world.agents.values()) {
+      if (agent.alive === false) {
+        agent.alive = true;
+        agent.state = 'idle';
+        agent.werewolfRole = undefined;
+        agent.votingHistory = undefined;
+        agent.investigations = undefined;
+        agent.fellowWolves = undefined;
+        agent.lastGuarded = undefined;
+      }
+    }
+
     const agentIds = Array.from(this.world.agents.values())
-      .filter(a => a.alive !== false && a.state !== 'away')
+      .filter(a => a.state !== 'away')
       .map(a => a.id);
     this.werewolfManager.startGame(agentIds);
   }

@@ -22,7 +22,7 @@ import { WerewolfVoteManager } from './vote-manager.js';
 // Vote timeout (ticks) — only vote uses tick-based timeout; all other
 // phases are driven by the world clock (GameTime).
 // ---------------------------------------------------------------------------
-const VOTE_TIMEOUT_TICKS = 300;  // ~25 seconds at 83ms tick (~2.5 game hours for vote resolution)
+const VOTE_TIMEOUT_TICKS = 480;  // ~40 seconds at 83ms tick (~4 game hours) — enough for all agents' LLM calls
 
 // ---------------------------------------------------------------------------
 // WerewolfPhaseManager — drives the entire werewolf game loop
@@ -55,6 +55,43 @@ export class WerewolfPhaseManager {
   get phase() { return this.state.phase; }
   get round() { return this.state.round; }
   get gameState() { return this.state; }
+
+  /** List of alive agents with names — for vote prompt context */
+  getAliveList(): Array<{ id: string; name: string }> {
+    return [...this.state.alive].map(id => ({
+      id,
+      name: this.agentNames.get(id) ?? 'unknown',
+    }));
+  }
+
+  /** Deaths so far — for vote prompt context */
+  getDeaths(): Array<{ night: number; name: string; agentId: string }> {
+    return this.state.dead.map(id => {
+      // Find which night they died from event log
+      const deathEvent = this.state.eventLog.find(
+        e => e.phase === 'night' && e.event.includes('found dead') && e.agentIds?.includes(id),
+      );
+      // Also check for exile events
+      const exileEvent = this.state.eventLog.find(
+        e => e.event.includes('exiled') && e.agentIds?.includes(id),
+      );
+      const night = deathEvent?.day ?? exileEvent?.day ?? 0;
+      return { night, name: this.agentNames.get(id) ?? 'unknown', agentId: id };
+    });
+  }
+
+  /** Number of agents still alive */
+  getAliveCount(): number { return this.state.alive.size; }
+
+  /** Number of wolves still alive (internal — for wolf agents only) */
+  getWolfCount(): number {
+    let count = 0;
+    for (const id of this.state.alive) {
+      if (this.state.roles.get(id) === 'werewolf') count++;
+    }
+    return count;
+  }
+
 
   startGame(agentIds: string[]): void {
     if (agentIds.length < 6) {
@@ -174,76 +211,24 @@ export class WerewolfPhaseManager {
         break;
 
       case 'meeting':
-        // At 12:50, inject final warning to encourage nominations
-        if (hour === 12 && minute === 50 && !this.state.voteCalled) {
-          this.injectVoteWarning();
-        }
-        // At 13:00, auto-start vote if none was called
+        // At 13:00, system triggers the vote
         if (hour === 13 && minute === 0 && !this.state.voteCalled) {
-          this.autoCallVote();
+          this.systemStartVote();
         }
-        // Safety: if clock passed 13:30 without resolving, force vote
+        // Safety: if clock passed 13:30 without vote starting, force it
         if (hour >= 13 && minute >= 30 && !this.state.voteCalled) {
-          this.autoCallVote();
+          this.systemStartVote();
         }
         break;
 
       case 'vote':
         this.voteManager.tick();
         if (this.voteManager.isComplete()) {
-          const result = this.voteManager.getResult();
-          if (result.exiled) {
-            // Defer exile to 17:00 — store pending and announce
-            this.state.pendingExileId = result.exiled;
-            const name = this.agentNames.get(result.exiled) ?? 'someone';
-            const role = this.state.roles.get(result.exiled) ?? 'villager';
-            this.broadcaster.werewolfVote(result.exiled, role);
-            // Memory: condemned but execution at dusk
-            for (const id of this.state.alive) {
-              const cognition = this.cognitions.get(id);
-              if (!cognition) continue;
-              void cognition.addMemory({
-                id: crypto.randomUUID(),
-                agentId: id,
-                type: 'observation',
-                content: `The vote has concluded: ${name} is condemned. They will be executed at dusk (17:00).`,
-                importance: 10,
-                timestamp: Date.now(),
-                relatedAgentIds: [result.exiled],
-              }).catch(() => {});
-            }
-            console.log(`[Werewolf] ${name} condemned — execution scheduled for 17:00`);
-          }
-          // After vote → afternoon free time until execution/night
-          this.transitionToAfternoon();
+          this.handleVoteResult();
         } else if (this.state.phaseTimer >= VOTE_TIMEOUT_TICKS) {
-          // Vote timed out — force resolve with votes collected so far
           console.log(`[Werewolf] Vote timed out — forcing resolution with ${this.voteManager.getVoteCount()} votes`);
           this.voteManager.forceResolve();
-          const result = this.voteManager.getResult();
-          if (result.exiled) {
-            this.state.pendingExileId = result.exiled;
-            const name = this.agentNames.get(result.exiled) ?? 'someone';
-            const role = this.state.roles.get(result.exiled) ?? 'villager';
-            this.broadcaster.werewolfVote(result.exiled, role);
-            for (const id of this.state.alive) {
-              const cognition = this.cognitions.get(id);
-              if (!cognition) continue;
-              void cognition.addMemory({
-                id: crypto.randomUUID(),
-                agentId: id,
-                type: 'observation',
-                content: `The vote has concluded: ${name} is condemned. They will be executed at dusk (17:00).`,
-                importance: 10,
-                timestamp: Date.now(),
-                relatedAgentIds: [result.exiled],
-              }).catch(() => {});
-            }
-            console.log(`[Werewolf] ${name} condemned — execution scheduled for 17:00`);
-          } else {
-            this.broadcaster.werewolfVote(null, null);
-          }
-          this.transitionToAfternoon();
+          this.handleVoteResult();
         }
         break;
     }
@@ -309,15 +294,11 @@ export class WerewolfPhaseManager {
           { id: 'observe', label: 'Watch who is talking', category: 'social' },
           { id: 'think', label: 'Reflect on evidence', category: 'rest' },
         );
-        if (!this.state.voteCalled) {
-          actions.push({ id: 'call_vote', label: 'Call a vote', category: 'social' });
-        }
         break;
 
       case 'vote':
         actions.push(
-          { id: 'vote_exile', label: 'Vote to exile', category: 'social' },
-          { id: 'vote_save', label: 'Vote to save', category: 'social' },
+          { id: 'vote', label: 'Vote to exile someone', category: 'social' },
         );
         break;
 
@@ -336,9 +317,46 @@ export class WerewolfPhaseManager {
     const role = this.state.roles.get(agentId);
     if (this.state.phase !== 'night' || !role) return;
 
+    // Reject actions targeting dead agents
+    if (!this.state.alive.has(targetId)) {
+      const targetName = this.agentNames.get(targetId) ?? 'that person';
+      console.log(`[Werewolf] ${this.agentNames.get(agentId)} tried to target dead ${targetName} — rejected`);
+      const cognition = this.cognitions.get(agentId);
+      if (cognition) {
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId,
+          type: 'observation',
+          content: `${targetName} is already dead. You must choose a living target.`,
+          importance: 9,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        }).catch(() => {});
+      }
+      return;
+    }
+
     switch (actionId) {
       case 'attack':
         if (role === 'werewolf') {
+          // Wolves cannot attack fellow wolves
+          if (this.state.roles.get(targetId) === 'werewolf') {
+            const targetName = this.agentNames.get(targetId) ?? 'that person';
+            console.log(`[Werewolf] Wolf tried to attack fellow wolf ${targetName} — rejected`);
+            const cognition = this.cognitions.get(agentId);
+            if (cognition) {
+              void cognition.addMemory({
+                id: crypto.randomUUID(),
+                agentId,
+                type: 'observation',
+                content: `${targetName} is your fellow werewolf! You cannot attack them. Choose a VILLAGER target.`,
+                importance: 10,
+                timestamp: Date.now(),
+                relatedAgentIds: [],
+              }).catch(() => {});
+            }
+            return;
+          }
           this.state.nightActions.wolfTarget = targetId;
           this.state.nightActions.wolfTargetConfirmed = true;
           console.log(`[Werewolf] Wolf ${this.agentNames.get(agentId)} attacks ${this.agentNames.get(targetId)}`);
@@ -347,6 +365,8 @@ export class WerewolfPhaseManager {
 
       case 'change_target':
         if (role === 'werewolf') {
+          // Wolves cannot target fellow wolves
+          if (this.state.roles.get(targetId) === 'werewolf') return;
           this.state.nightActions.wolfTarget = targetId;
           this.state.nightActions.wolfTargetConfirmed = false;
           console.log(`[Werewolf] Wolf ${this.agentNames.get(agentId)} changes target to ${this.agentNames.get(targetId)}`);
@@ -406,7 +426,21 @@ export class WerewolfPhaseManager {
         if (role === 'healer') {
           // Cannot guard same person as last night
           if (targetId === this.state.lastGuarded) {
+            const targetName = this.agentNames.get(targetId) ?? 'that person';
             console.log(`[Werewolf] Healer tried to guard same person as last night — rejected`);
+            // Tell the healer so they pick someone else
+            const cognition = this.cognitions.get(agentId);
+            if (cognition) {
+              void cognition.addMemory({
+                id: crypto.randomUUID(),
+                agentId,
+                type: 'observation',
+                content: `You cannot guard ${targetName} again tonight — you must choose someone different from last night.`,
+                importance: 9,
+                timestamp: Date.now(),
+                relatedAgentIds: [],
+              }).catch(() => {});
+            }
             return;
           }
           this.state.nightActions.healerGuard = targetId;
@@ -425,12 +459,10 @@ export class WerewolfPhaseManager {
   }
 
   /**
-   * Handle call_vote during day phase.
+   * System-triggered vote — called at 13:00 when meeting ends.
    */
-  callVote(callerId: string, nomineeId: string, reason?: string): void {
-    if (this.state.phase !== 'day' && this.state.phase !== 'meeting') return;
+  systemStartVote(): void {
     if (this.state.voteCalled) return;
-    if (!this.state.alive.has(callerId) || !this.state.alive.has(nomineeId)) return;
 
     // Stop capturing meeting speech — we have the full transcript
     this.broadcaster.setOnSpeakHook(undefined);
@@ -443,17 +475,17 @@ export class WerewolfPhaseManager {
     // Send meeting transcript to clients for sidebar display
     this.broadcaster.werewolfMeetingTranscript(this.state.round, this.meetingTranscript);
 
-    this.voteManager.startVote(callerId, nomineeId, reason, this.meetingTranscript);
+    this.voteManager.startVote(this.meetingTranscript);
 
-    console.log(`[Werewolf] ${this.agentNames.get(callerId)} calls vote against ${this.agentNames.get(nomineeId)}`);
+    console.log(`[Werewolf] System triggers vote — all agents must name their exile target`);
   }
 
   /**
    * Record a vote during vote phase.
    */
-  recordVote(voterId: string, vote: 'exile' | 'save'): void {
+  recordVote(voterId: string, targetId: string): void {
     if (this.state.phase !== 'vote') return;
-    this.voteManager.recordVote(voterId, vote);
+    this.voteManager.recordVote(voterId, targetId);
   }
 
   /**
@@ -774,7 +806,6 @@ export class WerewolfPhaseManager {
     this.state.phase = 'meeting';
     this.state.phaseTimer = 0;
     this.state.voteCalled = false;
-    this.voteWarningInjected = false;
     this.meetingTranscript = [];
     this.broadcaster.werewolfPhase('meeting', this.state.round);
 
@@ -839,9 +870,8 @@ The bell rings at noon. Everyone gathers at the plaza for the daily meeting.
 Alive (${aliveNames.length}): ${aliveNames.join(', ')}
 Dead: ${deadNames.length > 0 ? deadNames.join(', ') : 'none'}
 
-This is the time to discuss suspicions, share evidence, and decide if someone should be exiled.
-You may accuse someone and call a vote. Defend yourself if accused.
-If no vote is called by the end of the meeting, the village returns to their afternoon activities.
+This is the time to discuss suspicions, share evidence, and form opinions.
+At the end of the meeting, everyone will vote on who to exile.
 
 MEETING ACTIONS:
 - talk [name] — discuss with someone
@@ -849,49 +879,52 @@ MEETING ACTIONS:
 - defend — defend yourself
 - share_info — share evidence
 - reveal_role — reveal your role
-- call_vote [name] — call for an exile vote
 - observe — watch reactions
 - think — reflect on evidence${urgency}`;
   }
 
-  /** Warn agents that the meeting is ending — push them to nominate someone. */
-  private voteWarningInjected = false;
-  private injectVoteWarning(): void {
-    if (this.voteWarningInjected) return;
-    this.voteWarningInjected = true;
-
-    for (const id of this.state.alive) {
-      const cognition = this.cognitions.get(id);
-      if (!cognition) continue;
-      void cognition.addMemory({
-        id: crypto.randomUUID(),
-        agentId: id,
-        type: 'observation',
-        content: 'The meeting is almost over! If you have suspicions, call a vote NOW before time runs out. Use call_vote [name] to nominate someone.',
-        importance: 10,
-        timestamp: Date.now(),
-        relatedAgentIds: [],
-      }).catch(() => {});
+  /** Handle vote result — announce and schedule exile or no-exile */
+  private handleVoteResult(): void {
+    const result = this.voteManager.getResult();
+    if (result.exiledId) {
+      this.state.pendingExileId = result.exiledId;
+      const name = this.agentNames.get(result.exiledId) ?? 'someone';
+      const role = this.state.roles.get(result.exiledId) ?? 'villager';
+      this.broadcaster.werewolfVote(result.exiledId, role);
+      // Memory: condemned but execution at dusk
+      for (const id of this.state.alive) {
+        const cognition = this.cognitions.get(id);
+        if (!cognition) continue;
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: id,
+          type: 'observation',
+          content: `The vote has concluded: ${name} is condemned. They will be executed at dusk (17:00).`,
+          importance: 10,
+          timestamp: Date.now(),
+          relatedAgentIds: [result.exiledId],
+        }).catch(() => {});
+      }
+      console.log(`[Werewolf] ${name} condemned — execution scheduled for 17:00`);
+    } else {
+      this.broadcaster.werewolfVote(null, null);
+      // Memory: no exile
+      for (const id of this.state.alive) {
+        const cognition = this.cognitions.get(id);
+        if (!cognition) continue;
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: id,
+          type: 'observation',
+          content: `The vote has concluded: no one was exiled. The votes were tied or insufficient.`,
+          importance: 8,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        }).catch(() => {});
+      }
+      console.log(`[Werewolf] No one exiled — tied or insufficient votes`);
     }
-  }
-
-  /** Auto-call a vote when the meeting ends without anyone nominating. */
-  private autoCallVote(): void {
-    // Pick a nominee: random alive agent (excluding wolves would be unfair, so truly random)
-    const aliveIds = [...this.state.alive];
-    if (aliveIds.length < 2) return;
-
-    // Pick a random nominee and a random caller (different agents)
-    const nomineeIdx = Math.floor(Math.random() * aliveIds.length);
-    const nomineeId = aliveIds[nomineeIdx];
-    const remainingIds = aliveIds.filter(id => id !== nomineeId);
-    const callerId = remainingIds[Math.floor(Math.random() * remainingIds.length)];
-
-    const callerName = this.agentNames.get(callerId) ?? 'Someone';
-    const nomineeName = this.agentNames.get(nomineeId) ?? 'someone';
-
-    console.log(`[Werewolf] Auto-vote: ${callerName} nominates ${nomineeName} (meeting ended without nomination)`);
-    this.callVote(callerId, nomineeId, 'The meeting is ending and the village must decide.');
+    this.transitionToAfternoon();
   }
 
   private allNightActionsComplete(): boolean {

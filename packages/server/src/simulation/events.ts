@@ -104,7 +104,8 @@ export class EventBroadcaster {
   }
 
   agentSpeak(agentId: string, name: string, message: string, conversationId: string): void {
-    this.emitForAgent('agent:speak', { agentId, name, message, conversationId }, agentId);
+    const phase = this.currentWerewolfPhase ?? undefined;
+    this.emitForAgent('agent:speak', { agentId, name, message, conversationId, phase }, agentId);
     this.narrator?.logEvent(`${name} said: "${message.substring(0, 80)}"`);
     this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'conversation', description: `Said: "${message.substring(0, 100)}"`, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
     this.onSpeakHook?.(agentId, name, message, conversationId);
@@ -237,7 +238,11 @@ export class EventBroadcaster {
 
   // --- Werewolf Game Mode ---
 
+  /** Current werewolf phase — tracked so agentSpeak can tag messages automatically */
+  private currentWerewolfPhase: string | null = null;
+
   werewolfPhase(phase: string, round: number): void {
+    this.currentWerewolfPhase = phase;
     this.io.emit('werewolf:phase', { phase, round });
     this.narrator?.logEvent(`Werewolf game: ${phase} phase (round ${round})`);
   }
@@ -254,8 +259,8 @@ export class EventBroadcaster {
     this.io.emit('werewolf:nightAction', { type, agentId, targetId, result });
   }
 
-  werewolfVoteDetail(round: number, callerId: string, nomineeId: string, votes: Record<string, string>, result: string): void {
-    this.io.emit('werewolf:voteDetail', { round, callerId, nomineeId, votes, result });
+  werewolfVoteDetail(round: number, votes: Record<string, string>, result: 'exiled' | 'no_exile', exiledId: string | null): void {
+    this.io.emit('werewolf:voteDetail', { round, votes, result, exiledId });
   }
 
   werewolfReveal(agentId: string, role: string): void {

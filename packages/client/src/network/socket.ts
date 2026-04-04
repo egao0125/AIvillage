@@ -126,6 +126,7 @@ export function connectSocket(): Socket {
       name: string;
       message: string;
       conversationId: string;
+      phase?: string;
     }) => {
       gameStore.addChatEntry({
         id: crypto.randomUUID(),
@@ -134,6 +135,7 @@ export function connectSocket(): Socket {
         message: data.message,
         timestamp: Date.now(),
         conversationId: data.conversationId,
+        phase: data.phase,
       });
       eventBus.emit('agent:speak', data);
     }
@@ -374,7 +376,7 @@ export function connectSocket(): Socket {
     eventBus.emit('werewolf:nightAction', data);
   });
 
-  socket.on('werewolf:voteDetail', (data: { round: number; callerId: string; nomineeId: string; votes: Record<string, 'exile' | 'save'>; result: 'exiled' | 'saved' }) => {
+  socket.on('werewolf:voteDetail', (data: { round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }) => {
     gameStore.addWerewolfVote(data);
     eventBus.emit('werewolf:voteDetail', data);
   });

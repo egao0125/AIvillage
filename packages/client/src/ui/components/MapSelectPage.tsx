@@ -28,7 +28,7 @@ const MAPS: MapDef[] = [
     players: '8\u201312 agents',
     duration: '~15 min',
     tags: ['social deduction', 'hidden roles', 'voting'],
-    status: 'live',
+    status: 'coming_soon',
   },
 ];
 

@@ -256,5 +256,5 @@ DAY ACTIONS:
 - observe — watch who is nearby and talking
 - think — reflect on evidence and patterns
 - follow [name]
-- call_vote${urgency}`;
+${urgency}`;
 }

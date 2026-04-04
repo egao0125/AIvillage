@@ -5,7 +5,7 @@ import type { AgentController } from '../agent-controller.js';
 import type { WerewolfGameState } from './types.js';
 
 // ---------------------------------------------------------------------------
-// WerewolfVoteManager — structured vote flow:
+// WerewolfVoteManager — free plurality vote:
 // gathering (10 ticks) → discussion (20 ticks) → voting → resolve
 // ---------------------------------------------------------------------------
 
@@ -15,12 +15,10 @@ const GATHERING_TICKS = 10;
 const DISCUSSION_TICKS = 20;
 
 export class WerewolfVoteManager {
-  private callerId: string | null = null;
-  private nomineeId: string | null = null;
-  private reason: string = '';
-  private votes: Map<string, 'exile' | 'save'> = new Map();
+  /** voterId → targetId (who they want to exile) */
+  private votes: Map<string, string> = new Map();
   private resolved: boolean = false;
-  private result: { exiled: string | null; roleRevealed: string | null } = { exiled: null, roleRevealed: null };
+  private result: { exiledId: string | null; roleRevealed: string | null } = { exiledId: null, roleRevealed: null };
   private votePhase: VoteSubPhase = 'resolved';
   private votePhaseTimer: number = 0;
   /** Full meeting transcript — all speech that happened before the vote was called */
@@ -34,21 +32,15 @@ export class WerewolfVoteManager {
     private cognitions: Map<string, AgentCognition>,
   ) {}
 
-  startVote(callerId: string, nomineeId: string, reason?: string, meetingTranscript?: Array<{ name: string; message: string }>): void {
-    this.callerId = callerId;
-    this.nomineeId = nomineeId;
-    this.reason = reason ?? '';
+  startVote(meetingTranscript?: Array<{ name: string; message: string }>): void {
     this.meetingTranscript = meetingTranscript ?? [];
     this.votes.clear();
     this.resolved = false;
-    this.result = { exiled: null, roleRevealed: null };
+    this.result = { exiledId: null, roleRevealed: null };
     this.votePhase = 'gathering';
     this.votePhaseTimer = 0;
 
-    const callerName = this.world.getAgent(callerId)?.config.name ?? 'Someone';
-    const nomineeName = this.world.getAgent(nomineeId)?.config.name ?? 'someone';
-
-    // Memory for all living agents: vote called, everyone moves to plaza
+    // Memory for all living agents: system announces vote
     for (const id of this.state.alive) {
       const cognition = this.cognitions.get(id);
       if (!cognition) continue;
@@ -56,14 +48,14 @@ export class WerewolfVoteManager {
         id: crypto.randomUUID(),
         agentId: id,
         type: 'observation',
-        content: `The bell rings! ${callerName} calls for a vote to exile ${nomineeName}. Everyone gathers at the plaza.`,
+        content: `The bell rings! The village must now vote. Each person will name one person they want to exile. The person with the most votes will be exiled.`,
         importance: 9,
         timestamp: Date.now(),
-        relatedAgentIds: [callerId, nomineeId],
+        relatedAgentIds: [],
       }).catch(() => {});
     }
 
-    console.log(`[WerewolfVote] ${callerName} calls vote against ${nomineeName} — gathering phase`);
+    console.log(`[WerewolfVote] System-initiated vote — gathering phase`);
   }
 
   tick(): void {
@@ -84,6 +76,11 @@ export class WerewolfVoteManager {
           this.votePhase = 'voting';
           this.votePhaseTimer = 0;
           this.injectVotePrompt();
+          // Force-interrupt all alive agents so they vote immediately
+          for (const id of this.state.alive) {
+            const ctrl = this.controllers.get(id);
+            if (ctrl) ctrl.interruptForVote();
+          }
         }
         break;
 
@@ -93,25 +90,50 @@ export class WerewolfVoteManager {
     }
   }
 
-  recordVote(voterId: string, vote: 'exile' | 'save'): void {
+  recordVote(voterId: string, targetId: string): void {
     if (this.resolved) return;
     // Accept votes during any sub-phase (agents decide asynchronously via LLM)
     if (!this.state.alive.has(voterId)) return;
-    this.votes.set(voterId, vote);
+
+    // Skip duplicate votes from the same agent
+    if (this.votes.has(voterId)) return;
+
+    // Validate target is alive
+    if (!this.state.alive.has(targetId)) {
+      const targetName = this.world.getAgent(targetId)?.config.name ?? 'that person';
+      console.log(`[WerewolfVote] ${this.world.getAgent(voterId)?.config.name} tried to vote for dead ${targetName} — rejected`);
+      const cognition = this.cognitions.get(voterId);
+      if (cognition) {
+        void cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: voterId,
+          type: 'observation',
+          content: `${targetName} is already dead. Choose a living person to vote for.`,
+          importance: 9,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    this.votes.set(voterId, targetId);
 
     // Update agent's voting history
     const agent = this.world.getAgent(voterId);
-    if (agent && this.nomineeId) {
+    const targetAgent = this.world.getAgent(targetId);
+    if (agent) {
       if (!agent.votingHistory) agent.votingHistory = [];
       agent.votingHistory.push({
         day: this.state.round,
-        nomineeId: this.nomineeId,
-        vote,
+        targetId,
+        targetName: targetAgent?.config.name ?? targetId,
       });
     }
 
-    const voterName = this.world.getAgent(voterId)?.config.name ?? voterId;
-    console.log(`[WerewolfVote] ${voterName} votes ${vote} (${this.votes.size}/${this.state.alive.size})`);
+    const voterName = agent?.config.name ?? voterId;
+    const targetName = targetAgent?.config.name ?? targetId;
+    console.log(`[WerewolfVote] ${voterName} votes to exile ${targetName} (${this.votes.size}/${this.state.alive.size})`);
 
     // Check if all alive agents have voted
     if (this.votes.size >= this.state.alive.size) {
@@ -133,7 +155,7 @@ export class WerewolfVoteManager {
     this.resolve();
   }
 
-  getResult(): { exiled: string | null; roleRevealed: string | null } {
+  getResult(): { exiledId: string | null; roleRevealed: string | null } {
     return this.result;
   }
 
@@ -142,18 +164,18 @@ export class WerewolfVoteManager {
   // -----------------------------------------------------------------------
 
   private injectDiscussionMemories(): void {
-    const callerName = this.callerId ? (this.world.getAgent(this.callerId)?.config.name ?? 'Someone') : 'Someone';
-    const nomineeName = this.nomineeId ? (this.world.getAgent(this.nomineeId)?.config.name ?? 'someone') : 'someone';
-    const accusation = this.reason
-      ? `${callerName} accuses ${nomineeName}: "${this.reason}"`
-      : `${callerName} accuses ${nomineeName} of being a werewolf.`;
-
     // Build meeting transcript block (everything said during the meeting before the vote)
     let transcriptBlock = '';
     if (this.meetingTranscript.length > 0) {
       const lines = this.meetingTranscript.map(t => `  ${t.name}: "${t.message}"`);
       transcriptBlock = `\n\nMEETING TRANSCRIPT (what was said today):\n${lines.join('\n')}`;
     }
+
+    // Build alive agents list
+    const aliveList = [...this.state.alive].map(id => {
+      const name = this.world.getAgent(id)?.config.name ?? id;
+      return `- ${name}`;
+    }).join('\n');
 
     for (const id of this.state.alive) {
       const cognition = this.cognitions.get(id);
@@ -176,14 +198,7 @@ export class WerewolfVoteManager {
         privateKnowledge = '\n\nREMEMBER: You are a werewolf pretending to be a villager. Vote strategically — protect yourself and your fellow wolf.';
       }
 
-      let content: string;
-      if (id === this.callerId) {
-        content = `VOTE DISCUSSION — You called the vote against ${nomineeName}.\n${accusation}\nState your case to the village.${transcriptBlock}${privateKnowledge}`;
-      } else if (id === this.nomineeId) {
-        content = `VOTE DISCUSSION — You are accused!\n${accusation}\nThis is your chance to defend yourself. Convince the village you are innocent.${transcriptBlock}${privateKnowledge}`;
-      } else {
-        content = `VOTE DISCUSSION — ${accusation}\nListen to both sides. Think about what you've observed and heard.${transcriptBlock}${privateKnowledge}`;
-      }
+      const content = `VOTE DISCUSSION — The village must decide who to exile today.\n\nALIVE VILLAGERS:\n${aliveList}\n\nDiscuss your suspicions. Think about what you've observed and heard.${transcriptBlock}${privateKnowledge}`;
 
       void cognition.addMemory({
         id: crypto.randomUUID(),
@@ -192,35 +207,42 @@ export class WerewolfVoteManager {
         content,
         importance: 9,
         timestamp: Date.now(),
-        relatedAgentIds: [this.callerId!, this.nomineeId!].filter(Boolean),
+        relatedAgentIds: [],
       }).catch(() => {});
     }
 
-    console.log(`[WerewolfVote] Discussion phase — speeches + transcript (${this.meetingTranscript.length} lines) injected`);
+    console.log(`[WerewolfVote] Discussion phase — transcript (${this.meetingTranscript.length} lines) injected`);
   }
 
   private injectVotePrompt(): void {
-    const nomineeName = this.nomineeId ? (this.world.getAgent(this.nomineeId)?.config.name ?? 'someone') : 'someone';
+    // Build alive agents list
+    const aliveList = [...this.state.alive].map(id => {
+      const name = this.world.getAgent(id)?.config.name ?? id;
+      return `- ${name}`;
+    }).join('\n');
 
     for (const id of this.state.alive) {
       const cognition = this.cognitions.get(id);
       if (!cognition) continue;
 
-      // Remind agent of their private knowledge one more time before vote
+      // Build private reminder
       const role = this.state.roles.get(id);
       const agent = this.world.getAgent(id);
       let reminder = '';
+
       if (role === 'sheriff' && agent?.investigations?.length) {
-        const relevant = agent.investigations.find((inv: { targetId: string }) => inv.targetId === this.nomineeId);
-        if (relevant) {
-          reminder = `\nREMINDER: Your investigation showed ${nomineeName} is ${(relevant as { result: string }).result === 'werewolf' ? 'a WEREWOLF!' : 'NOT a werewolf'}.`;
+        const wolfFindings = agent.investigations.filter((inv: { result: string }) => inv.result === 'werewolf');
+        if (wolfFindings.length > 0) {
+          reminder = '\nREMINDER: Your investigations found: ' +
+            wolfFindings.map((inv: { targetName: string }) => `${inv.targetName} is a WEREWOLF`).join(', ') + '.';
         }
       } else if (role === 'werewolf') {
-        const nomineeRole = this.state.roles.get(this.nomineeId!);
-        if (nomineeRole === 'werewolf') {
-          reminder = '\nWARNING: The nominee is your fellow wolf! Vote to SAVE them.';
-        } else {
-          reminder = '\nThe nominee is not a wolf. Exiling them helps you win.';
+        // Warn wolf about voting for fellow wolf
+        const fellowWolfIds = [...this.state.roles.entries()]
+          .filter(([wid, r]) => r === 'werewolf' && wid !== id && this.state.alive.has(wid))
+          .map(([wid]) => this.world.getAgent(wid)?.config.name ?? wid);
+        if (fellowWolfIds.length > 0) {
+          reminder = `\nWARNING: ${fellowWolfIds.join(', ')} ${fellowWolfIds.length === 1 ? 'is' : 'are'} your fellow wolf(s). Do NOT vote for them. Target a villager instead.`;
         }
       }
 
@@ -228,10 +250,10 @@ export class WerewolfVoteManager {
         id: crypto.randomUUID(),
         agentId: id,
         type: 'observation',
-        content: `CAST YOUR VOTE NOW. Should ${nomineeName} be exiled?\n\nUse vote_exile to exile ${nomineeName} or vote_save to spare them.\nState your vote and a one-sentence reason.${reminder}`,
+        content: `CAST YOUR VOTE NOW. Name ONE person to exile.\n\nALIVE VILLAGERS:\n${aliveList}\n\nUse: vote [name]\nState your vote and a one-sentence reason.${reminder}`,
         importance: 10,
         timestamp: Date.now(),
-        relatedAgentIds: this.nomineeId ? [this.nomineeId] : [],
+        relatedAgentIds: [],
       }).catch(() => {});
     }
 
@@ -243,56 +265,69 @@ export class WerewolfVoteManager {
     this.resolved = true;
     this.votePhase = 'resolved';
 
-    let exileCount = 0;
-    let saveCount = 0;
-    for (const vote of this.votes.values()) {
-      if (vote === 'exile') exileCount++;
-      else saveCount++;
+    // Tally votes per target
+    const tally: Map<string, number> = new Map();
+    for (const targetId of this.votes.values()) {
+      tally.set(targetId, (tally.get(targetId) ?? 0) + 1);
     }
 
-    const majority = exileCount > saveCount;
+    // Find plurality winner (strict — no ties)
+    let maxVotes = 0;
+    let winnerId: string | null = null;
+    let isTied = false;
 
-    if (majority && this.nomineeId) {
-      const role = this.state.roles.get(this.nomineeId) ?? 'villager';
-      this.result = { exiled: this.nomineeId, roleRevealed: role };
+    for (const [targetId, count] of tally) {
+      if (count > maxVotes) {
+        maxVotes = count;
+        winnerId = targetId;
+        isTied = false;
+      } else if (count === maxVotes) {
+        isTied = true;
+      }
+    }
+
+    // Tie = no exile
+    if (isTied || !winnerId || maxVotes === 0) {
+      this.result = { exiledId: null, roleRevealed: null };
 
       this.state.votingHistory.push({
         day: this.state.round,
-        callerId: this.callerId!,
-        nomineeId: this.nomineeId,
         votes: new Map(this.votes),
-        result: 'exiled',
-        roleRevealed: role,
+        result: 'no_exile',
+        exiledId: null,
+        roleRevealed: null,
       });
     } else {
-      this.result = { exiled: null, roleRevealed: null };
+      const role = this.state.roles.get(winnerId) ?? 'villager';
+      this.result = { exiledId: winnerId, roleRevealed: role };
 
-      if (this.nomineeId) {
-        this.state.votingHistory.push({
-          day: this.state.round,
-          callerId: this.callerId!,
-          nomineeId: this.nomineeId,
-          votes: new Map(this.votes),
-          result: 'saved',
-          roleRevealed: null,
-        });
-      }
+      this.state.votingHistory.push({
+        day: this.state.round,
+        votes: new Map(this.votes),
+        result: 'exiled',
+        exiledId: winnerId,
+        roleRevealed: role,
+      });
     }
 
     // Broadcast detailed vote results for sidebar
     const votesObj: Record<string, string> = {};
-    for (const [id, v] of this.votes) {
-      votesObj[id] = v;
+    for (const [id, target] of this.votes) {
+      votesObj[id] = target;
     }
     this.broadcaster.werewolfVoteDetail(
       this.state.round,
-      this.callerId!,
-      this.nomineeId!,
       votesObj,
-      majority ? 'exiled' : 'saved',
+      this.result.exiledId ? 'exiled' : 'no_exile',
+      this.result.exiledId,
     );
 
-    const nomineeName = this.nomineeId ? (this.world.getAgent(this.nomineeId)?.config.name ?? 'someone') : 'no one';
-    console.log(`[WerewolfVote] Result: ${exileCount} exile, ${saveCount} save → ${majority ? `${nomineeName} EXILED` : `${nomineeName} SAVED`}`);
+    // Log result
+    if (this.result.exiledId) {
+      const name = this.world.getAgent(this.result.exiledId)?.config.name ?? 'someone';
+      console.log(`[WerewolfVote] Result: ${name} EXILED (${maxVotes} votes) — ${[...tally.entries()].map(([id, c]) => `${this.world.getAgent(id)?.config.name}: ${c}`).join(', ')}`);
+    } else {
+      console.log(`[WerewolfVote] Result: NO EXILE (tied or no votes) — ${[...tally.entries()].map(([id, c]) => `${this.world.getAgent(id)?.config.name}: ${c}`).join(', ')}`);
+    }
   }
 }

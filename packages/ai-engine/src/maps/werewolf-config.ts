@@ -32,9 +32,7 @@ DAY ACTIONS:
 - reveal_role — reveal your special role (risky — makes you a target)
 - whisper [name] — private word with someone (others see you whispering but not the content)
 - follow [name] — follow someone discreetly
-- call_vote — ring the bell, everyone walks to plaza for a vote
-
-VOTE: vote_exile or vote_save. Majority exiles.
+VOTE: At the end of the meeting, everyone votes. Name one person to exile. Plurality wins.
 
 WIN: Villagers win when all werewolves are exiled. Werewolves win when they equal or outnumber villagers.
 
@@ -75,12 +73,8 @@ const WEREWOLF_ACTIONS: MapAction[] = [
   { id: 'think', label: 'Reflect on evidence', category: 'rest' },
   { id: 'follow', label: 'Follow someone', category: 'movement', requiresNearby: true },
 
-  // Vote trigger
-  { id: 'call_vote', label: 'Call a vote', category: 'social' },
-
   // Vote phase
-  { id: 'vote_exile', label: 'Vote to exile', category: 'social' },
-  { id: 'vote_save', label: 'Vote to save', category: 'social' },
+  { id: 'vote', label: 'Vote to exile someone', category: 'social' },
 
   // Always
   { id: 'rest', label: 'Rest / Wait', category: 'rest' },
