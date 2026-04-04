@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { COLORS, FONTS } from '../styles';
 
 interface MapDef {
@@ -38,29 +38,6 @@ interface Props {
 
 export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
   const [selected, setSelected] = useState<string | null>(null);
-  const starsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const container = starsRef.current;
-    if (!container) return;
-    for (let i = 0; i < 40; i++) {
-      const star = document.createElement('div');
-      star.style.position = 'absolute';
-      star.style.borderRadius = '50%';
-      star.style.background = '#fff';
-      star.style.pointerEvents = 'none';
-      star.style.left = `${Math.random() * 100}%`;
-      star.style.top = `${Math.random() * 100}%`;
-      const sz = Math.random() > 0.85 ? 2 : 1;
-      star.style.width = `${sz}px`;
-      star.style.height = `${sz}px`;
-      star.style.animation = `twinkle ${2 + Math.random() * 4}s ease-in-out ${Math.random() * 5}s infinite`;
-      container.appendChild(star);
-    }
-    return () => {
-      while (container.firstChild) container.removeChild(container.firstChild);
-    };
-  }, []);
 
   const handleContinue = () => {
     if (selected) onSelect(selected);
@@ -82,10 +59,25 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
         fontFamily: '"DM Sans", sans-serif',
       }}
     >
-      {/* Stars container — separate from React content */}
-      <div ref={starsRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
+      {/* Background image */}
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        backgroundImage: 'url(/bg-village.png)',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        imageRendering: 'pixelated',
+        opacity: 0.25,
+        pointerEvents: 'none',
+      }} />
+      {/* Dark overlay for readability */}
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'radial-gradient(ellipse at center, transparent 0%, #050510 75%)',
+        pointerEvents: 'none',
+      }} />
       <style>{`
-        @keyframes twinkle { 0%,100% { opacity: .15 } 50% { opacity: .8 } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
       `}</style>
 
