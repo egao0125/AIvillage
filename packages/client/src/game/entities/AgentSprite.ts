@@ -6,7 +6,7 @@ import { TILE_SIZE } from '../config';
 import { tileToScreen, isoDepth } from '../iso';
 import {
   type CharacterModel, CHARACTER_MODELS, modelToPrefix, is8Dir,
-  STRIP_DISPLAY_SCALE, FOX_DISPLAY_SCALE, DOG_DISPLAY_SCALE,
+  STRIP_DISPLAY_SCALE, FOX_DISPLAY_SCALE, DOG_DISPLAY_SCALE, GIRL_DISPLAY_SCALE,
   MODEL_Y_OFFSET,
 } from '../data/sprite-config';
 
@@ -93,6 +93,9 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private targetTileY: number;
   private sourceTileX: number;
   private sourceTileY: number;
+  private movementDepth: number = 0;   // cached depth during lerp
+  private labelsDirty: boolean = true; // skip syncLabels when stationary
+  private readonly tilePos = { x: 0, y: 0 }; // reusable object for getTilePos
   agentId: string;
 
   // Character model state
@@ -237,7 +240,9 @@ export class AgentSprite extends Phaser.GameObjects.Container {
       const dir = this.currentDir8;
       const key = `${this.prefix}_idle_${dir}`;
       if (this.scene.anims.exists(key)) {
-        const scale = this.charModel === 'dog' ? DOG_DISPLAY_SCALE : FOX_DISPLAY_SCALE;
+        const scale = this.charModel === 'dog' ? DOG_DISPLAY_SCALE
+          : this.charModel === 'girl' ? GIRL_DISPLAY_SCALE
+          : FOX_DISPLAY_SCALE;
         return { idleKey: key, scale };
       }
       return { idleKey: null, scale: 1 };
@@ -255,7 +260,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   }
 
   /** Play an animation by composing prefix + type + direction. */
-  private playAnim(type: string, loop: boolean = true): void {
+  private playAnim(type: string): void {
     if (!this.useAnimated || !(this.sprite instanceof Phaser.GameObjects.Sprite)) return;
     const key = `${this.prefix}_${type}_${this.dirSuffix()}`;
     if (this.scene.anims.exists(key)) {
@@ -314,13 +319,14 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.targetTileX = tileX;
     this.targetTileY = tileY;
     this.isLerping = true;
+    this.labelsDirty = true;
 
-    // Use max depth +1 to stay above neighboring floor tiles during movement
-    const depth = Math.max(
+    // Cache depth for the entire movement (avoids recomputing each frame)
+    this.movementDepth = Math.max(
       isoDepth(this.sourceTileX, this.sourceTileY),
       isoDepth(tileX, tileY),
     ) + 1;
-    this.setDepth(this.computeDepth(depth));
+    this.setDepth(this.computeDepth(this.movementDepth));
 
     const dx = sx - this.x;
     const dy = sy - this.y;
@@ -367,7 +373,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
       if (this.scene.anims.exists(dieKey)) {
         this.sprite.play(dieKey);
         this.sprite.once('animationcomplete', () => {
-          // Pulse gently to indicate sleeping (not dead)
+          if (!this.scene) return;
           this.scene.tweens.add({
             targets: this.sprite,
             alpha: 0.5, duration: 1500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
@@ -398,14 +404,21 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.scene.tweens.killTweensOf(this.sprite);
 
     return new Promise((resolve) => {
+      let resolved = false;
+      const done = () => { if (!resolved) { resolved = true; resolve(); } };
+
+      // Safety timeout — resolve even if animation callback never fires
+      setTimeout(done, 3000);
+
       if (this.useAnimated && this.sprite instanceof Phaser.GameObjects.Sprite) {
         this.sprite.setAlpha(1);
         const dieKey = `${this.prefix}_die_${this.dirSuffix()}`;
         if (this.scene.anims.exists(dieKey)) {
           this.sprite.play(dieKey);
           this.sprite.once('animationcomplete', () => {
+            if (!this.scene) { done(); return; }
             this.scene.tweens.add({
-              targets: this, alpha: 0, duration: 800, onComplete: () => resolve(),
+              targets: this, alpha: 0, duration: 800, onComplete: done,
             });
           });
           return;
@@ -413,7 +426,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
       }
       // Fallback: fade out
       this.scene.tweens.add({
-        targets: this, alpha: 0, duration: 1500, onComplete: () => resolve(),
+        targets: this, alpha: 0, duration: 1500, onComplete: done,
       });
     });
   }
@@ -431,20 +444,25 @@ export class AgentSprite extends Phaser.GameObjects.Container {
 
   /** Current tile position (for wall occlusion checks by the scene). */
   getTilePos(): { x: number; y: number } {
-    return { x: this.targetTileX, y: this.targetTileY };
+    this.tilePos.x = this.targetTileX;
+    this.tilePos.y = this.targetTileY;
+    return this.tilePos;
   }
 
   update(_time: number, _delta: number): void {
     if (!this.isLerping) {
-      this.syncLabels();
+      if (this.labelsDirty) {
+        this.syncLabels();
+        this.labelsDirty = false;
+      }
       return;
     }
 
     const dx = this.targetX - this.x;
     const dy = this.targetY - this.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    const dist = dx * dx + dy * dy; // skip sqrt, compare squared
 
-    if (dist < 0.5) {
+    if (dist < 0.25) { // 0.5^2
       this.x = this.targetX;
       this.y = this.targetY;
       this.isLerping = false;
@@ -456,13 +474,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
 
     this.x = Phaser.Math.Linear(this.x, this.targetX, LERP_SPEED);
     this.y = Phaser.Math.Linear(this.y, this.targetY, LERP_SPEED);
-
-    // Use max depth +1 to stay above neighboring floor tiles during movement
-    const depth = Math.max(
-      isoDepth(this.sourceTileX, this.sourceTileY),
-      isoDepth(this.targetTileX, this.targetTileY),
-    ) + 1;
-    this.setDepth(this.computeDepth(depth));
+    this.setDepth(this.computeDepth(this.movementDepth));
     this.syncLabels();
   }
 }

@@ -50,21 +50,6 @@ export const FOX_DISPLAY_SCALE = 0.3;
 export const FOX_IDLE_FPS = 8;
 export const FOX_WALK_FPS = 10;
 
-/**
- * Map fox dir number (1-8) to angle-sector direction.
- * Fox dirs: 1=DL(SW), 2=L(W), 3=UL(NW), 4=U(N), 5=UR(NE), 6=R(E), 7=DR(SE), 8=D(S)
- */
-export const SECTOR_TO_FOX_DIR: Record<number, number> = {
-  2: 8,   // S → dir8
-  1: 7,   // SE → dir7
-  0: 6,   // E → dir6
-  [-1]: 5, // NE → dir5
-  [-2]: 4, // N → dir4
-  [-3]: 3, // NW → dir3
-  [-4]: 2, // W → dir2
-  4: 2,   // W → dir2
-  3: 1,   // SW → dir1
-};
 
 // ── Dog (single small spritesheet) ───────────────────────────────
 // 1024x64 = 32x32 frames, 32 cols x 2 rows = 64 frames.
@@ -89,6 +74,7 @@ export const GIRL_FRAME_W = 256;
 export const GIRL_FRAME_H = 256;
 export const GIRL_WALK_FRAMES = 9;
 export const GIRL_RUN_FRAMES = 5;
+export const GIRL_DEATH_FRAMES = 28; // 1024x1792 = 4 cols x 7 rows
 export const GIRL_DIRECTIONS = 8;
 export const GIRL_DISPLAY_SCALE = 0.3;
 

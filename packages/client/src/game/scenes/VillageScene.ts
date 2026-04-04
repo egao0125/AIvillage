@@ -14,7 +14,7 @@ import { gameStore } from '../../core/GameStore';
 import { sendViewportUpdate } from '../../network/socket';
 import { generateAgentTexture, agentColorsFromName } from './BootScene';
 import { tileToScreen, screenToTile, isoDepth, isoWorldBounds } from '../iso';
-import { getOccludingWalls } from '../wallOcclusion';
+import { collectOccludingWalls } from '../wallOcclusion';
 import type { Agent, GameTime } from '@ai-village/shared';
 
 /** Kenney tile key + tint per terrain type.
@@ -65,6 +65,11 @@ export class VillageScene extends Phaser.Scene {
   private wallTiles: Map<string, Phaser.GameObjects.Image> = new Map();
   /** Warm candle glow sprites per agent, rendered below the night RT */
   private candleGlows: Map<string, Phaser.GameObjects.Image> = new Map();
+  /** Dirty tracking for night RT — skip redraw when nothing changed */
+  private lastNightAlpha = -1;
+  private lastAgentPositions: Map<string, string> = new Map();
+  /** Reusable set for wall occlusion (avoids per-frame allocation) */
+  private fadedWallsSet: Set<string> = new Set();
   // Infra 6: Viewport tracking — throttled to avoid spamming server
   private lastViewportKey: string = '';
   private viewportThrottleTime: number = 0;
@@ -150,20 +155,15 @@ export class VillageScene extends Phaser.Scene {
 
   /** Fade wall tiles that are occluding agents, restore others. */
   private updateWallOcclusion(): void {
-    // Collect all wall keys that should be transparent
-    const fadedWalls = new Set<string>();
+    const fadedWalls = this.fadedWallsSet;
+    fadedWalls.clear();
     for (const sprite of this.agentSprites.values()) {
       const pos = sprite.getTilePos();
-      const walls = getOccludingWalls(pos.x, pos.y);
-      for (const key of walls) {
-        fadedWalls.add(key);
-      }
+      collectOccludingWalls(pos.x, pos.y, fadedWalls);
     }
 
-    // Apply alpha to wall tiles
     for (const [key, img] of this.wallTiles) {
       const targetAlpha = fadedWalls.has(key) ? 0.5 : 1.0;
-      // Lerp alpha for smooth transitions
       const current = img.alpha;
       if (Math.abs(current - targetAlpha) > 0.01) {
         img.setAlpha(current + (targetAlpha - current) * 0.15);
@@ -633,18 +633,40 @@ export class VillageScene extends Phaser.Scene {
   /** Redraw the night overlay with light pools around agents. */
   private redrawNightLighting(): void {
     if (this.nightAlpha <= 0) {
-      this.dayNightRT.clear();
+      if (this.lastNightAlpha > 0) {
+        this.dayNightRT.clear();
+        this.lastNightAlpha = 0;
+        this.lastAgentPositions.clear();
+      }
       return;
     }
 
+    // Check if anything changed — skip expensive RT redraw if not
+    let dirty = Math.abs(this.nightAlpha - this.lastNightAlpha) > 0.001;
+    if (!dirty) {
+      for (const [id, sprite] of this.agentSprites) {
+        const cached = this.lastAgentPositions.get(id);
+        const current = `${sprite.x | 0},${sprite.y | 0}`;
+        if (cached !== current) { dirty = true; break; }
+      }
+      if (!dirty && this.lastAgentPositions.size !== this.agentSprites.size) dirty = true;
+    }
+    if (!dirty) return;
+
+    // Cache current state
+    this.lastNightAlpha = this.nightAlpha;
+    this.lastAgentPositions.clear();
+    for (const [id, sprite] of this.agentSprites) {
+      this.lastAgentPositions.set(id, `${sprite.x | 0},${sprite.y | 0}`);
+    }
+
     const rt = this.dayNightRT;
-    // Clear and fill with night darkness
     rt.clear();
     rt.fill(0x000033, this.nightAlpha);
 
     const rtX = rt.x;
     const rtY = rt.y;
-    const glowHalf = 60; // half of 120px texture
+    const glowHalf = 60;
     const isNight = this.nightAlpha > 0.1;
 
     // Punch light holes + manage warm candle glow sprites

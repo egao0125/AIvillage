@@ -8,7 +8,7 @@ import {
   FOX_DIRECTIONS, FOX_IDLE_FPS, FOX_WALK_FPS,
   DOG_FRAME_W, DOG_FRAME_H, DOG_FRAMES_PER_DIR, DOG_DIRECTIONS,
   DOG_IDLE_FPS, DOG_WALK_FPS,
-  GIRL_FRAME_W, GIRL_FRAME_H, GIRL_WALK_FRAMES,
+  GIRL_FRAME_W, GIRL_FRAME_H, GIRL_WALK_FRAMES, GIRL_DEATH_FRAMES,
   GIRL_DIRECTIONS, GIRL_WALK_FPS,
 } from '../data/sprite-config';
 
@@ -2928,7 +2928,7 @@ export class BootScene extends Phaser.Scene {
       if (this.textures.exists(dieSheet) && !this.anims.exists(`girl_die_${d}`)) {
         this.anims.create({
           key: `girl_die_${d}`,
-          frames: this.anims.generateFrameNumbers(dieSheet, { start: 0, end: GIRL_WALK_FRAMES - 1 }),
+          frames: this.anims.generateFrameNumbers(dieSheet, { start: 0, end: GIRL_DEATH_FRAMES - 1 }),
           frameRate: 8,
           repeat: 0,
         });

@@ -14,16 +14,14 @@ for (let y = 0; y < TILE_MAP.length; y++) {
 }
 
 /**
- * Return wall tile keys ("x,y") that occlude an agent at (ax, ay).
+ * Add wall tile keys ("x,y") that occlude an agent at (ax, ay) into the provided set.
  * A wall occludes if it's directly adjacent in the +x/+y direction
- * (within 2 tiles) and has higher isoDepth. Only walls very close
- * to the agent should fade — distant walls stay opaque.
+ * (within 2 tiles) and has higher isoDepth.
  */
-export function getOccludingWalls(ax: number, ay: number): string[] {
+export function collectOccludingWalls(ax: number, ay: number, out: Set<string>): void {
   const rx = Math.round(ax);
   const ry = Math.round(ay);
   const agentDepth = isoDepth(rx, ry);
-  const result: string[] = [];
   for (let dx = 0; dx <= 2; dx++) {
     for (let dy = 0; dy <= 2; dy++) {
       if (dx === 0 && dy === 0) continue;
@@ -31,9 +29,8 @@ export function getOccludingWalls(ax: number, ay: number): string[] {
       const wy = ry + dy;
       const key = `${wx},${wy}`;
       if (isoDepth(wx, wy) > agentDepth && wallSet.has(key)) {
-        result.push(key);
+        out.add(key);
       }
     }
   }
-  return result;
 }
