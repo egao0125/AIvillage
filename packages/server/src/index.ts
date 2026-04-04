@@ -166,14 +166,23 @@ app.get('/api/debug/admin-check', async (req, res) => {
     res.json({ error: 'no token', adminEmails: [...ADMIN_EMAILS] });
     return;
   }
+  // Decode raw JWT claims for debugging
+  let rawClaims: Record<string, unknown> = {};
+  try {
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      rawClaims = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    }
+  } catch { /* ignore */ }
+
   const result = await verifyTokenFull(token);
   if (!result) {
-    res.json({ error: 'token verification failed', adminEmails: [...ADMIN_EMAILS] });
+    res.json({ error: 'token verification failed', rawClaims, adminEmails: [...ADMIN_EMAILS] });
     return;
   }
   const emailLower = result.email?.toLowerCase() ?? '';
   const isAdmin = !!(emailLower && ADMIN_EMAILS.has(emailLower));
-  res.json({ userId: result.userId, email: emailLower, isAdmin, adminEmails: [...ADMIN_EMAILS] });
+  res.json({ userId: result.userId, email: emailLower, isAdmin, rawClaims, adminEmails: [...ADMIN_EMAILS] });
 });
 
 // Follower-guard: simulation state mutations must only execute on the leader Pod.
