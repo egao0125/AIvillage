@@ -233,6 +233,12 @@ function isDevAuthorized(token: unknown): boolean {
 // (OWASP API4: Unrestricted Resource Consumption — unauthenticated LLM calls blocked)
 // ---------------------------------------------------------------------------
 io.use(async (socket, next) => {
+  // Dev mode: no Cognito configured — everyone is admin (matches optionalAuth behavior)
+  if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
+    socket.data.userId = 'dev-user';
+    socket.data.isAdmin = true;
+    return next();
+  }
   const token = socket.handshake.auth?.token;
   if (typeof token === 'string' && token.length > 0) {
     const result = await verifyTokenFull(token);
