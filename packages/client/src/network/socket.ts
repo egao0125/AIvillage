@@ -1,7 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import { gameStore } from '../core/GameStore';
 import { eventBus } from '../core/EventBus';
-import { getToken } from '../utils/auth';
+import { getToken, getValidToken } from '../utils/auth';
 import type {
   Agent,
   AgentConfig,
@@ -32,11 +32,15 @@ let lastSeenDayTimer: ReturnType<typeof setInterval> | null = null;
 export function connectSocket(): Socket {
   if (socket) return socket;
 
-  // Pass auth token as a callback so it is re-evaluated on every reconnect attempt.
-  // This ensures a refreshed token is used if the original expires mid-session.
+  // Pass auth token as an async callback so it is re-evaluated on every reconnect.
+  // Uses getValidToken() which auto-refreshes expired tokens via the httpOnly cookie,
+  // keeping the socket authenticated beyond the 60-min access token lifetime.
   socket = io('/', {
     transports: ['websocket', 'polling'],
-    auth: (cb) => cb({ token: getToken() ?? '' }),
+    auth: async (cb) => {
+      const token = await getValidToken();
+      cb({ token: token ?? '' });
+    },
     // Cap reconnection attempts to prevent a permanently-gone server from causing
     // an infinite background retry loop in the browser tab.
     // 10 attempts × exponential back-off ≈ ~5 minutes of retrying, then the UI
