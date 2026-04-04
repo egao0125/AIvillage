@@ -64,6 +64,7 @@ export const RecapOverlay: React.FC = () => {
 
   return (
     <div
+      onClick={dismiss}
       style={{
         position: 'fixed',
         inset: 0,
@@ -73,15 +74,20 @@ export const RecapOverlay: React.FC = () => {
         alignItems: 'center',
         justifyContent: 'center',
         animation: 'fadeIn 1s ease-out',
+        cursor: 'pointer',
+        pointerEvents: 'auto',
+        overflowY: 'auto',
       }}
     >
       <div
+        onClick={(e) => e.stopPropagation()}
         style={{
           maxWidth: 650,
           width: '90%',
           maxHeight: '85vh',
           overflowY: 'auto',
           padding: '40px',
+          cursor: 'default',
         }}
       >
         {/* Title */}
