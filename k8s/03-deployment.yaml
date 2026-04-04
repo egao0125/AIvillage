@@ -47,7 +47,7 @@ spec:
         - name: ai-village
           # Replace with: terraform output ecr_repository_url
           # Format: <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ai-village:<TAG>
-          image: 053442321898.dkr.ecr.us-east-1.amazonaws.com/ai-village:f03d272
+          image: YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ai-village:latest
           # IfNotPresent: safe with immutable ECR tags (commit SHA / semver).
           # "Always" re-pulls on every Pod restart — triggers ECR rate limits at scale
           # and blocks startup if ECR is unreachable. ECR IMMUTABLE tag policy already

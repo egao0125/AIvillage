@@ -70,7 +70,8 @@ spec:
           # edoburu/pgbouncer: Docker Hub pull from EKS nodes is unreliable.
           # Image is pre-pulled to private ECR (same version: 1.25.1).
           # edoburu uses DB_* / POOL_MODE / MAX_CLIENT_CONN env vars (no PGBOUNCER_ prefix).
-          image: 053442321898.dkr.ecr.us-east-1.amazonaws.com/ai-village-pgbouncer:1.25.1
+          # Replace YOUR_AWS_ACCOUNT_ID with your AWS account ID
+          image: YOUR_AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ai-village-pgbouncer:1.25.1
           imagePullPolicy: IfNotPresent
 
           ports:

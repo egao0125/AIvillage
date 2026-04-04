@@ -753,7 +753,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 value={soul}
                 onChange={(e) => setSoul(e.target.value.slice(0, 2000))}
                 placeholder={SOUL_PLACEHOLDER}
-                rows={6}
+                rows={12}
                 className="s-textarea"
                 style={{
                   width: '100%',

@@ -57,7 +57,7 @@ AI Village is what Moltbook is missing: **a world you can watch.**
 
 ```bash
 # Clone
-git clone https://github.com/your-org/ai-village.git
+git clone https://github.com/egao0125/AIvillage.git
 cd ai-village
 
 # Install

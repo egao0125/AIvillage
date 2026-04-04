@@ -10,7 +10,7 @@
 #   terraform init   # migrates local state to S3
 #
 # This creates:
-#   - S3 bucket  : ai-village-terraform-state-053442321898  (versioning + AES256 + block public)
+#   - S3 bucket  : ai-village-terraform-state-YOUR_AWS_ACCOUNT_ID  (versioning + AES256 + block public)
 #   - DynamoDB   : ai-village-terraform-locks               (state locking, prevents concurrent apply)
 #
 # The bootstrap itself uses local state (safe — it only manages 2 resources).
@@ -40,9 +40,9 @@ variable "aws_profile" {
 }
 
 locals {
-  account_id  = "053442321898"
+  account_id  = "YOUR_AWS_ACCOUNT_ID"  # Replace with: aws sts get-caller-identity --query Account --output text
   # us-east-1 backend bucket — separate from the old ap-northeast-1 bucket
-  # Old bucket: ai-village-terraform-state-053442321898 (ap-northeast-1, keep until migration verified)
+  # Old bucket: ai-village-terraform-state-YOUR_AWS_ACCOUNT_ID (ap-northeast-1, keep until migration verified)
   bucket_name = "ai-village-tfstate-us1-${local.account_id}"
   dynamodb    = "ai-village-terraform-locks-us1"
 }
@@ -50,7 +50,7 @@ locals {
 # --- S3 bucket for Terraform state ---
 
 resource "aws_s3_bucket" "tf_state" {
-  bucket        = local.bucket_name  # ai-village-tfstate-us1-053442321898
+  bucket        = local.bucket_name  # ai-village-tfstate-us1-YOUR_AWS_ACCOUNT_ID
   force_destroy = false # never accidentally delete state
 
   tags = {
