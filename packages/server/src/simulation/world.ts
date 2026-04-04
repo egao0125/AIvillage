@@ -206,20 +206,20 @@ export class World {
 
   addVillageMemory(entry: VillageMemoryEntry): void {
     this.villageMemory.push(entry);
-    // Cap at 20 entries — remove lowest significance when full
-    if (this.villageMemory.length > 20) {
+    // Cap at 50 entries — remove lowest significance when full
+    if (this.villageMemory.length > 50) {
       this.villageMemory.sort((a, b) => b.significance - a.significance);
-      this.villageMemory = this.villageMemory.slice(0, 20);
+      this.villageMemory = this.villageMemory.slice(0, 50);
     }
     console.log(`[VillageMemory] Day ${entry.day}: ${entry.content.slice(0, 60)}`);
   }
 
-  getTopVillageMemory(count: number = 5): string {
+  getTopVillageMemory(count: number = 8): string {
     if (this.villageMemory.length === 0) return '';
     return this.villageMemory
       .sort((a, b) => b.significance - a.significance)
       .slice(0, count)
-      .map(m => `- Day ${m.day}: ${m.content}`)
+      .map(m => `- [Day ${m.day}] ${m.content}`)
       .join('\n');
   }
 
@@ -671,6 +671,14 @@ export class World {
   addBuilding(building: Building): void {
     this.buildings.set(building.id, building);
     console.log(`[World] Building constructed: ${building.name} (${building.type}) at ${building.areaId}`);
+    // Auto-populate village memory
+    const builderName = this.getAgent(building.builtBy)?.config.name ?? 'Unknown';
+    this.addVillageMemory({
+      content: `${builderName} constructed ${building.name} (${building.type}) at ${building.areaId}.`,
+      type: 'building',
+      day: this.time.day,
+      significance: 5,
+    });
   }
 
   getBuilding(id: string): Building | undefined {
@@ -701,6 +709,13 @@ export class World {
   addTechnology(tech: Technology): void {
     this.technologies.push(tech);
     console.log(`[World] Technology discovered: ${tech.name} by ${tech.inventorName}`);
+    // Auto-populate village memory
+    this.addVillageMemory({
+      content: `${tech.inventorName} discovered ${tech.name}${tech.description ? ': ' + tech.description : ''}.`,
+      type: 'technology',
+      day: tech.day,
+      significance: 7,
+    });
   }
 
   getTechnologies(): Technology[] {

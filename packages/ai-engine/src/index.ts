@@ -805,11 +805,13 @@ ${jsonInstruction}`;
         nearbyIds.length > 0 ? nearbyIds : undefined,
         locationMap.size > 0 ? locationMap : undefined,
         repMap.size > 0 ? repMap : undefined,
+        'default', // decide() uses balanced retrieval
       );
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
       if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+      if (wm.learnedStrategies) sections.push('LESSONS LEARNED (from experience):\n' + wm.learnedStrategies);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryText = sections.join('\n\n');
@@ -900,11 +902,12 @@ IMPORTANT: Only respond to what is real. The people near you, the place you're a
 
     let memoryContext: string;
     if (this.fourStream) {
-      const wm = this.fourStream.buildWorkingMemory(nearbyAgentIds);
+      const wm = this.fourStream.buildWorkingMemory(nearbyAgentIds, undefined, undefined, 'default');
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
       if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+      if (wm.learnedStrategies) sections.push('LESSONS LEARNED:\n' + wm.learnedStrategies);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryContext = sections.length > 0 ? '\n' + sections.join('\n\n') : '';
@@ -1072,11 +1075,12 @@ Action: "${rawAction}"`;
     let outcomeSection = '';
 
     if (this.fourStream) {
-      const wm = this.fourStream.buildWorkingMemory();
+      const wm = this.fourStream.buildWorkingMemory(undefined, undefined, undefined, 'plan');
       const sections: string[] = [];
       if (wm.timeline) sections.push(wm.timeline);
       if (wm.concerns) sections.push('On your mind:\n' + wm.concerns);
       if (wm.beliefs) sections.push('Your beliefs:\n' + wm.beliefs);
+      if (wm.learnedStrategies) sections.push('Lessons from experience:\n' + wm.learnedStrategies);
       if (wm.identityAnchor) sections.push(wm.identityAnchor);
       memoryContext = sections.join('\n\n');
     } else {
@@ -1205,11 +1209,12 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
     // Build memory context
     let memoryBlock: string;
     if (this.fourStream) {
-      const wm = this.fourStream.buildWorkingMemory(otherIds);
+      const wm = this.fourStream.buildWorkingMemory(otherIds, undefined, undefined, 'conversation');
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
       if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+      if (wm.learnedStrategies) sections.push('LESSONS LEARNED:\n' + wm.learnedStrategies);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryBlock = sections.join('\n\n');
@@ -1903,9 +1908,14 @@ Output a JSON array ONLY, no other text:
 
 export { AgentCognition as default };
 export { InMemoryStore } from './memory/in-memory.js';
+export type { HyDEProvider } from './memory/in-memory.js';
 export { RdsMemoryStore } from './memory/rds-store.js';
 export { TieredMemory } from './memory/tiered-store.js';
 export { FourStreamMemory } from './memory/four-stream.js';
+export { KnowledgeGraph } from './memory/knowledge-graph.js';
+export type { EdgeType, GraphEdge, GraphNode } from './memory/knowledge-graph.js';
+export { HybridEmbedder } from './memory/embeddings.js';
+export type { EmbeddingProvider } from './memory/embeddings.js';
 export { AnthropicProvider } from './providers/anthropic.js';
 export { OpenAIProvider } from './providers/openai.js';
 export { ThrottledProvider } from './providers/throttled.js';

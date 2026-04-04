@@ -966,6 +966,10 @@ export class SimulationEngine {
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
+    // Wire HyDE provider for semantic query expansion (Phase 3 memory upgrade)
+    if (memoryStore instanceof InMemoryStore) {
+      memoryStore.hydeProvider = llmProvider;
+    }
     this.cognitions.set(id, cognition);
 
     // Broadcast spawn AFTER cognition is set so getSnapshot() can enrich with worldView
@@ -1714,6 +1718,15 @@ export class SimulationEngine {
           console.log(
             `[Engine] Election for ${resolved.position} resolved — winner: ${winner?.config.name ?? 'none'}`,
           );
+          // Auto-populate village memory
+          if (winner) {
+            this.world.addVillageMemory({
+              content: `${winner.config.name} won the election for ${resolved.position}.`,
+              type: 'election',
+              day: this.world.time.day,
+              significance: 7,
+            });
+          }
         }
       }
     }

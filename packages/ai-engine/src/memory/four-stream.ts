@@ -1,5 +1,7 @@
 import type { Memory, Agent, AgentConfig, RelationshipDossier, ActiveConcern } from '@ai-village/shared';
 import type { MemoryStore, LLMProvider } from '../index.js';
+import { KnowledgeGraph } from './knowledge-graph.js';
+import type { EdgeType } from './knowledge-graph.js';
 
 /**
  * Escape XML special characters in user-controlled content embedded in prompt XML tags.
@@ -31,6 +33,14 @@ export class FourStreamMemory {
 
   // Stream 4: Beliefs — synthesized reflections
   private beliefs: Memory[] = [];
+
+  // Stream 5: Learned Strategies — experiential lessons from action outcomes
+  // Importance 9, never auto-pruned. Persist across days.
+  private learnedStrategies: Memory[] = [];
+  private static readonly MAX_STRATEGIES = 10;
+
+  // Knowledge Graph — relationship/fact graph layer (Zep/Graphiti-inspired)
+  public knowledgeGraph: KnowledgeGraph = new KnowledgeGraph();
 
   // Identity — immutable core
   private identity: Memory[] = [];
@@ -82,6 +92,18 @@ export class FourStreamMemory {
     }
     if (this.agent.activeConcerns) {
       this.concerns = [...this.agent.activeConcerns];
+    }
+    if (this.agent.learnedStrategies) {
+      this.learnedStrategies = this.agent.learnedStrategies.map((s, i) => ({
+        id: `strategy-${i}`,
+        agentId: this.agentId,
+        type: 'reflection' as const,
+        content: s.content,
+        importance: 9,
+        timestamp: s.timestamp,
+        relatedAgentIds: [],
+        isCore: true,
+      }));
     }
   }
 
@@ -252,6 +274,9 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
         }
       }
 
+      // Update knowledge graph edges from dossier
+      this.updateGraphFromDossier(dossier);
+
       console.log(`[Dossier] ${this.agent.config.name} updated dossier on ${targetName}: trust=${dossier.trust}`);
     } catch (err) {
       console.error(`[Dossier] Failed to update dossier for ${targetName}:`, err);
@@ -270,6 +295,52 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
         this.syncDossiersToAgent();
       }
     }
+  }
+
+  /** Sync knowledge graph edges from a dossier update */
+  private updateGraphFromDossier(dossier: RelationshipDossier): void {
+    const now = Date.now();
+    // Ensure nodes exist
+    this.knowledgeGraph.addNode({ id: this.agentId, type: 'agent', name: this.agent.config.name });
+    this.knowledgeGraph.addNode({ id: dossier.targetId, type: 'agent', name: dossier.targetName });
+
+    // Trust/distrust edges
+    if (dossier.trust > 20) {
+      this.knowledgeGraph.addEdge({
+        from: this.agentId, to: dossier.targetId, type: 'trusts',
+        weight: dossier.trust, timestamp: now, day: 0,
+      });
+      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'distrusts');
+    } else if (dossier.trust < -20) {
+      this.knowledgeGraph.addEdge({
+        from: this.agentId, to: dossier.targetId, type: 'distrusts',
+        weight: Math.abs(dossier.trust), timestamp: now, day: 0,
+      });
+      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'trusts');
+    }
+
+    // Commitment edges
+    if (dossier.activeCommitments.length > 0) {
+      this.knowledgeGraph.addEdge({
+        from: this.agentId, to: dossier.targetId, type: 'owes',
+        weight: dossier.activeCommitments.length * 20,
+        content: dossier.activeCommitments[0],
+        timestamp: now, day: 0,
+      });
+    } else {
+      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'owes');
+    }
+  }
+
+  /**
+   * Record a social event in the knowledge graph.
+   * Called from agent-controller after specific social actions.
+   */
+  addGraphEvent(from: string, to: string, type: EdgeType, weight: number, content?: string, day: number = 0): void {
+    this.knowledgeGraph.addEdge({
+      from, to, type, weight,
+      content, timestamp: Date.now(), day,
+    });
   }
 
   /** Adjust trust for a specific person (from social actions) */
@@ -409,31 +480,86 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     }));
   }
 
+  private syncStrategiesToAgent(): void {
+    this.agent.learnedStrategies = this.learnedStrategies.map(s => ({
+      content: s.content,
+      timestamp: s.timestamp,
+    }));
+  }
+
+  getLearnedStrategies(): Memory[] {
+    return [...this.learnedStrategies];
+  }
+
   /** Sync all in-memory streams back to the Agent object for snapshot/persistence */
   syncAllToAgent(): void {
     this.syncDossiersToAgent();
     this.syncConcernsToAgent();
     this.syncBeliefsToAgent();
+    this.syncStrategiesToAgent();
   }
 
   // --- RETRIEVAL SCORING (Memoria's recency-aware weighting) ---
 
   /**
+   * Retrieval context profiles — different situations need different weight distributions.
+   * 'plan': importance-heavy (morning planning cares about significant events, not chatter)
+   * 'conversation': recency-heavy (what just happened matters most in dialogue)
+   * 'reflect': balanced (nightly reflection weighs both)
+   * 'default': original balanced weights
+   */
+  static readonly RETRIEVAL_PROFILES: Record<string, {
+    importanceWeight: number;   // how much importance matters (0-1)
+    recencyDecay: number;       // decay rate per hour (0.99 = slow decay, 0.95 = fast decay)
+    concernDecay: number;       // concern decay rate
+    budgets: { concerns: number; dossiers: number; beliefs: number; timeline: number; strategies: number };
+  }> = {
+    plan: {
+      importanceWeight: 0.8,
+      recencyDecay: 0.995,     // Slow decay — old important events still relevant for planning
+      concernDecay: 0.998,
+      budgets: { concerns: 300, dossiers: 250, beliefs: 250, timeline: 200, strategies: 200 },
+    },
+    conversation: {
+      importanceWeight: 0.4,
+      recencyDecay: 0.97,      // Fast decay — recent events dominate conversation
+      concernDecay: 0.99,
+      budgets: { concerns: 200, dossiers: 400, beliefs: 150, timeline: 300, strategies: 100 },
+    },
+    reflect: {
+      importanceWeight: 0.6,
+      recencyDecay: 0.99,      // Balanced
+      concernDecay: 0.995,
+      budgets: { concerns: 250, dossiers: 350, beliefs: 300, timeline: 250, strategies: 150 },
+    },
+    default: {
+      importanceWeight: 0.6,
+      recencyDecay: 0.99,
+      concernDecay: 0.995,
+      budgets: { concerns: 250, dossiers: 350, beliefs: 200, timeline: 250, strategies: 150 },
+    },
+  };
+
+  /**
    * Score memory for retrieval priority.
    * Based on Memoria (2025): recency-aware weighting with exponential decay.
-   * Decay rate 0.99/hour: 12h=0.886, 48h=0.617, 72h=0.484
+   * Adaptive: importance vs recency balance shifts based on retrieval context.
    */
-  private scoreMemory(m: Memory, now: number): number {
+  private scoreMemory(m: Memory, now: number, profile?: string): number {
+    const p = FourStreamMemory.RETRIEVAL_PROFILES[profile ?? 'default'];
     const hoursOld = Math.max(0, (now - m.timestamp) / 3_600_000);
-    const decay = Math.pow(0.99, hoursOld);
-    return (m.importance / 10) * decay;
+    const decay = Math.pow(p.recencyDecay, hoursOld);
+    const importanceScore = m.importance / 10;
+    // Blend: importance-weighted vs recency-weighted based on profile
+    return (importanceScore * p.importanceWeight + decay * (1 - p.importanceWeight));
   }
 
   /**
    * Score concern for retrieval priority.
    * Category determines base weight. Permanent concerns (rules) don't decay.
    */
-  private scoreConcern(c: ActiveConcern, now: number): number {
+  private scoreConcern(c: ActiveConcern, now: number, profile?: string): number {
+    const p = FourStreamMemory.RETRIEVAL_PROFILES[profile ?? 'default'];
     const WEIGHT: Record<string, number> = {
       rule: 1.0, threat: 0.9, commitment: 0.7,
       need: 0.6, goal: 0.4, unresolved: 0.2,
@@ -441,7 +567,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     const base = WEIGHT[c.category] ?? 0.3;
     if (c.permanent) return base;
     const hoursOld = Math.max(0, (now - c.createdAt) / 3_600_000);
-    return base * Math.pow(0.995, hoursOld);
+    return base * Math.pow(p.concernDecay, hoursOld);
   }
 
   // --- WORKING MEMORY ASSEMBLY ---
@@ -456,15 +582,19 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     nearbyAgentIds?: string[],
     agentLocations?: Map<string, string>,
     reputations?: Map<string, number>,
+    retrievalContext?: 'plan' | 'conversation' | 'reflect' | 'default',
   ): {
     concerns: string;
     dossiers: string;
     beliefs: string;
     timeline: string;
     identityAnchor: string;
+    learnedStrategies: string;
   } {
     const now = Date.now();
     const nearbySet = new Set(nearbyAgentIds ?? []);
+    const profile = retrievalContext ?? 'default';
+    const budgets = FourStreamMemory.RETRIEVAL_PROFILES[profile].budgets;
 
     // Prune stale concerns before building memory
     this.concerns = this.concerns.filter(c => {
@@ -475,17 +605,17 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     });
     this.syncConcernsToAgent();
 
-    // --- CONCERNS (250 chars) ---
+    // --- CONCERNS (budget from profile) ---
     // Sorted by category weight × decay
     const PREFIX: Record<string, string> = {
       rule: '⚠ RULE: ', threat: '⚠ ',
       commitment: '', need: '', goal: '', unresolved: '',
     };
     const scoredConcerns = this.getAllConcerns()
-      .map(c => ({ c, s: this.scoreConcern(c, now) }))
+      .map(c => ({ c, s: this.scoreConcern(c, now, profile) }))
       .sort((a, b) => b.s - a.s);
 
-    let cBudget = 250;
+    let cBudget = budgets.concerns;
     const cLines: string[] = [];
     for (const { c } of scoredConcerns) {
       const p = PREFIX[c.category] ?? '';
@@ -497,13 +627,13 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     }
     const concerns = cLines.join('\n');
 
-    // --- DOSSIERS (350 chars) ---
+    // --- DOSSIERS (budget from profile) ---
     // ALL relationships by |trust|, dead agents collapsed or skipped
     const allDossiers = Array.from(this.dossiers.values())
       .filter(d => d.summary?.length > 0)
       .sort((a, b) => Math.abs(b.trust) - Math.abs(a.trust));
 
-    let dBudget = 350;
+    let dBudget = budgets.dossiers;
     const dLines: string[] = [];
     for (const d of allDossiers) {
       const nearby = nearbySet.has(d.targetId);
@@ -544,14 +674,14 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     }
     const dossiers = dLines.join('\n');
 
-    // --- BELIEFS (200 chars, max 5) ---
+    // --- BELIEFS (budget from profile) ---
     const pBeliefs = nearbyAgentIds ? this.getBeliefsAbout(nearbyAgentIds) : [];
-    const topB = this.getTopBeliefs(3);
+    const topB = this.getTopBeliefs(profile === 'plan' ? 5 : 3);
     const allB = [...pBeliefs];
     for (const b of topB) {
       if (!allB.some(x => x.id === b.id)) allB.push(b);
     }
-    let bBudget = 200;
+    let bBudget = budgets.beliefs;
     const bLines: string[] = [];
     for (const b of allB.slice(0, 5)) {
       const t = b.content.length > 50 ? b.content.slice(0, 47) + '...' : b.content;
@@ -562,14 +692,14 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     }
     const beliefs = bLines.join('\n');
 
-    // --- TIMELINE (250 chars, max 5) ---
+    // --- TIMELINE (budget from profile) ---
     // Sorted by importance × decay, not chronology
     const pool = this.getRecentTimeline(20);
     const scoredT = pool
-      .map(m => ({ m, s: this.scoreMemory(m, now) }))
+      .map(m => ({ m, s: this.scoreMemory(m, now, profile) }))
       .sort((a, b) => b.s - a.s);
 
-    let tBudget = 250;
+    let tBudget = budgets.timeline;
     const tLines: string[] = [];
     for (const { m } of scoredT) {
       const t = m.content.length > 55 ? m.content.slice(0, 52) + '...' : m.content;
@@ -582,6 +712,18 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
       ? tLines.join('\n')
       : 'Nothing notable yet.';
 
+    // --- LEARNED STRATEGIES (budget from profile) ---
+    let sBudget = budgets.strategies;
+    const sLines: string[] = [];
+    for (const s of this.learnedStrategies.slice(-3)) {
+      const t = s.content.length > 60 ? s.content.slice(0, 57) + '...' : s.content;
+      const line = `- ${t}`;
+      if (sBudget - line.length < 0 && sLines.length >= 2) break;
+      sLines.push(line);
+      sBudget -= line.length;
+    }
+    const learnedStrategies = sLines.join('\n');
+
     // --- IDENTITY ANCHOR (~40 tokens) ---
     const cfg = this.agent.config;
     const parts: string[] = [`You are ${cfg.name}.`];
@@ -593,7 +735,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     if (cfg.contradictions) parts.push(cfg.contradictions);
     const identityAnchor = parts.join(' ');
 
-    return { concerns, dossiers, beliefs, timeline, identityAnchor };
+    return { concerns, dossiers, beliefs, timeline, identityAnchor, learnedStrategies };
   }
 
   // --- REFLECTION (belief generation) ---
@@ -659,9 +801,98 @@ Example: ["Egao only helps when it benefits him", "I should go to the farm earli
     }
   }
 
+  // --- EXPERIENTIAL LEARNING (strategy extraction from outcomes) ---
+
+  /**
+   * Analyze recent action_outcome memories to extract strategic lessons.
+   * Called during nightly compression. Produces "learned_strategy" memories
+   * with importance 9 that persist across days and are never auto-pruned.
+   */
+  async analyzeStrategyOutcomes(llm: LLMProvider): Promise<void> {
+    // Collect action_outcome memories from timeline
+    const outcomes = this.timeline.filter(m => m.type === 'action_outcome');
+    if (outcomes.length < 3) return; // Need enough data to find patterns
+
+    const successes = outcomes.filter(m => /success|gathered|crafted|built|discovered|earned|healed/i.test(m.content));
+    const failures = outcomes.filter(m => /failed|lost|broke|rejected|hurt|starved/i.test(m.content));
+
+    if (successes.length + failures.length < 3) return;
+
+    const outcomeText = outcomes.map(m => {
+      const isSuccess = successes.includes(m);
+      return `[${isSuccess ? 'SUCCESS' : 'FAILURE'}] ${m.content}`;
+    }).join('\n');
+
+    const existingLessons = this.learnedStrategies.map(s => s.content).join('\n');
+
+    const prompt = `Based on today's action results:
+<action_outcomes>
+${escapeXml(outcomeText)}
+</action_outcomes>
+
+${existingLessons ? '<existing_lessons>\n' + escapeXml(existingLessons) + '\n</existing_lessons>\n\nDo not repeat existing lessons. Only add NEW insights.' : ''}
+
+What patterns do you see? What works and what doesn't?
+Extract 1-2 actionable strategy lessons. Be specific and practical.
+
+Examples of good lessons:
+- "Gathering wheat in the morning before others arrive yields more"
+- "Trading with Felix always ends badly — he undervalues my goods"
+- "Crafting bread before eating raw wheat is more efficient for hunger"
+
+JSON array of strings. Only genuinely new insights. Empty array [] if nothing new to learn.`;
+
+    try {
+      const response = await llm.complete(
+        this.identity.map(m => m.content).join('\n'),
+        prompt,
+      );
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const lessons = JSON.parse(cleaned);
+
+      if (Array.isArray(lessons)) {
+        for (const lesson of lessons.slice(0, 2)) {
+          if (typeof lesson !== 'string' || lesson.length < 10) continue;
+          // Deduplicate against existing strategies
+          const isDuplicate = this.learnedStrategies.some(s =>
+            s.content.toLowerCase() === lesson.toLowerCase()
+          );
+          if (isDuplicate) continue;
+
+          const strategyMemory: Memory = {
+            id: crypto.randomUUID(),
+            agentId: this.agentId,
+            type: 'reflection',
+            content: lesson,
+            importance: 9,
+            isCore: true,
+            timestamp: Date.now(),
+            relatedAgentIds: [],
+            visibility: 'private',
+          };
+          this.learnedStrategies.push(strategyMemory);
+          void this.backingStore.add(strategyMemory).catch((err: unknown) => {
+            console.warn(`[FourStream] Failed to persist strategy for agent ${this.agent.id}:`, (err as Error).message);
+          });
+        }
+        // Cap strategies — keep most recent, they reflect latest learning
+        if (this.learnedStrategies.length > FourStreamMemory.MAX_STRATEGIES) {
+          this.learnedStrategies = this.learnedStrategies.slice(-FourStreamMemory.MAX_STRATEGIES);
+        }
+        this.syncStrategiesToAgent();
+        console.log(`[Strategy] ${this.agent.config.name}: ${this.learnedStrategies.length} total learned strategies`);
+      }
+    } catch (err) {
+      console.error(`[Strategy] ${this.agent.config.name} strategy analysis failed:`, err);
+    }
+  }
+
   // --- COMPRESSION (nightly) ---
 
   async nightlyCompression(llm: LLMProvider): Promise<void> {
+    // 0. Experiential learning — extract strategy lessons before compressing timeline
+    await this.analyzeStrategyOutcomes(llm);
+
     // 1. Generate beliefs (reflective synthesis)
     await this.generateBeliefs(llm);
     this.syncBeliefsToAgent();
@@ -715,8 +946,247 @@ Example: ["Egao only helps when it benefits him", "I should go to the farm earli
       }
     }
 
-    // 5. Standard pruning
+    // 5. Relationship trajectory analysis — summarize trust trends per dossier updated today
+    await this.analyzeRelationshipTrajectories(llm, now);
+
+    // 6. Concern re-prioritization — boost confirmed threats, remove disproven ones
+    this.reprioritizeConcerns(now);
+
+    // 7. Identity evolution — surface contradictions between beliefs and actions
+    await this.analyzeIdentityEvolution(llm);
+
+    // 8. Standard pruning
     this.pruneExpired(now);
+  }
+
+  /**
+   * Analyze relationship trajectories: for each dossier updated in the last day,
+   * determine if trust is trending up or down and why.
+   */
+  private async analyzeRelationshipTrajectories(llm: LLMProvider, now: number): Promise<void> {
+    const dayMs = 24 * 3_600_000;
+    const recentDossiers = Array.from(this.dossiers.values())
+      .filter(d => d.lastUpdated && (now - d.lastUpdated) < dayMs);
+
+    if (recentDossiers.length === 0) return;
+
+    // For each recently updated dossier, check timeline for interactions
+    for (const d of recentDossiers.slice(0, 3)) { // Max 3 to limit LLM calls
+      const interactions = this.timeline
+        .filter(m => m.relatedAgentIds?.includes(d.targetId))
+        .map(m => m.content);
+
+      if (interactions.length < 2) continue;
+
+      const prompt = `Your relationship with ${escapeXml(d.targetName)}:
+<current_understanding>
+${escapeXml(d.summary)}
+Trust: ${d.trust}
+</current_understanding>
+
+<recent_interactions>
+${escapeXml(interactions.join('\n'))}
+</recent_interactions>
+
+Is this relationship getting better or worse? One sentence capturing the trajectory.
+Reply with ONLY the sentence — no JSON, no labels.`;
+
+      try {
+        const trajectory = await llm.complete(
+          this.identity.map(m => m.content).join('\n'),
+          prompt,
+        );
+        const clean = trajectory.trim().slice(0, 100);
+        if (clean.length > 10) {
+          d.summary = `${d.summary.split('.').slice(0, 2).join('.')}. Trend: ${clean}`;
+          this.syncDossiersToAgent();
+        }
+      } catch {
+        // Non-critical — skip on failure
+      }
+    }
+  }
+
+  /**
+   * Re-prioritize concerns based on today's evidence.
+   * Confirmed threats get importance boost; disproven ones get resolved.
+   */
+  private reprioritizeConcerns(now: number): void {
+    const recentContent = this.timeline.slice(-15).map(m => m.content.toLowerCase()).join(' ');
+
+    for (const c of this.concerns) {
+      if (c.resolved || c.permanent) continue;
+
+      // Check if concern was addressed by recent events
+      const keywords = c.content.toLowerCase().split(' ').filter(w => w.length > 4).slice(0, 3);
+      const mentioned = keywords.filter(k => recentContent.includes(k)).length;
+
+      if (c.category === 'threat' || c.category === 'need') {
+        // If threat/need keywords appear in success outcomes, resolve it
+        const resolved = this.timeline.slice(-10).some(m =>
+          m.type === 'action_outcome' &&
+          keywords.some(k => m.content.toLowerCase().includes(k)) &&
+          !/failed|lost|broke/i.test(m.content)
+        );
+        if (resolved) {
+          c.resolved = true;
+          continue;
+        }
+        // If threat keywords appear in failure outcomes, it's confirmed — refresh timestamp
+        const confirmed = this.timeline.slice(-10).some(m =>
+          m.type === 'action_outcome' &&
+          keywords.some(k => m.content.toLowerCase().includes(k)) &&
+          /failed|lost|broke/i.test(m.content)
+        );
+        if (confirmed) {
+          c.createdAt = now; // Refresh so it doesn't expire
+        }
+      }
+
+      // Stale unresolved concerns with no recent mentions — mark for decay
+      if (c.category === 'unresolved' && mentioned === 0) {
+        const ageHours = (now - c.createdAt) / 3_600_000;
+        if (ageHours > 24) c.resolved = true;
+      }
+    }
+    this.syncConcernsToAgent();
+  }
+
+  /**
+   * Identity evolution: surface contradictions between core beliefs/identity and recent actions.
+   * If an agent promised to share but is hoarding, the tension is surfaced as a new belief.
+   */
+  private async analyzeIdentityEvolution(llm: LLMProvider): Promise<void> {
+    if (this.beliefs.length < 2 || this.timeline.length < 5) return;
+
+    const identityText = this.identity.map(m => m.content).join('\n');
+    const beliefText = this.beliefs.slice(0, 5).map(b => b.content).join('\n');
+    const recentActions = this.timeline
+      .filter(m => m.type === 'action_outcome')
+      .slice(-8)
+      .map(m => m.content)
+      .join('\n');
+
+    if (!recentActions) return;
+
+    const prompt = `Your identity:
+<identity>
+${escapeXml(identityText)}
+</identity>
+
+Your current beliefs:
+<beliefs>
+${escapeXml(beliefText)}
+</beliefs>
+
+Your recent actions:
+<actions>
+${escapeXml(recentActions)}
+</actions>
+
+Is there any tension between who you say you are and what you actually did today?
+If yes, state the contradiction in one honest sentence. If no contradiction, reply with exactly "none".`;
+
+    try {
+      const response = await llm.complete(identityText, prompt);
+      const clean = response.trim();
+
+      if (clean.toLowerCase() !== 'none' && clean.length > 15 && clean.length < 200) {
+        // Add as a high-importance belief — identity tensions are significant
+        this.addBelief({
+          id: crypto.randomUUID(),
+          agentId: this.agentId,
+          type: 'reflection',
+          content: clean,
+          importance: 9,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+          visibility: 'private',
+        });
+        console.log(`[Identity] ${this.agent.config.name}: tension surfaced — "${clean.slice(0, 60)}..."`);
+      }
+    } catch {
+      // Non-critical — skip on failure
+    }
+  }
+
+  // --- CULTURAL TRANSMISSION (cross-agent memory sharing) ---
+
+  /**
+   * Receive a shared memory from another agent (hearsay).
+   * Trust-filtered: only accepts from agents with trust > threshold.
+   * hearsayDepth tracks how many times a memory has been passed along.
+   * Max depth of 2 prevents infinite telephone-game distortion.
+   */
+  receiveSharedMemory(
+    memory: Memory,
+    fromAgentId: string,
+    fromAgentName: string,
+  ): boolean {
+    // Trust check — only accept memories from agents we somewhat trust
+    const dossier = this.dossiers.get(fromAgentId);
+    const trust = dossier?.trust ?? 0;
+    if (trust < -10) {
+      // Don't accept memories from distrusted agents
+      return false;
+    }
+
+    // Hearsay depth check — max 2 hops
+    const depth = (memory.hearsayDepth ?? 0) + 1;
+    if (depth > 2) return false;
+
+    // Importance discount — hearsay is less reliable
+    const discountedImportance = Math.max(1, Math.floor(memory.importance * (trust > 30 ? 0.8 : 0.6)));
+
+    // Duplicate check — don't store if we already know this
+    const isDuplicate = this.timeline.some(m =>
+      m.content.toLowerCase() === memory.content.toLowerCase()
+    ) || this.beliefs.some(b =>
+      b.content.toLowerCase() === memory.content.toLowerCase()
+    );
+    if (isDuplicate) return false;
+
+    // Store as hearsay observation
+    const hearsayMemory: Memory = {
+      id: crypto.randomUUID(),
+      agentId: this.agentId,
+      type: 'observation',
+      content: `${fromAgentName} told me: ${memory.content}`,
+      importance: discountedImportance,
+      timestamp: Date.now(),
+      relatedAgentIds: [fromAgentId, ...(memory.relatedAgentIds ?? [])],
+      sourceAgentId: fromAgentId,
+      hearsayDepth: depth,
+      visibility: 'private',
+    };
+
+    void this.addEvent(hearsayMemory);
+    return true;
+  }
+
+  /**
+   * Get shareable memories for cultural transmission during conversation.
+   * Returns high-importance beliefs and learned strategies that could be shared.
+   * Filters to non-private content appropriate for sharing.
+   */
+  getShareableMemories(maxCount: number = 2): Memory[] {
+    const shareable: Memory[] = [];
+
+    // Share top beliefs (importance >= 7)
+    const topBeliefs = this.beliefs
+      .filter(b => b.importance >= 7 && b.visibility !== 'private')
+      .sort((a, b) => b.importance - a.importance);
+    shareable.push(...topBeliefs.slice(0, maxCount));
+
+    // Share learned strategies
+    if (shareable.length < maxCount) {
+      const strategies = this.learnedStrategies
+        .filter(s => s.visibility !== 'private')
+        .slice(-maxCount);
+      shareable.push(...strategies.slice(0, maxCount - shareable.length));
+    }
+
+    return shareable.slice(0, maxCount);
   }
 
   // --- BACKWARD COMPATIBILITY ---

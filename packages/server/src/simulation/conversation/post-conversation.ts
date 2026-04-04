@@ -305,6 +305,25 @@ export class PostConversationProcessor {
             createdAt: Date.now(),
           });
         }
+
+        // --- 6. Cultural transmission: share beliefs/strategies between participants ---
+        // Agents organically spread knowledge through conversation.
+        // Trust-filtered: only share with trusted partners, only accept from trusted sources.
+        const shareableMemories = cognition.fourStream.getShareableMemories(2);
+        if (shareableMemories.length > 0) {
+          for (const otherId of otherIds) {
+            const otherCognition = cognitions.get(otherId);
+            if (!otherCognition?.fourStream) continue;
+            for (const mem of shareableMemories) {
+              const accepted = otherCognition.fourStream.receiveSharedMemory(
+                mem, participantId, participant.config.name,
+              );
+              if (accepted) {
+                console.log(`[Cultural] ${participant.config.name} → ${this.world.getAgent(otherId)?.config.name}: shared "${mem.content.slice(0, 40)}..."`);
+              }
+            }
+          }
+        }
       }
     }
   }

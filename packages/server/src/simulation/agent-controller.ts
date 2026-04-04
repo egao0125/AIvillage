@@ -2293,7 +2293,7 @@ State your vote and explain your reasoning.`;
           .filter(([, score]) => score !== 0)
           .map(([id, score]) => ({ id, score }));
       })(),
-      villageHistory: this.world.getTopVillageMemory(5) || undefined,
+      villageHistory: this.world.getTopVillageMemory(8) || undefined,
     };
   }
 
@@ -3463,10 +3463,10 @@ State your vote and explain your reasoning.`;
 
         this.broadcaster.institutionUpdate(group);
 
-        // Village collective memory — alliance formed
+        // Village collective memory — institution founded
         this.world.addVillageMemory({
           content: `${this.agent.config.name} and ${target.config.name} founded "${groupName}".`,
-          type: 'alliance',
+          type: 'institution',
           day: this.world.time.day,
           significance: 6,
         });

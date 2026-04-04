@@ -1,5 +1,19 @@
-// TF-IDF Embeddings — zero-cost local embeddings for semantic memory retrieval.
-// Upgradeable to real embeddings (OpenAI, Cohere) later.
+// Embedding system — TF-IDF baseline with pluggable neural embedding support.
+// TF-IDF enhanced with bigram support for better phrase matching.
+// Optional EmbeddingProvider interface for external embeddings (OpenAI, etc).
+
+/**
+ * External embedding provider interface.
+ * Implementations call an embedding API and return dense vectors.
+ */
+export interface EmbeddingProvider {
+  /** Generate embedding for a single text. Returns dense vector. */
+  embed(text: string): Promise<number[]>;
+  /** Generate embeddings for multiple texts (batched for efficiency). */
+  embedBatch(texts: string[]): Promise<number[][]>;
+  /** Dimensionality of the output vectors */
+  dimensions: number;
+}
 
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
@@ -24,10 +38,17 @@ export class TFIDFEmbedder {
   private documentCount: number = 0;
 
   tokenize(text: string): string[] {
-    return text
+    const unigrams = text
       .toLowerCase()
       .split(/[^a-zA-Z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+/)
       .filter(w => w.length >= 2 && !STOPWORDS.has(w));
+
+    // Add bigrams for better phrase matching ("traded wheat" vs just "traded" + "wheat")
+    const tokens = [...unigrams];
+    for (let i = 0; i < unigrams.length - 1; i++) {
+      tokens.push(`${unigrams[i]}_${unigrams[i + 1]}`);
+    }
+    return tokens;
   }
 
   addDocument(text: string): void {
@@ -89,5 +110,89 @@ export class TFIDFEmbedder {
     }
     // Vectors are already L2-normalized, so dot product = cosine similarity
     return dot;
+  }
+}
+
+/**
+ * HybridEmbedder — uses neural embeddings when an EmbeddingProvider is available,
+ * falls back to TF-IDF otherwise. Combines both signals when both are present.
+ *
+ * Neural embeddings capture semantic meaning ("starving" ≈ "hungry"),
+ * while TF-IDF captures exact term matches. The hybrid approach gets the best of both.
+ */
+export class HybridEmbedder {
+  private tfidf: TFIDFEmbedder = new TFIDFEmbedder();
+  private neuralCache: Map<string, number[]> = new Map();
+  private static readonly CACHE_MAX = 2_000;
+
+  constructor(private provider?: EmbeddingProvider) {}
+
+  /** Set or replace the neural embedding provider */
+  setProvider(provider: EmbeddingProvider): void {
+    this.provider = provider;
+  }
+
+  get hasNeuralProvider(): boolean {
+    return !!this.provider;
+  }
+
+  addDocument(text: string): void {
+    this.tfidf.addDocument(text);
+  }
+
+  /** Get TF-IDF embedding (synchronous, always available) */
+  embedLocal(text: string): number[] {
+    return this.tfidf.embed(text);
+  }
+
+  /** Get neural embedding (async, may return null if no provider) */
+  async embedNeural(text: string): Promise<number[] | null> {
+    if (!this.provider) return null;
+
+    const cached = this.neuralCache.get(text);
+    if (cached) return cached;
+
+    try {
+      const embedding = await this.provider.embed(text);
+      this.neuralCache.set(text, embedding);
+      // Prune cache if too large
+      if (this.neuralCache.size > HybridEmbedder.CACHE_MAX) {
+        const keys = this.neuralCache.keys();
+        for (let i = 0; i < 500; i++) {
+          const key = keys.next().value;
+          if (key !== undefined) this.neuralCache.delete(key);
+        }
+      }
+      return embedding;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Compute hybrid similarity between two texts.
+   * When neural embeddings are available: 0.6 * neural + 0.4 * tfidf
+   * When only TF-IDF: 1.0 * tfidf
+   */
+  computeSimilarity(
+    queryTfidf: number[],
+    memoryTfidf: number[],
+    queryNeural?: number[] | null,
+    memoryNeural?: number[] | null,
+  ): number {
+    const tfidfScore = TFIDFEmbedder.cosineSimilarity(queryTfidf, memoryTfidf);
+
+    if (queryNeural && memoryNeural && queryNeural.length > 0 && memoryNeural.length > 0) {
+      const neuralScore = TFIDFEmbedder.cosineSimilarity(queryNeural, memoryNeural);
+      // Neural embeddings get more weight when available — they capture semantics
+      return 0.6 * neuralScore + 0.4 * tfidfScore;
+    }
+
+    return tfidfScore;
+  }
+
+  /** Expose tokenizer for diversity checks */
+  tokenize(text: string): string[] {
+    return this.tfidf.tokenize(text);
   }
 }

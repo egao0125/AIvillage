@@ -96,6 +96,7 @@ export interface Agent {
   dossiers?: RelationshipDossier[];
   activeConcerns?: ActiveConcern[];
   beliefs?: { content: string; timestamp: number }[];
+  learnedStrategies?: { content: string; timestamp: number }[];
 
   // --- Strategy Tracking ---
   strategyHistory?: StrategySnapshot[];
@@ -144,10 +145,10 @@ export interface Commitment {
 }
 
 // --- Village Memory ---
-// Collective history shared by all agents — deaths, rules, betrayals, alliances.
+// Collective history shared by all agents — deaths, rules, betrayals, alliances, institutions, elections, discoveries.
 export interface VillageMemoryEntry {
   content: string;
-  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath';
+  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath' | 'institution' | 'election' | 'technology' | 'building';
   day: number;
   significance: number; // 1-10
 }
