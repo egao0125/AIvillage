@@ -11,7 +11,7 @@ import { ContextPanel } from '../inspect/ContextPanel';
 import { useActiveRecap, useInspectTarget } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 
-const DEV_TOOLS_ENABLED = true;
+const DEV_TOOLS_ENABLED = !!import.meta.env.VITE_DEV_ADMIN_TOKEN;
 const PANEL_WIDTH = 420;
 
 interface WatchViewProps {
