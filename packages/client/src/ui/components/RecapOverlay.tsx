@@ -70,7 +70,7 @@ export const RecapOverlay: React.FC = () => {
         position: 'fixed',
         inset: 0,
         zIndex: 100,
-        background: 'rgba(0, 0, 0, 0.92)',
+        background: 'rgba(245, 245, 240, 0.95)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -194,7 +194,7 @@ export const RecapOverlay: React.FC = () => {
             style={{
               fontFamily: FONTS.pixel,
               fontSize: '11px',
-              color: '#0f0f23',
+              color: '#2a2a2a',
               background: '#64ffda',
               border: 'none',
               padding: '12px 32px',

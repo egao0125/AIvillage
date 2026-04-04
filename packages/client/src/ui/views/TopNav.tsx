@@ -1,8 +1,9 @@
 import React from 'react';
-import { useWorldTime, useConnected, useWeather, useIsMobile } from '../../core/hooks';
+import { useWorldTime, useConnected, useWeather } from '../../core/hooks';
 import { ModeSelector } from './ModeSelector';
 import { UserMenu } from '../components/UserMenu';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 const WEATHER_ICONS: Record<string, string> = {
   clear: '\u2600\uFE0F',
@@ -19,10 +20,10 @@ interface TopNavProps {
 }
 
 export const TopNav: React.FC<TopNavProps> = ({ onChangeMap, onLogout }) => {
+  const { colors, isDark, toggle } = useTheme();
   const time = useWorldTime();
   const connected = useConnected();
   const weather = useWeather();
-  const isMobile = useIsMobile();
 
   const hourStr = String(time.hour).padStart(2, '0');
   const minStr = String(time.minute).padStart(2, '0');
@@ -34,17 +35,16 @@ export const TopNav: React.FC<TopNavProps> = ({ onChangeMap, onLogout }) => {
     <div
       style={{
         position: 'fixed',
-        top: isMobile ? 4 : 8,
-        left: isMobile ? 4 : 8,
-        right: isMobile ? 4 : undefined,
+        top: 8,
+        left: 8,
         zIndex: 100,
         display: 'flex',
         alignItems: 'center',
         gap: 0,
-        background: COLORS.bg,
-        border: `1px solid ${COLORS.border}`,
+        background: colors.bg,
+        border: `1px solid ${colors.border}`,
         borderRadius: 6,
-        padding: isMobile ? '8px 6px' : '6px 4px',
+        padding: '6px 4px',
         boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
       }}
     >
@@ -54,7 +54,7 @@ export const TopNav: React.FC<TopNavProps> = ({ onChangeMap, onLogout }) => {
       </div>
 
       {/* Divider */}
-      <div style={{ width: 1, height: 16, background: COLORS.border, marginRight: 8 }} />
+      <div style={{ width: 1, height: 16, background: colors.border, marginRight: 8 }} />
 
       {/* Connected dot */}
       <div
@@ -62,7 +62,7 @@ export const TopNav: React.FC<TopNavProps> = ({ onChangeMap, onLogout }) => {
           width: 6,
           height: 6,
           borderRadius: '50%',
-          background: connected ? COLORS.active : COLORS.warning,
+          background: connected ? colors.active : colors.warning,
           marginRight: 8,
           flexShrink: 0,
         }}
@@ -73,30 +73,46 @@ export const TopNav: React.FC<TopNavProps> = ({ onChangeMap, onLogout }) => {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: isMobile ? 4 : 6,
+          gap: 6,
           fontFamily: FONTS.pixel,
-          fontSize: isMobile ? '7px' : '9px',
-          color: COLORS.text,
-          paddingRight: isMobile ? 8 : 12,
-          borderRight: `1px solid ${COLORS.border}`,
+          fontSize: '9px',
+          color: colors.text,
+          paddingRight: 12,
+          borderRight: `1px solid ${colors.border}`,
           whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          flex: 1,
-          minWidth: 0,
         }}
       >
         <span>{timeIcon}</span>
         <span>Day {time.day}</span>
-        <span style={{ color: COLORS.textAccent }}>{hourStr}:{minStr}</span>
-        {!isMobile && <span style={{ color: COLORS.textDim }}>·</span>}
-        {!isMobile && <span>{weatherIcon}</span>}
-        {!isMobile && <span>{seasonLabel} {weather.temperature}°</span>}
+        <span style={{ color: colors.textAccent }}>{hourStr}:{minStr}</span>
+        <span style={{ color: colors.textDim }}>·</span>
+        <span>{weatherIcon}</span>
+        <span>{seasonLabel} {weather.temperature}°</span>
       </div>
 
       {/* Mode selector */}
-      <div style={{ paddingLeft: 8, flexShrink: 0 }}>
+      <div style={{ paddingLeft: 8 }}>
         <ModeSelector />
       </div>
+
+      {/* Divider */}
+      <div style={{ width: 1, height: 16, background: colors.border, margin: '0 8px' }} />
+
+      {/* Dark mode toggle */}
+      <button
+        onClick={toggle}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: 14,
+          padding: '2px 6px',
+          lineHeight: 1,
+        }}
+        title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+      >
+        {isDark ? '\u2600\uFE0F' : '\u{1F319}'}
+      </button>
     </div>
   );
 };

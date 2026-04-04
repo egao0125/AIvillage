@@ -1,30 +1,54 @@
-export const COLORS = {
-  bg: '#0f0f23',
+const BASE_COLORS = {
+  // Agent state colors (semantic — same in both themes)
+  active: '#2d9a50',
+  routine: '#3a7ac8',
+  idle: '#7a6aaa',
+  sleeping: '#999990',
+
+  // Personality trait colors
+  openness: '#7a6aaa',
+  conscientiousness: '#3a7ac8',
+  extraversion: '#c49000',
+  agreeableness: '#2d9a50',
+  neuroticism: '#cc5555',
+};
+
+export const LIGHT_COLORS = {
+  ...BASE_COLORS,
+  bg: '#f5f5f0',
+  bgLight: '#eeeee8',
+  bgCard: '#ffffff',
+  bgHover: '#e8e8e0',
+  border: '#d0d0c8',
+  text: '#2a2a2a',
+  textDim: '#777770',
+  textAccent: '#2a8a6a',
+  accent: '#2a8a6a',
+  accentDim: '#b8ddd0',
+  gold: '#c49000',
+  warning: '#cc4444',
+};
+
+export const DARK_COLORS = {
+  ...BASE_COLORS,
+  bg: '#0f0f1a',
   bgLight: '#1a1a2e',
-  bgCard: '#16213e',
-  bgHover: '#1f3460',
+  bgCard: '#16162a',
+  bgHover: '#222240',
   border: '#2a2a4a',
-  text: '#e0e0e0',
+  text: '#e0e0e8',
   textDim: '#8888aa',
   textAccent: '#64ffda',
   accent: '#64ffda',
-  accentDim: '#2a6a5a',
-  gold: '#ffd700',
+  accentDim: '#1a3a30',
+  gold: '#e8b800',
   warning: '#ff6b6b',
-
-  // Agent state colors
-  active: '#4ade80',
-  routine: '#60a5fa',
-  idle: '#a78bfa',
-  sleeping: '#6b7280',
-
-  // Personality trait colors
-  openness: '#a78bfa',
-  conscientiousness: '#60a5fa',
-  extraversion: '#fbbf24',
-  agreeableness: '#4ade80',
-  neuroticism: '#f87171',
 };
+
+export type ThemeColors = typeof LIGHT_COLORS;
+
+/** @deprecated Use useTheme().colors instead */
+export const COLORS = LIGHT_COLORS;
 
 export const FONTS = {
   pixel: '"Press Start 2P", monospace',

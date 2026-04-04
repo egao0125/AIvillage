@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { eventBus } from '../../core/EventBus';
 import { sendSpectatorComment } from '../../network/socket';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface SpectatorMessage {
   id: string;
@@ -16,6 +17,7 @@ interface SpectatorChatProps {
 }
 
 export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inline = false }) => {
+  const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<SpectatorMessage[]>([]);
   const [input, setInput] = useState('');
@@ -77,7 +79,7 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
           width: 48,
           height: 48,
           borderRadius: '50%',
-          background: COLORS.accent,
+          background: colors.accent,
           border: 'none',
           cursor: 'pointer',
           display: 'flex',
@@ -119,8 +121,8 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
             left: inline ? 0 : 20,
             width: 300,
             height: 400,
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
             borderRadius: 8,
             display: 'flex',
             flexDirection: 'column',
@@ -132,12 +134,12 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
           {/* Header */}
           <div style={{
             padding: '10px 14px',
-            borderBottom: `1px solid ${COLORS.border}`,
+            borderBottom: `1px solid ${colors.border}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
-            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.textAccent, letterSpacing: 1 }}>
+            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: colors.textAccent, letterSpacing: 1 }}>
               SPECTATOR CHAT
             </span>
             <button
@@ -145,7 +147,7 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
               style={{
                 background: 'none',
                 border: 'none',
-                color: COLORS.textDim,
+                color: colors.textDim,
                 cursor: 'pointer',
                 fontSize: '14px',
                 fontFamily: FONTS.body,
@@ -166,7 +168,7 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
             }}
           >
             {messages.length === 0 ? (
-              <div style={{ color: COLORS.textDim, fontSize: '12px', textAlign: 'center', padding: 20, fontFamily: FONTS.body }}>
+              <div style={{ color: colors.textDim, fontSize: '12px', textAlign: 'center', padding: 20, fontFamily: FONTS.body }}>
                 No messages yet. Say something!
               </div>
             ) : (
@@ -183,7 +185,7 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
                   }}>
                     {msg.name}
                   </span>
-                  <span style={{ color: COLORS.text, fontSize: '12px', fontFamily: FONTS.body }}>
+                  <span style={{ color: colors.text, fontSize: '12px', fontFamily: FONTS.body }}>
                     {msg.message}
                   </span>
                 </div>
@@ -194,7 +196,7 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
           {/* Input */}
           <div style={{
             padding: '8px 10px',
-            borderTop: `1px solid ${COLORS.border}`,
+            borderTop: `1px solid ${colors.border}`,
             display: 'flex',
             gap: 6,
           }}>
@@ -208,10 +210,10 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
               style={{
                 flex: 1,
                 padding: '6px 10px',
-                background: COLORS.bgCard,
-                border: `1px solid ${COLORS.border}`,
+                background: colors.bgCard,
+                border: `1px solid ${colors.border}`,
                 borderRadius: 4,
-                color: COLORS.text,
+                color: colors.text,
                 fontSize: '12px',
                 fontFamily: FONTS.body,
                 outline: 'none',
@@ -221,7 +223,7 @@ export const SpectatorChat: React.FC<SpectatorChatProps> = ({ onOpenChange, inli
               onClick={handleSend}
               style={{
                 padding: '6px 12px',
-                background: COLORS.accent,
+                background: colors.accent,
                 color: '#000',
                 border: 'none',
                 borderRadius: 4,

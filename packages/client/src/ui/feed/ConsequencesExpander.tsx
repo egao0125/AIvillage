@@ -1,19 +1,21 @@
 import React from 'react';
 import type { VillageEvent } from './types';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface ConsequencesExpanderProps {
   event: VillageEvent;
 }
 
-const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div style={{ display: 'flex', gap: 8, padding: '2px 0' }}>
-    <span style={{ color: COLORS.textDim, minWidth: 80 }}>{label}:</span>
-    <span style={{ color: COLORS.text }}>{value}</span>
-  </div>
-);
-
 export const ConsequencesExpander: React.FC<ConsequencesExpanderProps> = ({ event }) => {
+  const { colors } = useTheme();
+
+  const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+    <div style={{ display: 'flex', gap: 8, padding: '2px 0' }}>
+      <span style={{ color: colors.textDim, minWidth: 80 }}>{label}:</span>
+      <span style={{ color: colors.text }}>{value}</span>
+    </div>
+  );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data = event.sourceData as any;
   if (!data) return null;
@@ -46,7 +48,7 @@ export const ConsequencesExpander: React.FC<ConsequencesExpanderProps> = ({ even
     <div
       style={{
         marginTop: 8,
-        background: COLORS.bgLight,
+        background: colors.bgLight,
         borderRadius: 4,
         padding: 8,
         fontFamily: FONTS.body,

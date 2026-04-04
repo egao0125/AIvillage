@@ -1,8 +1,10 @@
 import React from 'react';
 import { useWeeklySummary } from '../../core/hooks';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 export const StorylinePanel: React.FC = () => {
+  const { colors } = useTheme();
   const summary = useWeeklySummary();
 
   return (
@@ -39,7 +41,7 @@ export const StorylinePanel: React.FC = () => {
             style={{
               fontFamily: FONTS.body,
               fontSize: '14px',
-              color: COLORS.text,
+              color: colors.text,
               lineHeight: 1.7,
               whiteSpace: 'pre-wrap',
             }}
@@ -50,7 +52,7 @@ export const StorylinePanel: React.FC = () => {
           <div
             style={{
               textAlign: 'center',
-              color: COLORS.textDim,
+              color: colors.textDim,
               fontFamily: FONTS.body,
               fontSize: '14px',
               fontStyle: 'italic',

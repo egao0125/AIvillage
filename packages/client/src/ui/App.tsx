@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import { createGameConfig } from '../game/config';
 import { COLORS, FONTS } from './styles';
+import { useTheme } from './ThemeContext';
 import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
 import { MapSelectPage } from './components/MapSelectPage';
@@ -16,6 +17,7 @@ import { useActiveRecap, useWerewolfGameOver, useIsAdmin } from '../core/hooks';
 import { gameStore } from '../core/GameStore';
 
 export const App: React.FC = () => {
+  const { colors } = useTheme();
   const [selectedMap, setSelectedMap] = useState<string | null>(null);
   const [entered, setEntered] = useState(false);
   const [spectatorChatOpen, setSpectatorChatOpen] = useState(false);
@@ -106,11 +108,11 @@ export const App: React.FC = () => {
           top: 14,
           left: 200,
           padding: '6px 14px',
-          background: COLORS.bg,
-          border: `1px solid ${COLORS.border}`,
+          background: colors.bg,
+          border: `1px solid ${colors.border}`,
           borderRadius: 4,
           cursor: 'pointer',
-          color: COLORS.textDim,
+          color: colors.textDim,
           fontFamily: FONTS.pixel,
           fontSize: '8px',
           letterSpacing: 1,

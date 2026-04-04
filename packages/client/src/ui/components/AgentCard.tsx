@@ -2,7 +2,8 @@ import React from 'react';
 import type { Agent } from '@ai-village/shared';
 import { nameToColor, hexToString } from '../../utils/color';
 import { useReputation } from '../../core/hooks';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface AgentCardProps {
   agent: Agent;
@@ -15,16 +16,17 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   selected,
   onClick,
 }) => {
+  const { colors } = useTheme();
   const color = hexToString(nameToColor(agent.config.name));
   const reputation = useReputation();
   const systemRep = reputation.find(r => r.toAgentId === agent.id && r.fromAgentId === 'system');
   const repScore = systemRep?.score ?? 0;
 
   const stateColors: Record<string, string> = {
-    active: COLORS.active,
-    routine: COLORS.routine,
-    idle: COLORS.idle,
-    sleeping: COLORS.sleeping,
+    active: colors.active,
+    routine: colors.routine,
+    idle: colors.idle,
+    sleeping: colors.sleeping,
     dead: '#4a0000',
     away: '#6b7280',
   };
@@ -41,16 +43,16 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         gap: 8,
         padding: '8px 12px',
         cursor: 'pointer',
-        background: selected ? COLORS.bgHover : 'transparent',
+        background: selected ? colors.bgHover : 'transparent',
         borderLeft: selected
-          ? `3px solid ${COLORS.accent}`
+          ? `3px solid ${colors.accent}`
           : '3px solid transparent',
-        borderBottom: `1px solid ${COLORS.border}`,
+        borderBottom: `1px solid ${colors.border}`,
         transition: 'background 0.15s',
       }}
       onMouseEnter={(e) => {
         if (!selected)
-          (e.currentTarget as HTMLDivElement).style.background = COLORS.bgHover;
+          (e.currentTarget as HTMLDivElement).style.background = colors.bgHover;
       }}
       onMouseLeave={(e) => {
         if (!selected)
@@ -82,7 +84,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           style={{
             fontFamily: FONTS.pixel,
             fontSize: '8px',
-            color: COLORS.text,
+            color: colors.text,
             marginBottom: 2,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -95,7 +97,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
               marginLeft: 6,
               fontSize: '7px',
               fontFamily: FONTS.pixel,
-              color: repScore > 0 ? COLORS.active : COLORS.warning,
+              color: repScore > 0 ? colors.active : colors.warning,
             }}>
               {repScore > 0 ? '+' : ''}{repScore}
             </span>
@@ -105,7 +107,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           style={{
             fontFamily: FONTS.body,
             fontSize: '11px',
-            color: COLORS.textDim,
+            color: colors.textDim,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -122,7 +124,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
             width: 10,
             height: 10,
             borderRadius: '50%',
-            background: stateColors[agent.state] || COLORS.idle,
+            background: stateColors[agent.state] || colors.idle,
           }}
         />
       </div>

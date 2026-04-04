@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { SpectatorChat } from '../components/SpectatorChat';
 import { NarrativeBar } from '../components/NarrativeBar';
 import { OverlayPanel } from '../components/OverlayPanel';
@@ -8,31 +9,23 @@ import { DevPanel } from '../components/DevPanel';
 import { EventFeed } from '../feed/EventFeed';
 import { SidePanel } from '../shared/SidePanel';
 import { ContextPanel } from '../inspect/ContextPanel';
-import { useActiveRecap, useInspectTarget, useIsAdmin, useIsMobile } from '../../core/hooks';
+import { useActiveRecap, useInspectTarget } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
+
+const DEV_TOOLS_ENABLED = true;
 const PANEL_WIDTH = 420;
-const MOBILE_PANEL_WIDTH = '100vw';
 
 interface WatchViewProps {
   onAddAgent?: () => void;
 }
 
 export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
+  const { colors } = useTheme();
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
   const activeRecap = useActiveRecap();
   const inspectTarget = useInspectTarget();
-  const isAdmin = useIsAdmin();
-  const isMobile = useIsMobile();
 
-  // On mobile, default to feed closed so the game canvas is visible
-  const [mobileInitialized, setMobileInitialized] = useState(false);
-  if (isMobile && !mobileInitialized) {
-    setEventFeedOpen(false);
-    setMobileInitialized(true);
-  }
-
-  const panelWidth = isMobile ? window.innerWidth : PANEL_WIDTH;
-  const sidebarWidth = inspectTarget ? panelWidth : eventFeedOpen ? panelWidth : 0;
+  const sidebarWidth = (eventFeedOpen ? PANEL_WIDTH : 0) + (inspectTarget ? PANEL_WIDTH : 0);
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -41,15 +34,15 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
 
       {/* Primary: Event Feed panel */}
       {eventFeedOpen && (
-        <SidePanel position="primary" width={panelWidth}>
+        <SidePanel position="primary" width={PANEL_WIDTH}>
           <div style={{
-            padding: isMobile ? '12px 16px' : '10px 14px',
-            borderBottom: `1px solid ${COLORS.border}`,
+            padding: '10px 14px',
+            borderBottom: `1px solid ${colors.border}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
-            <span style={{ fontFamily: FONTS.pixel, fontSize: isMobile ? '11px' : '9px', color: COLORS.accent, letterSpacing: 1 }}>
+            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: colors.accent, letterSpacing: 1 }}>
               EVENT FEED
             </span>
             <button
@@ -57,11 +50,10 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
               style={{
                 background: 'none',
                 border: 'none',
-                color: COLORS.textDim,
+                color: colors.textDim,
                 cursor: 'pointer',
-                fontSize: isMobile ? '20px' : '14px',
+                fontSize: '14px',
                 fontFamily: FONTS.body,
-                padding: isMobile ? '4px 8px' : 0,
               }}
             >
               ✕
@@ -71,35 +63,40 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
         </SidePanel>
       )}
 
-      {/* Stacked: Detail panel (ContextPanel) — on mobile, replace primary */}
+      {/* Stacked: Detail panel (ContextPanel) — right-aligned to feed, or to screen edge if feed closed */}
       {inspectTarget && (
-        <SidePanel position={isMobile ? 'primary' : 'stacked'} width={panelWidth} onClose={() => gameStore.closeDetail()}>
+        <SidePanel
+          position="stacked"
+          width={PANEL_WIDTH}
+          rightOffset={eventFeedOpen ? PANEL_WIDTH : 0}
+          onClose={() => gameStore.closeDetail()}
+        >
           <ContextPanel />
         </SidePanel>
       )}
 
       {/* Event Feed toggle when closed */}
-      {!eventFeedOpen && !inspectTarget && (
+      {!eventFeedOpen && (
         <button
           onClick={() => setEventFeedOpen(true)}
           style={{
             position: 'absolute',
             right: 0,
-            top: isMobile ? 48 : 50,
+            top: 50,
             pointerEvents: 'auto',
-            width: isMobile ? 36 : 24,
-            height: isMobile ? 56 : 48,
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            width: 24,
+            height: 48,
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
             borderRight: 'none',
             borderRadius: '6px 0 0 6px',
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: COLORS.accent,
+            color: colors.accent,
             fontFamily: FONTS.pixel,
-            fontSize: isMobile ? '16px' : '12px',
+            fontSize: '12px',
             zIndex: 11,
             padding: 0,
           }}
@@ -109,14 +106,14 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
       )}
 
       {/* Narrative bar — bottom overlay, avoids feed panel */}
-      {!isMobile && <NarrativeBar sidebarWidth={sidebarWidth} />}
+      <NarrativeBar sidebarWidth={sidebarWidth} />
 
-      {/* Spectator chat — hidden on mobile to avoid clutter */}
-      {!isMobile && <SpectatorChat />}
+      {/* Spectator chat — floating bottom-left */}
+      <SpectatorChat />
 
       {/* Overlays — kept as-is */}
       {activeRecap && <RecapOverlay />}
-      {isAdmin && <DevPanel />}
+      {DEV_TOOLS_ENABLED && <DevPanel />}
     </div>
   );
 };

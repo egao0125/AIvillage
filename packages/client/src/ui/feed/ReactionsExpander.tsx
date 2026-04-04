@@ -1,7 +1,8 @@
 import React from 'react';
 import type { VillageEvent } from './types';
 import { nameToColor, hexToString } from '../../utils/color';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface ReactionsExpanderProps {
   event: VillageEvent;
@@ -48,6 +49,7 @@ export function getReactionCount(event: VillageEvent): number {
 }
 
 export const ReactionsExpander: React.FC<ReactionsExpanderProps> = ({ event }) => {
+  const { colors } = useTheme();
   const reactions = extractReactions(event);
   if (reactions.length === 0) return null;
 
@@ -55,7 +57,7 @@ export const ReactionsExpander: React.FC<ReactionsExpanderProps> = ({ event }) =
     <div
       style={{
         marginTop: 8,
-        background: COLORS.bgLight,
+        background: colors.bgLight,
         borderRadius: 4,
         padding: 8,
         fontFamily: FONTS.body,
@@ -65,9 +67,9 @@ export const ReactionsExpander: React.FC<ReactionsExpanderProps> = ({ event }) =
       {reactions.map((r, i) => {
         const color = hexToString(nameToColor(r.name));
         return (
-          <div key={i} style={{ padding: '3px 0', borderBottom: i < reactions.length - 1 ? `1px solid ${COLORS.border}22` : undefined }}>
+          <div key={i} style={{ padding: '3px 0', borderBottom: i < reactions.length - 1 ? `1px solid ${colors.border}22` : undefined }}>
             <span style={{ color, fontWeight: 'bold', marginRight: 6 }}>{r.name}:</span>
-            <span style={{ color: COLORS.textDim }}>{r.text}</span>
+            <span style={{ color: colors.textDim }}>{r.text}</span>
           </div>
         );
       })}

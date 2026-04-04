@@ -105,8 +105,8 @@ export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500, 
           style={{
             maxHeight: 300,
             overflowY: 'auto',
-            background: 'rgba(15, 15, 35, 0.92)',
-            borderTop: '1px solid rgba(255, 215, 0, 0.3)',
+            background: 'rgba(245, 245, 240, 0.92)',
+            borderTop: '1px solid rgba(200, 180, 140, 0.4)',
             padding: '12px 20px',
           }}
         >
@@ -118,7 +118,7 @@ export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500, 
                 borderBottom: '1px solid rgba(255,255,255,0.05)',
                 fontFamily: FONTS.body,
                 fontSize: '13px',
-                color: '#b0b0c0',
+                color: '#555',
                 lineHeight: 1.5,
               }}
             >
@@ -135,8 +135,8 @@ export const NarrativeBar: React.FC<NarrativeBarProps> = ({ sidebarWidth = 500, 
       <div
         onClick={() => setExpanded(!expanded)}
         style={{
-          background: 'rgba(15, 15, 35, 0.85)',
-          borderTop: '1px solid rgba(255, 215, 0, 0.3)',
+          background: 'rgba(245, 245, 240, 0.85)',
+          borderTop: '1px solid rgba(200, 180, 140, 0.4)',
           padding: '14px 20px',
           cursor: 'pointer',
           minHeight: 60,

@@ -1,0 +1,5 @@
+Rules\RockSlopes_1_Brown_Rules.tmx
+Rules\RockSlopes_1_Gray_Rules.tmx
+Rules\RockSlopes_2_Brown_Rules.tmx
+Rules\RockSlopes_2_Gray_Rules.tmx
+Rules\CityWalls_Rules.tmx

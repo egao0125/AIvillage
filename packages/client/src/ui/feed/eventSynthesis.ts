@@ -242,7 +242,7 @@ export function synthesizeEvents(
         type: 'institution',
         icon: b.icon,
         color: b.color,
-        headline: `${inst.name}`,
+        headline: `Founded ${inst.name} (${inst.type})${inst.description ? ': ' + inst.description : ''}`,
         author: { name: founderName, id: inst.founderId },
         day: Math.floor(inst.createdAt / 86400000),
         timestamp: inst.createdAt,

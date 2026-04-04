@@ -1,12 +1,9 @@
 import React, { useState } from 'react';
 import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { authHeaders } from '../../utils/auth';
-
-const ACCENT = '#64ffda';
-const INPUT_BG = '#1a1a2e';
-const BORDER_DIM = '#2a2a4a';
-const LABEL_COLOR = '#8888aa';
-const BG = '#050510';
+import { type CharacterModel } from '../../game/data/sprite-config';
+import { CharacterPicker } from './CharacterPicker';
 
 const MODELS = [
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (fast)' },
@@ -25,29 +22,6 @@ interface AgentFormProps {
   onError: (msg: string) => void;
 }
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  fontFamily: FONTS.pixel,
-  fontSize: 7,
-  color: '#e0e0e0',
-  background: INPUT_BG,
-  border: `1px solid ${BORDER_DIM}`,
-  borderRadius: 4,
-  boxSizing: 'border-box',
-  transition: 'border-color 0.2s',
-  lineHeight: 2.2,
-};
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontFamily: FONTS.pixel,
-  fontSize: 6,
-  color: LABEL_COLOR,
-  letterSpacing: 1,
-  marginBottom: 6,
-};
-
 const defaultPersonality = {
   openness: 50,
   conscientiousness: 50,
@@ -64,7 +38,9 @@ export const AgentForm: React.FC<AgentFormProps> = ({
   onCreated,
   onError,
 }) => {
+  const { colors } = useTheme();
   const [name, setName] = useState('');
+  const [spriteId, setSpriteId] = useState<CharacterModel>('astronaut');
   const [age, setAge] = useState(30);
   const [occupation, setOccupation] = useState('');
   const [personality, setPersonality] = useState({ ...defaultPersonality });
@@ -81,8 +57,46 @@ export const AgentForm: React.FC<AgentFormProps> = ({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [addingAgent, setAddingAgent] = useState(false);
 
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '10px 12px',
+    fontFamily: FONTS.pixel,
+    fontSize: 7,
+    color: colors.text,
+    background: colors.bgLight,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    boxSizing: 'border-box',
+    transition: 'border-color 0.2s',
+    lineHeight: 2.2,
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: 'block',
+    fontFamily: FONTS.pixel,
+    fontSize: 6,
+    color: colors.textDim,
+    letterSpacing: 1,
+    marginBottom: 6,
+  };
+
+  const toggleStyle: React.CSSProperties = {
+    background: 'none',
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    padding: '6px 12px',
+    fontFamily: FONTS.pixel,
+    fontSize: 7,
+    color: colors.textDim,
+    cursor: 'pointer',
+    letterSpacing: 1,
+    width: '100%',
+    textAlign: 'left',
+  };
+
   const resetForm = () => {
     setName('');
+    setSpriteId('astronaut');
     setAge(30);
     setOccupation('');
     setPersonality({ ...defaultPersonality });
@@ -108,6 +122,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
     try {
       const body = {
         name: name.trim(),
+        spriteId,
         age,
         occupation: occupation.trim() || undefined,
         backstory: backstory.trim() || undefined,
@@ -159,25 +174,11 @@ export const AgentForm: React.FC<AgentFormProps> = ({
     { key: 'neuroticism', low: 'Calm', high: 'Anxious' },
   ];
 
-  const toggleStyle: React.CSSProperties = {
-    background: 'none',
-    border: `1px solid ${BORDER_DIM}`,
-    borderRadius: 4,
-    padding: '6px 12px',
-    fontFamily: FONTS.pixel,
-    fontSize: 7,
-    color: LABEL_COLOR,
-    cursor: 'pointer',
-    letterSpacing: 1,
-    width: '100%',
-    textAlign: 'left',
-  };
-
   return (
     <div>
       <style>{`
-        .af-input:focus { outline: none; border-color: #64ffda !important; }
-        .af-btn:hover:not(:disabled) { background: #64ffda !important; color: #050510 !important; }
+        .af-input:focus { outline: none; border-color: ${colors.accent} !important; }
+        .af-btn:hover:not(:disabled) { background: ${colors.accent} !important; color: ${colors.bg} !important; }
       `}</style>
 
       {/* API Key + Model row */}
@@ -208,32 +209,135 @@ export const AgentForm: React.FC<AgentFormProps> = ({
         </div>
       </div>
 
-      {/* Name + Age row */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-        <div style={{ flex: 2 }}>
-          <label style={labelStyle}>NAME *</label>
-          <input
-            className="af-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Agent name"
-            style={inputStyle}
-            maxLength={50}
-          />
-        </div>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle}>AGE</label>
-          <input
-            className="af-input"
-            type="number"
-            value={age}
-            onChange={(e) => setAge(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
-            min={1}
-            max={120}
-            style={inputStyle}
-          />
+      {/* Character picker + Name/Age */}
+      <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'flex-start' }}>
+        <CharacterPicker
+          value={spriteId}
+          onChange={setSpriteId}
+          accentColor={colors.accent}
+          labelColor={colors.textDim}
+          bgColor={colors.bgLight}
+        />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <label style={labelStyle}>NAME *</label>
+            <input
+              className="af-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Agent name"
+              style={inputStyle}
+              maxLength={50}
+            />
+          </div>
+          <div style={{ width: 80 }}>
+            <label style={labelStyle}>AGE</label>
+            <input
+              className="af-input"
+              type="number"
+              value={age}
+              onChange={(e) => setAge(Math.max(1, Math.min(120, Number(e.target.value) || 1)))}
+              min={1}
+              max={120}
+              style={inputStyle}
+            />
+          </div>
         </div>
       </div>
+
+      {/* PERSONALITY toggle */}
+      <div style={{ marginBottom: 12 }}>
+        <button
+          style={toggleStyle}
+          onClick={() => setShowPersonality(!showPersonality)}
+        >
+          {showPersonality ? '\u25BE' : '\u25B8'} PERSONALITY
+        </button>
+        {showPersonality && (
+          <div style={{ padding: '12px 0' }}>
+            {sliderTraits.map(({ key, low, high }) => (
+              <div key={key} style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim }}>{low}</span>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim }}>
+                    {key.toUpperCase()} ({personality[key]})
+                  </span>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim }}>{high}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={personality[key]}
+                  onChange={(e) => setPersonality({ ...personality, [key]: Number(e.target.value) })}
+                  style={{ width: '100%', accentColor: colors.accent }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* DEEP IDENTITY toggle */}
+      <div style={{ marginBottom: 12 }}>
+        <button
+          style={toggleStyle}
+          onClick={() => setShowAdvanced(!showAdvanced)}
+        >
+          {showAdvanced ? '\u25BE' : '\u25B8'} DEEP IDENTITY
+        </button>
+        {showAdvanced && (
+          <div style={{ padding: '12px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <label style={labelStyle}>OCCUPATION</label>
+              <input className="af-input" value={occupation} onChange={(e) => setOccupation(e.target.value)} placeholder="e.g. Blacksmith, Scholar" style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>BACKSTORY (500 chars)</label>
+              <textarea className="af-input" value={backstory} onChange={(e) => setBackstory(e.target.value)} maxLength={500} rows={3} style={{ ...inputStyle, resize: 'vertical' }} />
+            </div>
+            <div>
+              <label style={labelStyle}>GOAL (200 chars)</label>
+              <input className="af-input" value={goal} onChange={(e) => setGoal(e.target.value)} maxLength={200} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>STARTING GOLD (0-10000)</label>
+              <input
+                className="af-input"
+                type="number"
+                value={startingGold}
+                onChange={(e) => setStartingGold(Math.max(0, Math.min(10000, Number(e.target.value) || 0)))}
+                min={0}
+                max={10000}
+                style={inputStyle}
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>FEARS (300 chars, comma-separated)</label>
+              <input className="af-input" value={fears} onChange={(e) => setFears(e.target.value)} maxLength={300} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>DESIRES (300 chars, comma-separated)</label>
+              <input className="af-input" value={desires} onChange={(e) => setDesires(e.target.value)} maxLength={300} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>CORE VALUES (300 chars, comma-separated)</label>
+              <input className="af-input" value={coreValues} onChange={(e) => setCoreValues(e.target.value)} maxLength={300} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>CONTRADICTIONS (200 chars)</label>
+              <input className="af-input" value={contradictions} onChange={(e) => setContradictions(e.target.value)} maxLength={200} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>SPEECH PATTERN (200 chars)</label>
+              <input className="af-input" value={speechPattern} onChange={(e) => setSpeechPattern(e.target.value)} maxLength={200} style={inputStyle} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: colors.border, margin: '16px 0' }} />
 
       {/* SOUL textarea */}
       <div style={{ marginBottom: 16 }}>
@@ -247,7 +351,7 @@ export const AgentForm: React.FC<AgentFormProps> = ({
           placeholder={SOUL_PLACEHOLDER}
           style={{ ...inputStyle, resize: 'vertical' }}
         />
-        <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: LABEL_COLOR, textAlign: 'right', marginTop: 4 }}>
+        <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim, textAlign: 'right', marginTop: 4 }}>
           {soul.length}/2000
         </div>
       </div>
@@ -262,8 +366,8 @@ export const AgentForm: React.FC<AgentFormProps> = ({
           padding: '12px',
           fontFamily: FONTS.pixel,
           fontSize: 9,
-          color: addingAgent ? LABEL_COLOR : BG,
-          background: addingAgent ? BORDER_DIM : ACCENT,
+          color: addingAgent ? colors.textDim : colors.bg,
+          background: addingAgent ? colors.border : colors.accent,
           border: 'none',
           borderRadius: 4,
           cursor: addingAgent ? 'not-allowed' : 'pointer',

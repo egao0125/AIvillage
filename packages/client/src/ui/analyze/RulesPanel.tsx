@@ -1,9 +1,11 @@
 import React, { useMemo } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { useBoard, useAgentsMap } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 
 export const RulesPanel: React.FC = () => {
+  const { colors } = useTheme();
   const board = useBoard();
   const agentsMap = useAgentsMap();
 
@@ -24,7 +26,7 @@ export const RulesPanel: React.FC = () => {
         style={{
           fontFamily: FONTS.pixel,
           fontSize: 8,
-          color: COLORS.textDim,
+          color: colors.textDim,
           marginBottom: 10,
           letterSpacing: 1,
         }}
@@ -33,7 +35,7 @@ export const RulesPanel: React.FC = () => {
       </div>
 
       {rules.length === 0 ? (
-        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim }}>
           No rules passed yet.
         </div>
       ) : (
@@ -46,8 +48,8 @@ export const RulesPanel: React.FC = () => {
               <div
                 key={rule.id}
                 style={{
-                  background: COLORS.bgCard,
-                  border: `1px solid ${COLORS.border}`,
+                  background: colors.bgCard,
+                  border: `1px solid ${colors.border}`,
                   borderRadius: 4,
                   padding: 10,
                 }}
@@ -56,7 +58,7 @@ export const RulesPanel: React.FC = () => {
                   style={{
                     fontFamily: FONTS.body,
                     fontSize: 11,
-                    color: COLORS.text,
+                    color: colors.text,
                     lineHeight: 1.4,
                     marginBottom: 6,
                   }}
@@ -69,7 +71,7 @@ export const RulesPanel: React.FC = () => {
                     style={{
                       fontFamily: FONTS.body,
                       fontSize: 10,
-                      color: COLORS.accent,
+                      color: colors.accent,
                       cursor: 'pointer',
                     }}
                     onClick={() => gameStore.openAgentDetail(rule.authorId)}
@@ -77,15 +79,15 @@ export const RulesPanel: React.FC = () => {
                     {agentName(rule.authorId)}
                   </span>
 
-                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.textDim }}>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim }}>
                     Day {rule.day}
                   </span>
 
                   {rule.votes && rule.votes.length > 0 && (
-                    <span style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, marginLeft: 'auto' }}>
-                      <span style={{ color: COLORS.active }}>{likes}</span>
+                    <span style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim, marginLeft: 'auto' }}>
+                      <span style={{ color: colors.active }}>{likes}</span>
                       {' / '}
-                      <span style={{ color: COLORS.warning }}>{dislikes}</span>
+                      <span style={{ color: colors.warning }}>{dislikes}</span>
                     </span>
                   )}
                 </div>

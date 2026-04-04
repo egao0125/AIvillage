@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { EventFeed } from './EventFeed';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface EventFeedButtonProps {
   chatOpen?: boolean;
 }
 
 export const EventFeedButton: React.FC<EventFeedButtonProps> = ({ chatOpen }) => {
+  const { colors } = useTheme();
   const [open, setOpen] = useState(false);
 
   return (
@@ -21,14 +23,14 @@ export const EventFeedButton: React.FC<EventFeedButtonProps> = ({ chatOpen }) =>
           width: 48,
           height: 48,
           borderRadius: '50%',
-          background: COLORS.accent,
+          background: colors.accent,
           border: 'none',
           cursor: 'pointer',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           fontSize: '20px',
-          boxShadow: `0 2px 12px ${COLORS.accent}66`,
+          boxShadow: `0 2px 12px ${colors.accent}66`,
           zIndex: 1000,
         }}
       >
@@ -44,8 +46,8 @@ export const EventFeedButton: React.FC<EventFeedButtonProps> = ({ chatOpen }) =>
             left: chatOpen ? 330 : 20,
             width: 380,
             height: 500,
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
             borderRadius: 8,
             display: 'flex',
             flexDirection: 'column',
@@ -57,12 +59,12 @@ export const EventFeedButton: React.FC<EventFeedButtonProps> = ({ chatOpen }) =>
           {/* Header */}
           <div style={{
             padding: '10px 14px',
-            borderBottom: `1px solid ${COLORS.border}`,
+            borderBottom: `1px solid ${colors.border}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
-            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
+            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: colors.accent, letterSpacing: 1 }}>
               EVENT FEED
             </span>
             <button
@@ -70,7 +72,7 @@ export const EventFeedButton: React.FC<EventFeedButtonProps> = ({ chatOpen }) =>
               style={{
                 background: 'none',
                 border: 'none',
-                color: COLORS.textDim,
+                color: colors.textDim,
                 cursor: 'pointer',
                 fontSize: '14px',
                 fontFamily: FONTS.body,

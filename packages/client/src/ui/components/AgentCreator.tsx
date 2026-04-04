@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { AgentForm } from './AgentForm';
 import { nameToColor, hexToString } from '../../utils/color';
 import { authHeaders } from '../../utils/auth';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface AgentCreatorProps {
   open: boolean;
@@ -18,6 +19,7 @@ interface AgentEntry {
 }
 
 export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => {
+  const { colors } = useTheme();
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('claude-sonnet-4-6');
   const [error, setError] = useState('');
@@ -82,15 +84,15 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
           maxWidth: 700,
           maxHeight: '90vh',
           overflowY: 'auto',
-          background: COLORS.bg,
-          border: `1px solid ${COLORS.border}`,
+          background: colors.bg,
+          border: `1px solid ${colors.border}`,
           borderRadius: 8,
           padding: 24,
         }}
       >
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <span style={{ fontFamily: FONTS.pixel, fontSize: 10, color: COLORS.accent, letterSpacing: 2 }}>
+          <span style={{ fontFamily: FONTS.pixel, fontSize: 10, color: colors.accent, letterSpacing: 2 }}>
             MANAGE AGENTS
           </span>
           <button
@@ -98,7 +100,7 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
             style={{
               background: 'none',
               border: 'none',
-              color: COLORS.textDim,
+              color: colors.textDim,
               cursor: 'pointer',
               fontFamily: FONTS.pixel,
               fontSize: 12,
@@ -125,11 +127,11 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
             marginTop: 12,
             padding: '8px 12px',
             background: 'rgba(255,107,107,0.15)',
-            border: `1px solid ${COLORS.warning}`,
+            border: `1px solid ${colors.warning}`,
             borderRadius: 4,
             fontFamily: FONTS.pixel,
             fontSize: 7,
-            color: COLORS.warning,
+            color: colors.warning,
           }}>
             {error}
           </div>
@@ -138,7 +140,7 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
         {/* Agent roster */}
         {agents.length > 0 && (
           <div style={{ marginTop: 24 }}>
-            <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.textDim, letterSpacing: 1, marginBottom: 12 }}>
+            <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.textDim, letterSpacing: 1, marginBottom: 12 }}>
               AGENTS ({agents.length})
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -152,8 +154,8 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
                       alignItems: 'center',
                       gap: 12,
                       padding: '10px 12px',
-                      background: COLORS.bgLight,
-                      border: `1px solid ${COLORS.border}`,
+                      background: colors.bgLight,
+                      border: `1px solid ${colors.border}`,
                       borderRadius: 4,
                     }}
                   >
@@ -177,13 +179,13 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
                     </div>
                     {/* Name + soul preview */}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.text }}>
+                      <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.text }}>
                         {agent.name}
                       </div>
                       <div style={{
                         fontFamily: FONTS.body,
                         fontSize: 11,
-                        color: COLORS.textDim,
+                        color: colors.textDim,
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
@@ -196,9 +198,9 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
                       onClick={() => handleDelete(agent.id, agent.name)}
                       style={{
                         background: 'none',
-                        border: `1px solid ${COLORS.border}`,
+                        border: `1px solid ${colors.border}`,
                         borderRadius: 4,
-                        color: COLORS.warning,
+                        color: colors.warning,
                         cursor: 'pointer',
                         fontFamily: FONTS.pixel,
                         fontSize: 7,

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useWorldTime, useConnected, useWeather } from '../../core/hooks';
-import { COLORS, FONTS, SIZES } from '../styles';
+import { FONTS, SIZES } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 const WEATHER_ICONS: Record<string, string> = {
   clear: '\u2600\uFE0F',
@@ -12,6 +13,7 @@ const WEATHER_ICONS: Record<string, string> = {
 };
 
 export const TimeDisplay: React.FC = () => {
+  const { colors } = useTheme();
   const time = useWorldTime();
   const connected = useConnected();
   const weather = useWeather();
@@ -30,12 +32,12 @@ export const TimeDisplay: React.FC = () => {
         top: 12,
         left: 12,
         zIndex: 100,
-        background: COLORS.bgCard,
-        border: `1px solid ${COLORS.border}`,
+        background: colors.bgCard,
+        border: `1px solid ${colors.border}`,
         borderRadius: SIZES.borderRadius,
         padding: '8px 12px',
         fontFamily: FONTS.pixel,
-        color: COLORS.text,
+        color: colors.text,
         fontSize: '10px',
         display: 'flex',
         flexDirection: 'column',
@@ -45,19 +47,19 @@ export const TimeDisplay: React.FC = () => {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span>{timeIcon}</span>
         <span>Day {time.day}</span>
-        <span style={{ color: COLORS.textAccent }}>
+        <span style={{ color: colors.textAccent }}>
           {hourStr}:{minStr}
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span>{weatherIcon}</span>
         <span>{seasonLabel}</span>
-        <span style={{ color: COLORS.textDim }}>{weather.temperature}\u00B0</span>
+        <span style={{ color: colors.textDim }}>{weather.temperature}\u00B0</span>
       </div>
       <div
         style={{
           fontSize: '7px',
-          color: connected ? COLORS.active : COLORS.warning,
+          color: connected ? colors.active : colors.warning,
         }}
       >
         {connected ? '\u25CF Connected' : '\u25CB Disconnected'}

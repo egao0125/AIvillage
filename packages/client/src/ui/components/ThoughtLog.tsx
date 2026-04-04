@@ -1,9 +1,11 @@
 import React, { useRef, useEffect } from 'react';
 import { useThoughts } from '../../core/hooks';
 import { nameToColor, hexToString } from '../../utils/color';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 export const ThoughtLog: React.FC = () => {
+  const { colors } = useTheme();
   const thoughts = useThoughts();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -13,7 +15,7 @@ export const ThoughtLog: React.FC = () => {
 
   if (thoughts.length === 0) {
     return (
-      <div style={{ padding: 20, textAlign: 'center', color: COLORS.textDim, fontFamily: FONTS.body, fontSize: '13px' }}>
+      <div style={{ padding: 20, textAlign: 'center', color: colors.textDim, fontFamily: FONTS.body, fontSize: '13px' }}>
         No thoughts yet. Agents think before acting...
       </div>
     );
@@ -26,7 +28,7 @@ export const ThoughtLog: React.FC = () => {
         return (
           <div key={t.id} style={{
             padding: '8px 16px',
-            borderBottom: `1px solid ${COLORS.border}`,
+            borderBottom: `1px solid ${colors.border}`,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               <div style={{
@@ -35,14 +37,14 @@ export const ThoughtLog: React.FC = () => {
               <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color }}>
                 {t.agentName}
               </span>
-              <span style={{ fontFamily: FONTS.body, fontSize: '10px', color: COLORS.textDim, marginLeft: 'auto' }}>
+              <span style={{ fontFamily: FONTS.body, fontSize: '10px', color: colors.textDim, marginLeft: 'auto' }}>
                 {new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
             <div style={{
               fontFamily: FONTS.body,
               fontSize: '12px',
-              color: COLORS.textDim,
+              color: colors.textDim,
               fontStyle: 'italic',
               lineHeight: '1.5',
               paddingLeft: 12,

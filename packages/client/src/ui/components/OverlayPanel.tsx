@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { useAgents, useSelectedAgent, useBoard, useInstitutions, useIsMobile } from '../../core/hooks';
+import { useAgents, useSelectedAgent, useBoard, useInstitutions } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 import { selectAgent } from '../../network/socket';
 import { AgentCard } from './AgentCard';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 type Tab = 'agents' | 'info';
 
@@ -12,12 +13,12 @@ interface OverlayPanelProps {
 }
 
 export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
+  const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('agents');
 
   const agents = useAgents();
   const selectedAgent = useSelectedAgent();
-  const isMobile = useIsMobile();
   const aliveAgents = agents.filter(a => a.alive !== false);
 
   const board = useBoard();
@@ -27,17 +28,17 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
   const infoCount = passedRules.length + activeInstitutions.length;
 
   return (
-    <div style={{ position: 'absolute', top: isMobile ? 52 : 48, left: isMobile ? 4 : 8, zIndex: 20, pointerEvents: 'auto' }}>
+    <div style={{ position: 'absolute', top: 48, left: 8, zIndex: 20, pointerEvents: 'auto' }}>
       {/* Toggle pill */}
       <button
         onClick={() => setOpen(prev => !prev)}
         style={{
-          padding: isMobile ? '8px 14px' : '5px 12px',
+          padding: '5px 12px',
           fontFamily: FONTS.pixel,
-          fontSize: isMobile ? '10px' : '8px',
-          color: open ? COLORS.accent : COLORS.textDim,
-          background: COLORS.bg,
-          border: `1px solid ${open ? COLORS.accent : COLORS.border}`,
+          fontSize: '8px',
+          color: open ? colors.accent : colors.textDim,
+          background: colors.bg,
+          border: `1px solid ${open ? colors.accent : colors.border}`,
           borderRadius: 4,
           cursor: 'pointer',
           letterSpacing: 0.5,
@@ -51,19 +52,19 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
         <div
           style={{
             marginTop: 4,
-            width: isMobile ? 'calc(100vw - 16px)' : 300,
-            maxHeight: isMobile ? '60vh' : 450,
+            width: 300,
+            maxHeight: 450,
             display: 'flex',
             flexDirection: 'column',
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
             borderRadius: 6,
             boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
             overflow: 'hidden',
           }}
         >
           {/* Tabs */}
-          <div style={{ display: 'flex', borderBottom: `1px solid ${COLORS.border}`, flexShrink: 0 }}>
+          <div style={{ display: 'flex', borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
             <button
               onClick={() => setTab('agents')}
               style={{
@@ -71,10 +72,10 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                 padding: '8px 0',
                 fontFamily: FONTS.pixel,
                 fontSize: '7px',
-                color: tab === 'agents' ? COLORS.accent : COLORS.textDim,
-                background: tab === 'agents' ? COLORS.bgHover : 'transparent',
+                color: tab === 'agents' ? colors.accent : colors.textDim,
+                background: tab === 'agents' ? colors.bgHover : 'transparent',
                 border: 'none',
-                borderBottom: tab === 'agents' ? `2px solid ${COLORS.accent}` : '2px solid transparent',
+                borderBottom: tab === 'agents' ? `2px solid ${colors.accent}` : '2px solid transparent',
                 cursor: 'pointer',
                 letterSpacing: 1,
               }}
@@ -88,10 +89,10 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                 padding: '8px 0',
                 fontFamily: FONTS.pixel,
                 fontSize: '7px',
-                color: tab === 'info' ? COLORS.accent : COLORS.textDim,
-                background: tab === 'info' ? COLORS.bgHover : 'transparent',
+                color: tab === 'info' ? colors.accent : colors.textDim,
+                background: tab === 'info' ? colors.bgHover : 'transparent',
                 border: 'none',
-                borderBottom: tab === 'info' ? `2px solid ${COLORS.accent}` : '2px solid transparent',
+                borderBottom: tab === 'info' ? `2px solid ${colors.accent}` : '2px solid transparent',
                 cursor: 'pointer',
                 letterSpacing: 1,
               }}
@@ -112,18 +113,18 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                       padding: '12px 16px',
                       background: 'transparent',
                       border: 'none',
-                      borderBottom: `1px solid ${COLORS.border}`,
+                      borderBottom: `1px solid ${colors.border}`,
                       cursor: 'pointer',
                       display: 'flex',
                       alignItems: 'center',
                       gap: 10,
                       fontFamily: FONTS.pixel,
                       fontSize: '8px',
-                      color: COLORS.accent,
+                      color: colors.accent,
                       letterSpacing: 1,
                       transition: 'background 0.15s',
                     }}
-                    onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
+                    onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                   >
                     + ADD AGENT
@@ -157,15 +158,15 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                         key={rule.id}
                         style={{
                           padding: '8px 14px',
-                          borderBottom: `1px solid ${COLORS.border}`,
+                          borderBottom: `1px solid ${colors.border}`,
                           fontFamily: FONTS.body,
                           fontSize: '11px',
-                          color: COLORS.textDim,
+                          color: colors.textDim,
                           lineHeight: 1.4,
                         }}
                       >
-                        <span style={{ color: COLORS.text }}>{rule.content}</span>
-                        <div style={{ fontSize: '10px', color: COLORS.textDim, marginTop: 2 }}>
+                        <span style={{ color: colors.text }}>{rule.content}</span>
+                        <div style={{ fontSize: '10px', color: colors.textDim, marginTop: 2 }}>
                           by {rule.authorName} — Day {rule.day}
                         </div>
                       </div>
@@ -192,18 +193,18 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                         onClick={() => { gameStore.openDetail({ type: 'institution', id: inst.id }); setOpen(false); }}
                         style={{
                           padding: '8px 14px',
-                          borderBottom: `1px solid ${COLORS.border}`,
+                          borderBottom: `1px solid ${colors.border}`,
                           fontFamily: FONTS.body,
                           fontSize: '11px',
-                          color: COLORS.textDim,
+                          color: colors.textDim,
                           cursor: 'pointer',
                           transition: 'background 0.15s',
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
+                        onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                       >
-                        <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{inst.name}</span>
-                        <span style={{ marginLeft: 6, color: COLORS.textDim }}>({inst.type})</span>
+                        <span style={{ color: colors.text, fontWeight: 'bold' }}>{inst.name}</span>
+                        <span style={{ marginLeft: 6, color: colors.textDim }}>({inst.type})</span>
                         <div style={{ fontSize: '10px', marginTop: 2 }}>
                           {inst.members.length} members — Treasury: {inst.treasury}
                         </div>
@@ -213,7 +214,7 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                 )}
 
                 {passedRules.length === 0 && activeInstitutions.length === 0 && (
-                  <div style={{ padding: '16px 14px', textAlign: 'center', fontFamily: FONTS.body, fontSize: '12px', color: COLORS.textDim }}>
+                  <div style={{ padding: '16px 14px', textAlign: 'center', fontFamily: FONTS.body, fontSize: '12px', color: colors.textDim }}>
                     No active rules or institutions yet.
                   </div>
                 )}

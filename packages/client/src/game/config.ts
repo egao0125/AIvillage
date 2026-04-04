@@ -9,7 +9,7 @@ export const MAP_HEIGHT = 45;
 
 export function createGameConfig(parent: string, activeMap?: string): Phaser.Types.Core.GameConfig {
   const isArena = activeMap === 'battle_royale' || activeMap === 'werewolf';
-  const bgColor = isArena ? '#1B3A4B' : '#2d5a1e';
+  const bgColor = isArena ? '#1B3A4B' : '#f0ede4';
 
   return {
     type: Phaser.AUTO,

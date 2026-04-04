@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { COLORS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { moodColor, stateOpacity } from './socialAnimations';
 
 interface SocialNodeProps {
@@ -32,6 +32,7 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
   id, name, mood, state, x, y, connectionCount, dimmed, selected, hovered,
   onMouseEnter, onMouseLeave, onClick,
 }) => {
+  const { colors } = useTheme();
   // Scale node size by connectivity (min 18, max 28)
   const radius = Math.min(28, 18 + connectionCount * 1.5);
   const moodRingColor = moodColor(mood);
@@ -143,7 +144,7 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
         <circle
           r={radius + 7}
           fill="none"
-          stroke={COLORS.accent}
+          stroke={colors.accent}
           strokeWidth={2}
           strokeDasharray="4 2"
         />
@@ -166,7 +167,7 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
       <text
         textAnchor="middle"
         dominantBaseline="central"
-        fill={COLORS.textAccent}
+        fill={colors.textAccent}
         fontFamily="'Press Start 2P', monospace"
         fontSize={radius > 22 ? '8px' : '7px'}
         letterSpacing="0.5"
@@ -178,7 +179,7 @@ export const SocialNodeComponent: React.FC<SocialNodeProps> = ({
       <text
         y={radius + 16}
         textAnchor="middle"
-        fill={COLORS.text}
+        fill={colors.text}
         fontFamily="'Press Start 2P', monospace"
         fontSize="7px"
         opacity={0.8}

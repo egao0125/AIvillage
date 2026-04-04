@@ -1,5 +1,6 @@
 import React from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import type { LayoutMode, SocialFilter } from './types';
 import type { SocialPrimitiveType } from '@ai-village/shared';
 
@@ -22,6 +23,7 @@ interface SocialControlsProps {
 export const SocialControls: React.FC<SocialControlsProps> = ({
   layout, onLayoutChange, filter, onFilterChange,
 }) => {
+  const { colors } = useTheme();
   const toggleType = (type: SocialPrimitiveType) => {
     const next = new Set(filter.types);
     if (next.has(type)) {
@@ -43,7 +45,7 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
       }}
     >
       {/* Layout toggle */}
-      <div style={{ display: 'flex', background: COLORS.bgCard, borderRadius: 4, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', background: colors.bgCard, borderRadius: 4, overflow: 'hidden' }}>
         <button
           onClick={() => onLayoutChange('force')}
           title="Auto-arrange nodes by relationship strength"
@@ -51,8 +53,8 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
             padding: '4px 12px',
             border: 'none',
             cursor: 'pointer',
-            background: layout === 'force' ? COLORS.accent : 'transparent',
-            color: layout === 'force' ? COLORS.bg : COLORS.textDim,
+            background: layout === 'force' ? colors.accent : 'transparent',
+            color: layout === 'force' ? colors.bg : colors.textDim,
             fontFamily: FONTS.pixel,
             fontSize: 8,
             textTransform: 'uppercase',
@@ -67,8 +69,8 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
             padding: '4px 12px',
             border: 'none',
             cursor: 'pointer',
-            background: layout === 'map' ? COLORS.accent : 'transparent',
-            color: layout === 'map' ? COLORS.bg : COLORS.textDim,
+            background: layout === 'map' ? colors.accent : 'transparent',
+            color: layout === 'map' ? colors.bg : colors.textDim,
             fontFamily: FONTS.pixel,
             fontSize: 8,
             textTransform: 'uppercase',
@@ -79,7 +81,7 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
       </div>
 
       {/* Separator */}
-      <div style={{ width: 1, height: 20, background: COLORS.border }} />
+      <div style={{ width: 1, height: 20, background: colors.border }} />
 
       {/* Type filters */}
       {TYPE_INFO.map(({ type, tooltip }) => (
@@ -89,10 +91,10 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
           title={tooltip}
           style={{
             padding: '3px 8px',
-            border: `1px solid ${filter.types.has(type) ? COLORS.accent : COLORS.border}`,
+            border: `1px solid ${filter.types.has(type) ? colors.accent : colors.border}`,
             borderRadius: 3,
-            background: filter.types.has(type) ? `${COLORS.accent}20` : 'transparent',
-            color: filter.types.has(type) ? COLORS.textAccent : COLORS.textDim,
+            background: filter.types.has(type) ? `${colors.accent}20` : 'transparent',
+            color: filter.types.has(type) ? colors.textAccent : colors.textDim,
             cursor: 'pointer',
             fontFamily: FONTS.body,
             fontSize: 10,
@@ -104,7 +106,7 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
       ))}
 
       {/* Separator */}
-      <div style={{ width: 1, height: 20, background: COLORS.border }} />
+      <div style={{ width: 1, height: 20, background: colors.border }} />
 
       {/* Active only toggle */}
       <button
@@ -112,10 +114,10 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
         title="Show only relationships with pending or active interactions"
         style={{
           padding: '3px 8px',
-          border: `1px solid ${filter.activeOnly ? COLORS.accent : COLORS.border}`,
+          border: `1px solid ${filter.activeOnly ? colors.accent : colors.border}`,
           borderRadius: 3,
-          background: filter.activeOnly ? `${COLORS.accent}20` : 'transparent',
-          color: filter.activeOnly ? COLORS.textAccent : COLORS.textDim,
+          background: filter.activeOnly ? `${colors.accent}20` : 'transparent',
+          color: filter.activeOnly ? colors.textAccent : colors.textDim,
           cursor: 'pointer',
           fontFamily: FONTS.body,
           fontSize: 10,
@@ -130,10 +132,10 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
         title="Show only relationships where agents disagree on what happened"
         style={{
           padding: '3px 8px',
-          border: `1px solid ${filter.disagreementsOnly ? COLORS.warning : COLORS.border}`,
+          border: `1px solid ${filter.disagreementsOnly ? colors.warning : colors.border}`,
           borderRadius: 3,
           background: filter.disagreementsOnly ? 'rgba(255,107,107,0.15)' : 'transparent',
-          color: filter.disagreementsOnly ? COLORS.warning : COLORS.textDim,
+          color: filter.disagreementsOnly ? colors.warning : colors.textDim,
           cursor: 'pointer',
           fontFamily: FONTS.body,
           fontSize: 10,
@@ -143,7 +145,7 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
       </button>
 
       {/* Separator */}
-      <div style={{ width: 1, height: 20, background: COLORS.border }} />
+      <div style={{ width: 1, height: 20, background: colors.border }} />
 
       {/* Search */}
       <input
@@ -153,10 +155,10 @@ export const SocialControls: React.FC<SocialControlsProps> = ({
         onChange={e => onFilterChange({ ...filter, searchQuery: e.target.value })}
         style={{
           padding: '4px 10px',
-          border: `1px solid ${COLORS.border}`,
+          border: `1px solid ${colors.border}`,
           borderRadius: 4,
-          background: COLORS.bgCard,
-          color: COLORS.text,
+          background: colors.bgCard,
+          color: colors.text,
           fontFamily: FONTS.body,
           fontSize: 11,
           width: 140,
