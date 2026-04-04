@@ -40,7 +40,7 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 
-      # 120 s matches fly.toml kill_timeout — gives SIGTERM handler time to save state
+      # 120 s gives SIGTERM handler time to save state before hard kill
       terminationGracePeriodSeconds: 120
 
       containers:
