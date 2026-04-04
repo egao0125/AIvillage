@@ -38,7 +38,7 @@ export const EventFeed: React.FC = () => {
         <div style={{
           padding: '8px 10px',
           display: 'flex',
-          gap: 4,
+          gap: 6,
           flexWrap: 'wrap',
           borderBottom: `1px solid ${COLORS.border}`,
         }}>
@@ -46,9 +46,9 @@ export const EventFeed: React.FC = () => {
             onClick={() => setFilterType(null)}
             style={{
               fontFamily: FONTS.pixel,
-              fontSize: '6px',
-              padding: '3px 6px',
-              borderRadius: 3,
+              fontSize: '9px',
+              padding: '5px 10px',
+              borderRadius: 4,
               border: `1px solid ${filterType === null ? COLORS.accent : COLORS.border}`,
               background: filterType === null ? COLORS.accentDim : 'transparent',
               color: filterType === null ? COLORS.accent : COLORS.textDim,
@@ -67,9 +67,9 @@ export const EventFeed: React.FC = () => {
                 onClick={() => setFilterType(filterType === type ? null : type)}
                 style={{
                   fontFamily: FONTS.pixel,
-                  fontSize: '6px',
-                  padding: '3px 6px',
-                  borderRadius: 3,
+                  fontSize: '9px',
+                  padding: '5px 10px',
+                  borderRadius: 4,
                   border: `1px solid ${filterType === type ? b.color : COLORS.border}`,
                   background: filterType === type ? b.color + '22' : 'transparent',
                   color: filterType === type ? b.color : COLORS.textDim,
