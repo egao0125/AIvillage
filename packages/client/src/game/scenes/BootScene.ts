@@ -12,11 +12,20 @@ import {
   GIRL_DIRECTIONS, GIRL_WALK_FPS,
 } from '../data/sprite-config';
 
-// Fan-tasy Tileset spritesheet URLs — served from public/ directory.
-// Using absolute paths (not Vite imports) to avoid hashing/LFS issues in Docker builds.
-const tilesetGroundUrl = '/tilesets/Tileset_Ground.png';
-const tilesetSandUrl = '/tilesets/Tileset_Sand.png';
-const tilesetRoadUrl = '/tilesets/Tileset_Road.png';
+// Arena tileset assets — served from public/ directory (no Vite hashing).
+// Loaded as images (not spritesheets) for Phaser's tilemap renderer.
+const ARENA_MAP_URL = '/tilesets/arena-map.tmj';
+const TILESET_GROUND_URL = '/tilesets/Tileset_Ground.png';
+const TILESET_SAND_URL = '/tilesets/Tileset_Sand.png';
+const TILESET_ROAD_URL = '/tilesets/Tileset_Road.png';
+const ATLAS_TREES_URL = '/tilesets/Atlas_Trees_Bushes.png';
+const ATLAS_ROCKS_URL = '/tilesets/Atlas_Rocks.png';
+const TILESET_SHADOW_URL = '/tilesets/Tileset_Shadow.png';
+const ATLAS_BUILDINGS_BLUE_URL = '/tilesets/Atlas_Buildings_Wood_Blue.png';
+const ATLAS_BUILDINGS_ORANGE_URL = '/tilesets/Atlas_Buildings_Wood_Orange.png';
+const ATLAS_BUILDINGS_GREEN_URL = '/tilesets/Atlas_Buildings_Wood_Green.png';
+const ATLAS_BUILDINGS_HAY_URL = '/tilesets/Atlas_Buildings_Hay.png';
+const ATLAS_BUILDINGS_RED_URL = '/tilesets/Atlas_Buildings_Wood_Red.png';
 
 const T = 32; // tile size
 
@@ -248,19 +257,25 @@ export class BootScene extends Phaser.Scene {
     const activeMap = this.registry.get('activeMap');
     console.log('[BootScene] preload — activeMap:', activeMap);
 
-    // Load Fan-tasy Tileset spritesheets for arena map (16x16 tiles)
-    if (activeMap === 'battle_royale') {
+    // Load arena Tiled JSON map + tileset images for battle_royale/werewolf
+    if (activeMap === 'battle_royale' || activeMap === 'werewolf') {
       this.load.on('loaderror', (file: { key: string; url: string }) => {
         console.error('[BootScene] Failed to load asset:', file.key, file.url);
       });
-      this.load.spritesheet('ts_ground', tilesetGroundUrl, { frameWidth: 16, frameHeight: 16 });
-      this.load.spritesheet('ts_sand', tilesetSandUrl, { frameWidth: 16, frameHeight: 16 });
-      this.load.spritesheet('ts_road', tilesetRoadUrl, { frameWidth: 16, frameHeight: 16 });
+      this.load.tilemapTiledJSON('arena-map', ARENA_MAP_URL);
+      this.load.image('Tileset_Ground', TILESET_GROUND_URL);
+      this.load.image('Tileset_Sand', TILESET_SAND_URL);
+      this.load.image('Tileset_Road', TILESET_ROAD_URL);
+      this.load.image('Atlas_Trees_Bushes', ATLAS_TREES_URL);
+      this.load.image('Atlas_Rocks', ATLAS_ROCKS_URL);
+      this.load.image('Tileset_Shadow', TILESET_SHADOW_URL);
+      this.load.image('Atlas_Buildings_Blue', ATLAS_BUILDINGS_BLUE_URL);
+      this.load.image('Atlas_Buildings_Orange', ATLAS_BUILDINGS_ORANGE_URL);
+      this.load.image('Atlas_Buildings_Green', ATLAS_BUILDINGS_GREEN_URL);
+      this.load.image('Atlas_Buildings_Hay', ATLAS_BUILDINGS_HAY_URL);
+      this.load.image('Atlas_Buildings_Red', ATLAS_BUILDINGS_RED_URL);
       this.load.on('complete', () => {
-        console.log('[BootScene] All spritesheets loaded —',
-          'ts_ground:', this.textures.exists('ts_ground'),
-          'ts_sand:', this.textures.exists('ts_sand'),
-          'ts_road:', this.textures.exists('ts_road'));
+        console.log('[BootScene] Arena tilemap + tilesets loaded');
       });
     }
 
@@ -329,7 +344,8 @@ export class BootScene extends Phaser.Scene {
     this.registerAstronautAnimations();
 
     // Decide which scene to start based on active map
-    const targetScene = (this.registry.get('activeMap') === 'battle_royale')
+    const activeMap = this.registry.get('activeMap');
+    const targetScene = (activeMap === 'battle_royale' || activeMap === 'werewolf')
       ? 'ArenaScene'
       : 'VillageScene';
     this.scene.start(targetScene);

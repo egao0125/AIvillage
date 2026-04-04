@@ -8,7 +8,7 @@ import { createAdapter } from '@socket.io/redis-streams-adapter';
 import { timingSafeEqual, createHash } from 'crypto';
 import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
-import { createAuthRouter, optionalAuth, verifyToken, stopAuthRateLimitCleaner } from './auth.js';
+import { createAuthRouter, optionalAuth, verifyToken, verifyTokenFull, stopAuthRateLimitCleaner } from './auth.js';
 import { setupRedis, closeRedis, getRedis } from './redis.js';
 import { isEncryptionConfigured } from './crypto.js';
 import path from 'path';
@@ -46,6 +46,15 @@ if (isProduction && process.env.DEV_ADMIN_TOKEN) {
   console.error('[Security] FATAL: DEV_ADMIN_TOKEN must not be set in production.');
   process.exit(1);
 }
+
+// ADMIN_EMAILS: comma-separated list of emails that get admin privileges (dev panel, sim control).
+// In production, this replaces DEV_ADMIN_TOKEN for authorizing simulation control commands.
+const ADMIN_EMAILS: Set<string> = new Set(
+  (process.env.ADMIN_EMAILS ?? '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 // Redis: setup client before Socket.IO so the adapter is ready at startup.
 // Falls back to in-memory (single-instance) when REDIS_URL is not set.
@@ -129,14 +138,26 @@ app.use(express.json({ limit: '16kb' }));
 
 const engine = new SimulationEngine(io);
 
-// Auth: Cognito is required in all environments — without these, JWT verification
+// Auth: Cognito is required in production — without these, JWT verification
 // produces invalid JWKS URLs and signup/login fail with cryptic errors at runtime.
 if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
-  console.error('[Security] FATAL: COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID must be set.');
-  process.exit(1);
+  if (isProduction) {
+    console.error('[Security] FATAL: COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID must be set.');
+    process.exit(1);
+  }
+  console.warn('[Security] Cognito not configured — auth disabled (dev mode only)');
+  // Dev-only stub: fake auth endpoints so the client UI works without Cognito
+  const devUser = { id: 'dev-user', email: 'dev@localhost' };
+  app.post('/api/auth/signup', (_req, res) => res.json({ token: 'dev-token', user: devUser }));
+  app.post('/api/auth/login', (_req, res) => res.json({ token: 'dev-token', user: devUser }));
+  app.get('/api/auth/me', (_req, res) => res.json({ user: devUser }));
+  app.post('/api/auth/logout', (_req, res) => res.json({ message: 'Logged out' }));
+  app.post('/api/auth/refresh', (_req, res) => res.json({ token: 'dev-token' }));
+} else {
+  app.use(createAuthRouter());
 }
-app.use(createAuthRouter());
 app.use('/api', optionalAuth());
+
 
 // Follower-guard: simulation state mutations must only execute on the leader Pod.
 // Auth endpoints (login, logout, refresh) are excluded — they use their own DB (Cognito)
@@ -213,10 +234,24 @@ function isDevAuthorized(token: unknown): boolean {
 // (OWASP API4: Unrestricted Resource Consumption — unauthenticated LLM calls blocked)
 // ---------------------------------------------------------------------------
 io.use(async (socket, next) => {
+  // Dev mode: no Cognito configured — everyone is admin (matches optionalAuth behavior)
+  if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
+    socket.data.userId = 'dev-user';
+    socket.data.isAdmin = true;
+    return next();
+  }
   const token = socket.handshake.auth?.token;
   if (typeof token === 'string' && token.length > 0) {
-    const userId = await verifyToken(token);
-    if (userId) socket.data.userId = userId;
+    const result = await verifyTokenFull(token);
+    console.log(`[Auth] Socket ${socket.id}: token=${token.length}chars, verifyResult=${result ? `userId=${result.userId},email=${result.email}` : 'null'}`);
+    if (result) {
+      socket.data.userId = result.userId;
+      const emailLower = result.email?.toLowerCase() ?? '';
+      socket.data.isAdmin = !!(emailLower && ADMIN_EMAILS.has(emailLower));
+      console.log(`[Auth] Socket ${socket.id}: emailLower=${emailLower}, isAdmin=${socket.data.isAdmin}, adminEmails=[${[...ADMIN_EMAILS]}]`);
+    }
+  } else {
+    console.log(`[Auth] Socket ${socket.id}: no token provided (length=${typeof token === 'string' ? token.length : 'not-string'})`);
   }
   next(); // always allow connection — spectators are valid users
 });
@@ -226,6 +261,11 @@ io.on('connection', (socket) => {
 
   // Send initial snapshot
   socket.emit('world:snapshot', engine.getSnapshot());
+
+  // Notify client of admin status (controls dev panel visibility)
+  if (socket.data.isAdmin) {
+    socket.emit('auth:admin', { isAdmin: true });
+  }
 
   // UUID v4 format validation for agentId inputs (OWASP WebSocket Security Cheat Sheet)
   const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -381,7 +421,7 @@ io.on('connection', (socket) => {
 
   // --- Dev tools (token-gated) ---
   socket.on('dev:pause', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot pause' });
       return;
@@ -391,7 +431,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:resume', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot resume' });
       return;
@@ -401,7 +441,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:step', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot step' });
       return;
@@ -411,7 +451,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:reset-vitals', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot reset vitals' });
       return;
@@ -424,7 +464,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:fresh-start', async (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot fresh-start' });
       return;
@@ -441,7 +481,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:status-request', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     socket.emit('dev:status', { paused: !engine.isRunning });
   });
 
@@ -466,6 +506,15 @@ io.on('connection', (socket) => {
     // Send catch-up: agents currently in the new viewport
     const agents = engine.getViewportCatchup(socket.id);
     socket.emit('viewport:catchup', { agents });
+  });
+
+  // --- Werewolf ---
+  socket.on('werewolf:start', () => {
+    engine.startWerewolfGame();
+  });
+
+  socket.on('werewolf:playAgain', () => {
+    engine.resetWerewolfGame();
   });
 
   // Per-socket error handler — prevents an unhandled 'error' event from crashing the process.

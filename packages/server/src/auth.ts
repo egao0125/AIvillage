@@ -149,6 +149,15 @@ const JWKS = createRemoteJWKSet(
  * Shared by Express middleware (optionalAuth) and Socket.IO io.use() middleware.
  */
 export async function verifyToken(token: string): Promise<string | null> {
+  const result = await verifyTokenFull(token);
+  return result?.userId ?? null;
+}
+
+/**
+ * Verify a Cognito access token and return userId + email.
+ * Returns null if the token is invalid or missing required claims.
+ */
+export async function verifyTokenFull(token: string): Promise<{ userId: string; email: string | null } | null> {
   try {
     const { payload } = await jwtVerify(token, JWKS, {
       algorithms: ['RS256'],
@@ -157,7 +166,30 @@ export async function verifyToken(token: string): Promise<string | null> {
     });
     if (payload['token_use'] !== 'access') return null;
     if (payload['client_id'] !== COGNITO_CLIENT_ID) return null;
-    return (payload.sub as string) ?? null;
+    const userId = payload.sub as string | undefined;
+    if (!userId) return null;
+    // Access tokens use 'username' claim; ID tokens use 'cognito:username'.
+    // With username_attributes=["email"], the username is the email address.
+    const username = (payload['username'] as string | undefined)
+      ?? (payload['cognito:username'] as string | undefined);
+    let email: string | null = null;
+    if (username && username.includes('@')) {
+      email = username;
+    } else if (payload['email']) {
+      email = payload['email'] as string;
+    } else if (username && COGNITO_USER_POOL_ID) {
+      // username is a UUID — resolve email via AdminGetUser
+      try {
+        const user = await cognitoClient.send(new AdminGetUserCommand({
+          UserPoolId: COGNITO_USER_POOL_ID,
+          Username: username,
+        }));
+        email = user.UserAttributes?.find(a => a.Name === 'email')?.Value ?? null;
+      } catch {
+        // AdminGetUser failed — email stays null
+      }
+    }
+    return { userId, email };
   } catch {
     return null;
   }
@@ -169,8 +201,8 @@ export async function verifyToken(token: string): Promise<string | null> {
  */
 export function optionalAuth(_config?: unknown) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
-    // Dev bypass: when Cognito is not configured, assign a dev user
-    if (!COGNITO_USER_POOL_ID || COGNITO_USER_POOL_ID === 'local-dev') {
+    // Dev mode: skip JWT verification when Cognito is not configured
+    if (!COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID) {
       req.userId = 'dev-user';
       return next();
     }
@@ -481,11 +513,6 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
 
   // GET /api/auth/me
   router.get('/api/auth/me', async (req: Request, res: Response) => {
-    // Dev bypass: when Cognito is not configured, return a dev user
-    if (!COGNITO_USER_POOL_ID || COGNITO_USER_POOL_ID === 'local-dev') {
-      res.json({ user: { id: 'dev-user', email: 'dev@localhost' } });
-      return;
-    }
     const authHdr = req.headers.authorization;
     const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
     if (!token) {

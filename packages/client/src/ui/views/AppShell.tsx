@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Phaser from 'phaser';
 import { createGameConfig } from '../../game/config';
-import { useActiveMode, useWorldTime } from '../../core/hooks';
-import { connectSocket } from '../../network/socket';
+import { useActiveMode, useWorldTime, useWerewolfGameOver } from '../../core/hooks';
+import { connectSocket, werewolfPlayAgain } from '../../network/socket';
 import { clearToken } from '../../utils/auth';
+import { gameStore } from '../../core/GameStore';
 import { TopNav } from './TopNav';
 import { WatchView } from './WatchView';
 import { SetupPage } from '../components/SetupPage';
@@ -11,6 +12,8 @@ import { MapSelectPage } from '../components/MapSelectPage';
 import { AgentCreator } from '../components/AgentCreator';
 import { AnalyzeView } from './AnalyzeView';
 import { useTheme } from '../ThemeContext';
+import { WerewolfGameOver } from '../components/WerewolfGameOver';
+import { WerewolfSidebar } from '../components/WerewolfSidebar';
 
 export const AppShell: React.FC = () => {
   const [selectedMap, setSelectedMap] = useState<string | null>(() => sessionStorage.getItem('ai-village-map'));
@@ -22,6 +25,7 @@ export const AppShell: React.FC = () => {
   const hour = worldTime.hour + worldTime.minute / 60;
   // Night intensity: matches the Phaser scene's day/night cycle
   const nightAmount = hour < 5 ? 1 : hour < 6.5 ? 1 - (hour - 5) / 1.5 : hour < 19 ? 0 : hour < 21 ? (hour - 19) / 2 * 0.6 : hour < 22.5 ? 0.6 + (hour - 21) / 1.5 * 0.4 : 1;
+  const werewolfGameOver = useWerewolfGameOver();
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
 
@@ -67,10 +71,19 @@ export const AppShell: React.FC = () => {
     setSelectedMap(null);
   };
 
-  // Reconnect socket on refresh if already entered
+  // Reconnect socket + re-sync map config on refresh if already entered
   useEffect(() => {
     if (entered) {
       connectSocket();
+      // Re-sync server map config — on page refresh the server may have restarted
+      // and reverted to 'village' while sessionStorage still has the previous map.
+      if (selectedMap) {
+        fetch('/api/config/map', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mapId: selectedMap }),
+        }).catch(() => {});
+      }
     }
   }, []);
 
@@ -125,13 +138,26 @@ export const AppShell: React.FC = () => {
           zIndex: 2,
         }}
       />
-      {activeMode === 'watch' && <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />}
+      {activeMode === 'watch' && (selectedMap === 'werewolf' ? <WerewolfSidebar /> : <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />)}
       {activeMode === 'analyze' && <AnalyzeView />}
       <TopNav
         onChangeMap={handleChangeMap}
         onLogout={handleLogout}
       />
       <AgentCreator open={agentCreatorOpen} onClose={() => setAgentCreatorOpen(false)} />
+      {werewolfGameOver && (
+        <WerewolfGameOver
+          payload={werewolfGameOver}
+          onPlayAgain={() => {
+            gameStore.setWerewolfGameOver(null);
+            werewolfPlayAgain();
+          }}
+          onBackToMenu={() => {
+            gameStore.setWerewolfGameOver(null);
+            handleBackToMaps();
+          }}
+        />
+      )}
     </div>
   );
 };

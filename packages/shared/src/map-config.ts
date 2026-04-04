@@ -19,10 +19,11 @@ export interface MapConfig {
     shrinkingZone: boolean;
     stealth: boolean;
     board: boolean;
+    werewolf?: boolean;
   };
   actions: MapAction[];
   buildGameRules: () => string;
-  winCondition: 'none' | 'last_standing';
+  winCondition: 'none' | 'last_standing' | 'werewolf';
   tickConfig: {
     decisionIdleTicks: number;
   };

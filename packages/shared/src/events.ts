@@ -53,4 +53,8 @@ export type SimEvent =
   | { type: 'board_post_created'; post: import('./index.js').BoardPost }
 
   // Persistence
-  | { type: 'save_requested' };
+  | { type: 'save_requested' }
+
+  // Werewolf game mode
+  | { type: 'werewolf_phase'; phase: string; round: number }
+  | { type: 'werewolf_game_end'; winner: string };

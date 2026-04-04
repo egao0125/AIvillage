@@ -1,7 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 import { gameStore } from '../core/GameStore';
 import { eventBus } from '../core/EventBus';
-import { getToken } from '../utils/auth';
+import { getToken, getValidToken } from '../utils/auth';
 import type {
   Agent,
   AgentConfig,
@@ -23,6 +23,7 @@ import type {
   Storyline,
   Recap,
   SocialLedgerEntry,
+  WerewolfGameOverPayload,
 } from '@ai-village/shared';
 
 let socket: Socket | null = null;
@@ -31,11 +32,16 @@ let lastSeenDayTimer: ReturnType<typeof setInterval> | null = null;
 export function connectSocket(): Socket {
   if (socket) return socket;
 
-  // Pass auth token as a callback so it is re-evaluated on every reconnect attempt.
-  // This ensures a refreshed token is used if the original expires mid-session.
+  // Pass auth token as an async callback so it is re-evaluated on every reconnect.
+  // Uses getValidToken() which auto-refreshes expired tokens via the httpOnly cookie,
+  // keeping the socket authenticated beyond the 60-min access token lifetime.
   socket = io('/', {
     transports: ['websocket', 'polling'],
-    auth: (cb) => cb({ token: getToken() ?? '' }),
+    auth: async (cb) => {
+      const token = await getValidToken();
+      console.log('[Socket] auth: token=' + (token ? `${token.length}chars` : 'null'));
+      cb({ token: token ?? '' });
+    },
     // Cap reconnection attempts to prevent a permanently-gone server from causing
     // an infinite background retry loop in the browser tab.
     // 10 attempts × exponential back-off ≈ ~5 minutes of retrying, then the UI
@@ -48,9 +54,15 @@ export function connectSocket(): Socket {
     gameStore.setConnected(true);
   });
 
+  socket.on('auth:admin', (data: { isAdmin: boolean }) => {
+    console.log('[Socket] auth:admin received:', data);
+    gameStore.setAdmin(data.isAdmin);
+  });
+
   socket.on('disconnect', () => {
     console.log('Disconnected from server');
     gameStore.setConnected(false);
+    gameStore.setAdmin(false);
     // Clear the last-seen-day timer on disconnect to avoid accumulation on reconnect
     if (lastSeenDayTimer !== null) {
       clearInterval(lastSeenDayTimer);
@@ -125,6 +137,7 @@ export function connectSocket(): Socket {
       name: string;
       message: string;
       conversationId: string;
+      phase?: string;
     }) => {
       gameStore.addChatEntry({
         id: crypto.randomUUID(),
@@ -133,6 +146,7 @@ export function connectSocket(): Socket {
         message: data.message,
         timestamp: Date.now(),
         conversationId: data.conversationId,
+        phase: data.phase,
       });
       eventBus.emit('agent:speak', data);
     }
@@ -336,6 +350,53 @@ export function connectSocket(): Socket {
     eventBus.emit('viewport:catchup', data);
   });
 
+  // --- Werewolf events ---
+  socket.on('werewolf:phase', (data: { phase: string; round: number }) => {
+    gameStore.setWerewolfPhase(data.phase, data.round);
+    eventBus.emit('werewolf:phase', data);
+  });
+
+  socket.on('werewolf:reveal', (data: { agentId: string; role: string }) => {
+    gameStore.setWerewolfRole(data.agentId, data.role);
+    eventBus.emit('werewolf:reveal', data);
+  });
+
+  socket.on('werewolf:gameOver', (payload: WerewolfGameOverPayload) => {
+    gameStore.setWerewolfGameOver(payload);
+    eventBus.emit('werewolf:gameOver', payload);
+  });
+
+  socket.on('werewolf:newGame', () => {
+    gameStore.clearWerewolfState();
+    eventBus.emit('werewolf:newGame', {});
+  });
+
+  socket.on('werewolf:kill', (data: { agentId: string; saved: boolean }) => {
+    const round = gameStore.getState().werewolfRound;
+    gameStore.addWerewolfKill({ agentId: data.agentId, saved: data.saved, round });
+    eventBus.emit('werewolf:kill', data);
+  });
+
+  socket.on('werewolf:vote', (data: { exiled: string | null; role: string | null }) => {
+    eventBus.emit('werewolf:vote', data);
+  });
+
+  socket.on('werewolf:nightAction', (data: { type: string; agentId: string; targetId: string; result?: string }) => {
+    const round = gameStore.getState().werewolfRound;
+    gameStore.addWerewolfNightAction({ round, ...data });
+    eventBus.emit('werewolf:nightAction', data);
+  });
+
+  socket.on('werewolf:voteDetail', (data: { round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }) => {
+    gameStore.addWerewolfVote(data);
+    eventBus.emit('werewolf:voteDetail', data);
+  });
+
+  socket.on('werewolf:meetingTranscript', (data: { round: number; transcript: Array<{ name: string; message: string }> }) => {
+    gameStore.addWerewolfMeetingTranscript(data);
+    eventBus.emit('werewolf:meetingTranscript', data);
+  });
+
   // Update last-seen day periodically. Store the ID so it can be cleared on disconnect.
   lastSeenDayTimer = setInterval(() => {
     const time = gameStore.getState().time;
@@ -361,19 +422,17 @@ export function sendSpectatorComment(message: string): void {
 }
 
 // --- Dev tools ---
-// Server requires DEV_ADMIN_TOKEN as first argument for all dev:* commands.
-// Set VITE_DEV_ADMIN_TOKEN in the client build environment (e.g. .env.local)
-// to enable the dev panel. Leave unset to disable dev commands from this client.
+// Authorization: server checks either DEV_ADMIN_TOKEN (local dev) or socket.data.isAdmin
+// (production, via ADMIN_EMAILS env var). The token arg is sent for backwards compat with
+// local dev; in production it's empty and the server falls through to admin email check.
 const DEV_TOKEN: string = import.meta.env.VITE_DEV_ADMIN_TOKEN ?? '';
 
-// Guard all dev commands: if DEV_TOKEN is not configured, emit nothing.
-// The server would reject empty tokens anyway, but this avoids spurious socket events.
-export function devPause(): void { if (DEV_TOKEN) socket?.emit('dev:pause', DEV_TOKEN); }
-export function devResume(): void { if (DEV_TOKEN) socket?.emit('dev:resume', DEV_TOKEN); }
-export function devStep(): void { if (DEV_TOKEN) socket?.emit('dev:step', DEV_TOKEN); }
-export function devResetVitals(): void { if (DEV_TOKEN) socket?.emit('dev:reset-vitals', DEV_TOKEN); }
-export function devFreshStart(): void { if (DEV_TOKEN) socket?.emit('dev:fresh-start', DEV_TOKEN); }
-export function devRequestStatus(): void { if (DEV_TOKEN) socket?.emit('dev:status-request', DEV_TOKEN); }
+export function devPause(): void { socket?.emit('dev:pause', DEV_TOKEN); }
+export function devResume(): void { socket?.emit('dev:resume', DEV_TOKEN); }
+export function devStep(): void { socket?.emit('dev:step', DEV_TOKEN); }
+export function devResetVitals(): void { socket?.emit('dev:reset-vitals', DEV_TOKEN); }
+export function devFreshStart(): void { socket?.emit('dev:fresh-start', DEV_TOKEN); }
+export function devRequestStatus(): void { socket?.emit('dev:status-request', DEV_TOKEN); }
 export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void {
   socket?.on('dev:status', cb);
   return () => { socket?.off('dev:status', cb); };
@@ -396,5 +455,15 @@ export function unwatchThoughts(): void {
 /** Infra 6: Report viewport rectangle to server for spatial event filtering */
 export function sendViewportUpdate(x: number, y: number, width: number, height: number): void {
   socket?.emit('viewport:update', { x, y, width, height });
+}
+
+/** Werewolf: start the game */
+export function werewolfStart(): void {
+  socket?.emit('werewolf:start');
+}
+
+/** Werewolf: request a new game with same agents */
+export function werewolfPlayAgain(): void {
+  socket?.emit('werewolf:playAgain');
 }
 

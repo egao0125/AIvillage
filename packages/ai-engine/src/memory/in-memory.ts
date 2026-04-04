@@ -12,6 +12,16 @@ interface MemoryStore {
   getById(agentId: string, memoryId: string): Promise<Memory | undefined>;
 }
 
+/**
+ * HyDE (Hypothetical Document Embeddings) provider interface.
+ * When set on InMemoryStore, retrieve() generates a hypothetical answer
+ * to expand the query before TF-IDF matching. This closes the semantic gap
+ * without neural embeddings — a "free" 26%+ improvement per research benchmarks.
+ */
+export interface HyDEProvider {
+  complete(systemPrompt: string, userPrompt: string): Promise<string>;
+}
+
 export class InMemoryStore implements MemoryStore {
   // Hard cap per agent: prevents OOM in long-running simulations.
   // Evicts lowest-importance oldest memories when exceeded.
@@ -19,6 +29,12 @@ export class InMemoryStore implements MemoryStore {
 
   private memories: Map<string, Memory[]> = new Map();
   private embedders: Map<string, TFIDFEmbedder> = new Map();
+
+  /** Optional HyDE provider — when set, retrieve() expands queries with hypothetical answers */
+  public hydeProvider?: HyDEProvider;
+  /** Cache HyDE expansions to avoid redundant LLM calls for the same query */
+  private hydeCache: Map<string, { expanded: string; timestamp: number }> = new Map();
+  private static readonly HYDE_CACHE_TTL = 300_000; // 5 minutes
 
   private getAgentMemories(agentId: string): Memory[] {
     if (!this.memories.has(agentId)) {
@@ -57,16 +73,55 @@ export class InMemoryStore implements MemoryStore {
     memory.embedding = embedder.embed(memory.content);
   }
 
+  /**
+   * HyDE: expand a short query into a hypothetical answer document.
+   * The expanded text shares vocabulary with actual memories, improving TF-IDF recall.
+   */
+  private async hydeExpand(query: string): Promise<string> {
+    if (!this.hydeProvider) return query;
+
+    // Check cache first
+    const cacheKey = query.toLowerCase().trim();
+    const cached = this.hydeCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && (now - cached.timestamp) < InMemoryStore.HYDE_CACHE_TTL) {
+      return cached.expanded;
+    }
+
+    try {
+      const hypothetical = await this.hydeProvider.complete(
+        'You are a memory recall assistant. Given a query, write a short (2-3 sentence) hypothetical memory entry that would answer it. Use specific details, names, and actions. Do not include meta-commentary.',
+        `Query: "${query}"\n\nHypothetical memory:`,
+      );
+      // Combine original query with hypothetical for broader matching
+      const expanded = `${query} ${hypothetical.trim()}`;
+      this.hydeCache.set(cacheKey, { expanded, timestamp: now });
+
+      // Prune old cache entries
+      if (this.hydeCache.size > 100) {
+        for (const [k, v] of this.hydeCache) {
+          if (now - v.timestamp > InMemoryStore.HYDE_CACHE_TTL) this.hydeCache.delete(k);
+        }
+      }
+      return expanded;
+    } catch {
+      return query; // Fall back to original query on failure
+    }
+  }
+
   async retrieve(agentId: string, query: string, limit = 10): Promise<Memory[]> {
     const memories = this.getAgentMemories(agentId);
     if (memories.length === 0) return [];
 
-    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    // HyDE expansion: generate hypothetical answer to improve semantic matching
+    const expandedQuery = await this.hydeExpand(query);
+
+    const queryWords = expandedQuery.toLowerCase().split(/\s+/).filter(w => w.length > 0);
     const now = Date.now();
 
-    // Compute query embedding for semantic matching
+    // Compute query embedding for semantic matching (using expanded query)
     const embedder = this.getEmbedder(agentId);
-    const queryEmbedding = embedder.embed(query);
+    const queryEmbedding = embedder.embed(expandedQuery);
 
     const scored = memories.map(memory => {
       // Keyword matching score (0-1)

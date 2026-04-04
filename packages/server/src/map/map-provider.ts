@@ -40,7 +40,7 @@ const arenaFunctions: MapFunctions = {
 let active: MapFunctions = villageFunctions;
 
 export function setActiveMap(mapId: string): void {
-  if (mapId === 'battle_royale') {
+  if (mapId === 'battle_royale' || mapId === 'werewolf') {
     active = arenaFunctions;
     console.log('[MapProvider] Switched to arena map');
   } else {

@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { gameStore, type ChatEntry, type ThoughtEntry, type ActionLogEntry, type InspectTarget } from './GameStore';
 import type {
   Agent,
@@ -16,6 +16,7 @@ import type {
   Storyline,
   Recap,
   VillageMemoryEntry,
+  WerewolfGameOverPayload,
 } from '@ai-village/shared';
 import { synthesizeEvents } from '../ui/feed/eventSynthesis';
 import type { VillageEvent } from '../ui/feed/types';
@@ -59,6 +60,31 @@ export function useConnected(): boolean {
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().connected
   );
+}
+
+export function useIsAdmin(): boolean {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().isAdmin
+  );
+}
+
+const MOBILE_BREAKPOINT = 768;
+
+export function useIsMobile(): boolean {
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < MOBILE_BREAKPOINT
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    setIsMobile(mq.matches);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  return isMobile;
 }
 
 export function useBoard(): BoardPost[] {
@@ -217,5 +243,71 @@ export function useActionLog(agentId: string): ActionLogEntry[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().actionLog.get(agentId) ?? EMPTY_ACTION_LOG
+  );
+}
+
+export function useWerewolfGameOver(): WerewolfGameOverPayload | null {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfGameOver
+  );
+}
+
+export function useWerewolfGodMode(): boolean {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfGodMode
+  );
+}
+
+// Cached snapshot to avoid creating a new object every call (useSyncExternalStore
+// compares by reference — a fresh object each time causes infinite re-renders).
+let _phaseCache: { phase: string | null; round: number } = { phase: null, round: 0 };
+
+export function useWerewolfPhase(): { phase: string | null; round: number } {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => {
+      const s = gameStore.getState();
+      if (s.werewolfPhase !== _phaseCache.phase || s.werewolfRound !== _phaseCache.round) {
+        _phaseCache = { phase: s.werewolfPhase, round: s.werewolfRound };
+      }
+      return _phaseCache;
+    }
+  );
+}
+
+export function useWerewolfRoles(): Map<string, string> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfRoles
+  );
+}
+
+export function useWerewolfKills(): Array<{ agentId: string; saved: boolean; round: number }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfKills
+  );
+}
+
+export function useWerewolfVotes(): Array<{ round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfVotes
+  );
+}
+
+export function useWerewolfNightActions(): Array<{ round: number; type: string; agentId: string; targetId: string; result?: string }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfNightActions
+  );
+}
+
+export function useWerewolfMeetingTranscripts(): Array<{ round: number; transcript: Array<{ name: string; message: string }> }> {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().werewolfMeetingTranscripts
   );
 }

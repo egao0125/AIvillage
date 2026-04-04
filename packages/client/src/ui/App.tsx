@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import { createGameConfig } from '../game/config';
-import { FONTS } from './styles';
+import { COLORS, FONTS } from './styles';
 import { useTheme } from './ThemeContext';
 import { TimeDisplay } from './components/TimeDisplay';
 import { SetupPage } from './components/SetupPage';
@@ -9,12 +9,12 @@ import { MapSelectPage } from './components/MapSelectPage';
 import { SpectatorChat } from './components/SpectatorChat';
 import { NarrativeBar } from './components/NarrativeBar';
 import { RecapOverlay } from './components/RecapOverlay';
+import { WerewolfGameOver } from './components/WerewolfGameOver';
+import { WerewolfControls } from './components/WerewolfControls';
 import { DevPanel } from './components/DevPanel';
-import { connectSocket } from '../network/socket';
-import { useActiveRecap } from '../core/hooks';
-
-// Toggle dev tools — controlled by VITE_DEV_TOOLS_ENABLED env var (default: false)
-const DEV_TOOLS_ENABLED = import.meta.env.VITE_DEV_TOOLS_ENABLED === 'true';
+import { connectSocket, werewolfPlayAgain } from '../network/socket';
+import { useActiveRecap, useWerewolfGameOver, useIsAdmin } from '../core/hooks';
+import { gameStore } from '../core/GameStore';
 
 export const App: React.FC = () => {
   const { colors } = useTheme();
@@ -55,6 +55,8 @@ export const App: React.FC = () => {
   }, [entered]);
 
   const activeRecap = useActiveRecap();
+  const werewolfGameOver = useWerewolfGameOver();
+  const isAdmin = useIsAdmin();
 
   if (!selectedMap) {
     return <MapSelectPage onSelect={handleMapSelect} />;
@@ -75,10 +77,27 @@ export const App: React.FC = () => {
       <div style={{ position: 'absolute', top: 0, left: 0, zIndex: 10 }}>
         <TimeDisplay />
       </div>
+      {/* Werewolf controls — top-right overlay */}
+      {selectedMap === 'werewolf' && <WerewolfControls />}
       {/* Narrative bar — bottom overlay */}
       <NarrativeBar sidebarWidth={0} />
       {/* Recap overlay — full screen cinematic */}
       {activeRecap && <RecapOverlay />}
+      {/* Werewolf game over overlay */}
+      {werewolfGameOver && (
+        <WerewolfGameOver
+          payload={werewolfGameOver}
+          onPlayAgain={() => {
+            gameStore.setWerewolfGameOver(null);
+            werewolfPlayAgain();
+          }}
+          onBackToMenu={() => {
+            gameStore.setWerewolfGameOver(null);
+            setSelectedMap(null);
+            setEntered(false);
+          }}
+        />
+      )}
       {/* Spectator chat — floating bottom-left */}
       <SpectatorChat onOpenChange={setSpectatorChatOpen} />
       {/* Back to setup button */}
@@ -102,8 +121,8 @@ export const App: React.FC = () => {
       >
         + ADD AGENT
       </button>
-      {/* Dev tools — toggle via DEV_TOOLS_ENABLED */}
-      {DEV_TOOLS_ENABLED && <DevPanel />}
+      {/* Dev tools — visible only to admin users */}
+      {isAdmin && <DevPanel />}
     </div>
   );
 };

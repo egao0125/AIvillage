@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "pnpm *",
+      "node *",
+      "tsx *",
+      "npx *",
+      "git status",
+      "git diff *",
+      "git log *",
+      "git add *",
+      "git commit *",
+      "git branch *",
+      "git checkout *",
+      "git stash *",
+      "git merge *",
+      "make *",
+      "curl http://localhost:*",
+      "lsof -i *",
+      "kill *",
+      "ls *",
+      "mkdir *",
+      "cp *",
+      "mv *",
+      "cat *",
+      "head *",
+      "tail *",
+      "wc *",
+      "sort *",
+      "python3 *"
+    ],
+    "deny": [
+      "rm -rf *",
+      "git push --force *",
+      "git reset --hard *",
+      "cat .env",
+      "cat */.env",
+      "curl -X DELETE *",
+      "curl -X POST https://*"
+    ]
+  }
+}

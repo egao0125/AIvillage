@@ -1,7 +1,7 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig, buildWerewolfRules } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import type { MapConfig } from '@ai-village/shared';
 import { getAreaEntrance, setActiveMap } from '../map/map-provider.js';
@@ -22,6 +22,7 @@ import { RecapGenerator } from './recap-generator.js';
 import { LeaderElection } from '../cluster/leader-election.js';
 import { getRedis } from '../redis.js';
 import { SOUL_REWRITES, AGENTS_TO_REMOVE } from './soul-rewrite.js';
+import { WerewolfPhaseManager } from './werewolf/index.js';
 
 export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
@@ -54,6 +55,9 @@ export class SimulationEngine {
   private weeklySummaryGenerating: boolean = false;
   /** Shared RdsMemoryStore for agents loaded from persistence — held so cleanup() can be called on removeAgent() */
   private sharedMemoryStore: RdsMemoryStore | null = null;
+
+  /** Werewolf game mode — phase manager drives the night/day/vote cycle */
+  private werewolfManager: WerewolfPhaseManager | null = null;
 
   // Circuit breaker state for isDbHealthy() readiness probe.
   // Prevents log flooding (k8s calls every 10s) while still surfacing the first failure
@@ -138,6 +142,19 @@ export class SimulationEngine {
     this.mapConfig = getMapConfig(mapId);
     this.cachedGameRules = null;
     setActiveMap(mapId);
+
+    // 3b. Werewolf — instantiate or dispose phase manager
+    if (this.werewolfManager) {
+      this.werewolfManager.dispose();
+      this.werewolfManager = null;
+    }
+    if (this.mapConfig.systems?.werewolf) {
+      this.werewolfManager = new WerewolfPhaseManager(
+        this.bus, this.world, this.broadcaster,
+        this.controllers, this.cognitions, this.conversationManager,
+      );
+    }
+
     console.log(`[Engine] Map set to: ${this.mapConfig.name} (${this.mapConfig.id})`);
 
     // 4. Load new map's state from DB
@@ -158,8 +175,104 @@ export class SimulationEngine {
     return this.cachedGameRules;
   }
 
+  /**
+   * Per-agent game rules — werewolf map returns role-specific rules,
+   * other maps return the same shared rules for everyone.
+   */
+  private getGameRulesForAgent(agent: Agent): string {
+    if (this.mapConfig.systems?.werewolf && agent.werewolfRole) {
+      const fellowName = agent.fellowWolves?.length
+        ? this.world.getAgent(agent.fellowWolves[0])?.config.name
+        : undefined;
+      return buildWerewolfRules(agent.werewolfRole, fellowName, this.world.agents.size);
+    }
+    return this.getGameRules();
+  }
+
   getMapConfig(): MapConfig {
     return this.mapConfig;
+  }
+
+  getWerewolfManager(): WerewolfPhaseManager | null {
+    return this.werewolfManager;
+  }
+
+  /**
+   * Start a werewolf game with all currently alive agents.
+   * Only works when the active map has werewolf system enabled.
+   */
+  startWerewolfGame(): void {
+    if (!this.werewolfManager) {
+      console.warn('[Engine] Cannot start werewolf game — werewolf system not active');
+      return;
+    }
+    // Reset world clock to Day 1, 21:00 — first night starts immediately
+    this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
+    this.broadcaster.worldTime(this.world.time);
+
+    // Revive all agents (they may be dead from a previous game)
+    for (const agent of this.world.agents.values()) {
+      if (agent.alive === false) {
+        agent.alive = true;
+        agent.state = 'idle';
+        agent.werewolfRole = undefined;
+        agent.votingHistory = undefined;
+        agent.investigations = undefined;
+        agent.fellowWolves = undefined;
+        agent.lastGuarded = undefined;
+      }
+    }
+
+    const agentIds = Array.from(this.world.agents.values())
+      .filter(a => a.state !== 'away')
+      .map(a => a.id);
+    this.werewolfManager.startGame(agentIds);
+  }
+
+  /**
+   * Reset and restart a werewolf game (Play Again flow).
+   * Revives all agents, re-assigns roles, rebuilds cognition rules, starts fresh.
+   */
+  resetWerewolfGame(): void {
+    if (!this.werewolfManager || !this.mapConfig.systems?.werewolf) {
+      console.warn('[Engine] Cannot reset werewolf game — werewolf system not active');
+      return;
+    }
+
+    // 1. Reset all agents to alive
+    for (const agent of this.world.agents.values()) {
+      agent.alive = true;
+      agent.state = 'idle';
+      agent.werewolfRole = undefined;
+      agent.fellowWolves = undefined;
+      agent.investigations = undefined;
+      agent.lastGuarded = undefined;
+      agent.votingHistory = undefined;
+      this.world.updateAgentState(agent.id, 'active', '');
+    }
+
+    // 2. Create new WerewolfPhaseManager
+    this.werewolfManager.dispose();
+    this.werewolfManager = new WerewolfPhaseManager(
+      this.bus, this.world, this.broadcaster, this.controllers, this.cognitions, this.conversationManager!,
+    );
+    // Re-link controllers to new manager
+    for (const ctrl of this.controllers.values()) {
+      ctrl.werewolfManager = this.werewolfManager;
+    }
+
+    // 3. Reset world clock to Day 1, 21:00 — first night starts immediately
+    this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
+    this.broadcaster.worldTime(this.world.time);
+
+    // 4. Start fresh game (assigns roles, sets game rules, starts first night)
+    const agentIds = Array.from(this.world.agents.values()).map(a => a.id);
+    this.werewolfManager.startGame(agentIds);
+
+    // 5. Broadcast new game starting
+    this.broadcaster.werewolfNewGame();
+
+    console.log('[Engine] Werewolf game reset — new game started');
   }
 
   async initialize(): Promise<void> {
@@ -242,8 +355,9 @@ export class SimulationEngine {
     // --- Infra 1: Wire event bus subscriptions ---
     // Registration order = execution order within a tick.
 
-    // Midnight: reset counters, decay objects
+    // Midnight: reset counters, decay objects (skip for werewolf)
     this.bus.on('midnight', () => {
+      if (this.werewolfManager) return;
       this.world.resetDailyCounters();
       this.world.spoilFood();
       this.decayWorldObjects();
@@ -251,6 +365,17 @@ export class SimulationEngine {
 
     // Tick controllers — per-agent try-catch so one bad agent doesn't pause the sim
     this.bus.on('tick', (e) => {
+      // Werewolf phase manager ticks before controllers (controls sleep/wake/actions)
+      if (this.werewolfManager) {
+        // Don't tick anything when the werewolf game has ended
+        if (this.werewolfManager.phase === 'ended') return;
+        try {
+          this.werewolfManager.onTick(e.time);
+        } catch (err) {
+          console.error(`[Engine] werewolfManager.onTick() threw — skipping:`, (err as Error).message);
+        }
+      }
+
       for (const [agentId, controller] of this.controllers.entries()) {
         try {
           controller.tick(e.time);
@@ -262,14 +387,18 @@ export class SimulationEngine {
 
     // Hourly resource regeneration (Fix 1: wire resource depletion)
     this.bus.on('hour_changed', () => {
+      if (this.werewolfManager) return;
       const seasonIdx = Math.floor((this.world.time.day - 1) / 30) % 4;
       const seasonName = (['spring', 'summer', 'autumn', 'winter'] as const)[seasonIdx];
       const seasonDef = SEASONS[seasonName];
       this.world.regenerateResourcePoolsHourly(seasonDef.gatherMultipliers);
     });
 
-    // Perception
-    this.bus.on('perception_cycle', () => this.runPerception());
+    // Perception (skip for werewolf — agents use werewolf-specific situation prompts)
+    this.bus.on('perception_cycle', () => {
+      if (this.werewolfManager) return;
+      this.runPerception();
+    });
 
     // Proximity → conversations (single subscriber preserves ordering)
     this.bus.on('tick', () => {
@@ -406,6 +535,7 @@ export class SimulationEngine {
 
     // Board post reactions — each alive agent generates a 1-2 sentence comment
     this.bus.on('board_post_created', (e) => {
+      if (this.werewolfManager) return; // Skip for werewolf
       void this.generatePostReactions(e.post).catch((err: unknown) => {
         console.warn('[Engine] generatePostReactions failed:', (err as Error).message);
       });
@@ -413,6 +543,7 @@ export class SimulationEngine {
 
     // Nightly vote — at hour 21, vote on all pending proposals
     this.bus.on('hour_changed', (e) => {
+      if (this.werewolfManager) return; // Skip for werewolf
       if (e.hour === 21) {
         void this.resolveNightlyVotes().catch((err: unknown) => {
           console.warn('[Engine] resolveNightlyVotes failed:', (err as Error).message);
@@ -579,7 +710,7 @@ export class SimulationEngine {
         const llmProvider = this.getThrottledProvider(savedKey, effectiveModel);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = ctrlDataForWorldView?.worldViewParts;
-        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts, this.getGameRules());
+        const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts, this.getGameRulesForAgent(agent));
         // Reset MY EXPERIENCE to prevent stale worldView from previous simulation runs
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
         const freshParts = buildStartingWorldViewParts(spawnArea);
@@ -622,6 +753,7 @@ export class SimulationEngine {
         }
 
         controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
         this.controllers.set(agent.id, controller);
       }
 
@@ -832,8 +964,12 @@ export class SimulationEngine {
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey ?? '', effectiveModel);
     const startingParts = buildStartingWorldViewParts(spawnArea);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
+    // Wire HyDE provider for semantic query expansion (Phase 3 memory upgrade)
+    if (memoryStore instanceof InMemoryStore) {
+      memoryStore.hydeProvider = llmProvider;
+    }
     this.cognitions.set(id, cognition);
 
     // Broadcast spawn AFTER cognition is set so getSnapshot() can enrich with worldView
@@ -857,6 +993,7 @@ export class SimulationEngine {
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
     this.controllers.set(id, controller);
 
     console.log(
@@ -1003,7 +1140,7 @@ export class SimulationEngine {
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
     // Preserve worldViewParts from old cognition if available
     const oldCognition = this.cognitions.get(id);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -1024,6 +1161,7 @@ export class SimulationEngine {
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
     this.controllers.set(id, controller);
 
     // Set state to idle and place at plaza
@@ -1118,7 +1256,7 @@ export class SimulationEngine {
       Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
     ];
     const startingParts = buildStartingWorldViewParts(spawnArea);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(id, cognition);
 
@@ -1139,6 +1277,7 @@ export class SimulationEngine {
     controller.onDeath = (agentId, cause) => this.onControllerDeath(agentId, cause);
     controller.bus = this.bus;
     controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
     this.controllers.set(id, controller);
 
     // Seed fresh-start memories — MUST await so first decide() has grounding in RDS
@@ -1339,37 +1478,38 @@ export class SimulationEngine {
     }
 
     // --- Direct calls for subsystems with complex timing ---
+    // Skip AI Village systems when running werewolf
+    if (!this.werewolfManager) {
+      this.checkElections();
 
-    // Eavesdropping removed — conversations are private. Bystander notice handled at conversation end.
-    this.checkElections();
+      if (this.tickCount % 600 === 0) {
+        this.updateWeather();
+      }
 
-    if (this.tickCount % 600 === 0) {
-      this.updateWeather();
-    }
+      if (this.tickCount % 1440 === 0) {
+        this.checkSeasonAdvance();
+        this.weatherDamageBuildings();
+      }
 
-    if (this.tickCount % 1440 === 0) {
-      this.checkSeasonAdvance();
-      this.weatherDamageBuildings();
-    }
-
-    // Auto weekly summary — every 120 ticks (~2 game hours)
-    if (this.tickCount % 120 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
-      console.log(`[WeeklySummary] Triggering for Day ${time.day} (last: ${this.lastWeeklySummaryDay})`);
-      this.weeklySummaryGenerating = true;
-      void this.generateWeeklySummary().then(summary => {
-        if (summary) {
-          this.cachedWeeklySummary = summary;
-          this.lastWeeklySummaryDay = time.day;
-          this.io.emit('weekly-summary:ready', { summary });
-          console.log(`[WeeklySummary] Generated for Day ${time.day} (${summary.length} chars)`);
-        } else {
-          console.log(`[WeeklySummary] Returned null — no API key or empty response`);
-        }
-        this.weeklySummaryGenerating = false;
-      }).catch(err => {
-        console.error(`[WeeklySummary] Failed:`, err);
-        this.weeklySummaryGenerating = false;
-      });
+      // Auto weekly summary — every 120 ticks (~2 game hours)
+      if (this.tickCount % 120 === 0 && time.day >= 7 && time.day - this.lastWeeklySummaryDay >= 7 && !this.weeklySummaryGenerating) {
+        console.log(`[WeeklySummary] Triggering for Day ${time.day} (last: ${this.lastWeeklySummaryDay})`);
+        this.weeklySummaryGenerating = true;
+        void this.generateWeeklySummary().then(summary => {
+          if (summary) {
+            this.cachedWeeklySummary = summary;
+            this.lastWeeklySummaryDay = time.day;
+            this.io.emit('weekly-summary:ready', { summary });
+            console.log(`[WeeklySummary] Generated for Day ${time.day} (${summary.length} chars)`);
+          } else {
+            console.log(`[WeeklySummary] Returned null — no API key or empty response`);
+          }
+          this.weeklySummaryGenerating = false;
+        }).catch(err => {
+          console.error(`[WeeklySummary] Failed:`, err);
+          this.weeklySummaryGenerating = false;
+        });
+      }
     }
 
     // Periodic save every 300 ticks
@@ -1441,6 +1581,9 @@ export class SimulationEngine {
         const a1 = agents[i];
         const a2 = agents[j];
 
+        // Werewolf night: only wolf-wolf conversations allowed
+        if (this.werewolfManager?.shouldBlockConversation(a1.id, a2.id)) continue;
+
         // Check distance (within 3 tiles — close enough to visually see the connection)
         const dx = a1.position.x - a2.position.x;
         const dy = a1.position.y - a2.position.y;
@@ -1452,10 +1595,11 @@ export class SimulationEngine {
         if (a1.alive === false || a2.alive === false) continue;
         if (a1.state === 'away' || a2.state === 'away') continue;
 
-        // Check conversation pair cooldown (1800 ticks ≈ allows ~2 conversations per pair per day)
+        // Check conversation pair cooldown — werewolf uses 5 ticks (rapid discussion is the game)
+        const pairCooldown = this.werewolfManager ? 5 : 1800;
         const pairKey = [a1.id, a2.id].sort().join(':');
         const lastTick = this.lastConversationPair.get(pairKey);
-        if (lastTick !== undefined && (this.tickCount - lastTick) < 1800) continue;
+        if (lastTick !== undefined && (this.tickCount - lastTick) < pairCooldown) continue;
 
         // Check if both are available (not sleeping, conversing, or API exhausted)
         const c1 = this.controllers.get(a1.id);
@@ -1527,11 +1671,14 @@ export class SimulationEngine {
   }
 
   /**
-   * Notify nearby bystanders that a conversation happened (without revealing content).
-   * Called when a conversation ends — replaces the old per-tick eavesdropping loop.
+   * Notify nearby bystanders that a conversation happened.
+   * Werewolf mode: share summary content within 3 tiles (overhearing mechanic).
+   * Normal mode: vague awareness within 5 tiles.
    */
-  notifyConversationBystanders(conv: { participants: string[]; location: { x: number; y: number } }): void {
-    const nearbyAgents = this.world.getNearbyAgents(conv.location, 5);
+  notifyConversationBystanders(conv: { participants: string[]; location: { x: number; y: number }; summary?: string }): void {
+    const isWerewolf = !!this.werewolfManager;
+    const radius = isWerewolf ? 3 : 5;
+    const nearbyAgents = this.world.getNearbyAgents(conv.location, radius);
     for (const bystander of nearbyAgents) {
       if (conv.participants.includes(bystander.id)) continue;
       if (bystander.state === 'sleeping') continue;
@@ -1540,12 +1687,17 @@ export class SimulationEngine {
         .filter(Boolean).join(' and ');
       const cog = this.cognitions.get(bystander.id);
       if (cog) {
+        // Werewolf: share what was actually said (overhearing)
+        const content = isWerewolf && conv.summary
+          ? `I overheard ${participantNames} discussing: ${conv.summary}`
+          : `I noticed ${participantNames} talking nearby.`;
+        const importance = isWerewolf && conv.summary ? 6 : 3;
         void cog.addMemory({
           id: crypto.randomUUID(),
           agentId: bystander.id,
           type: 'observation',
-          content: `I noticed ${participantNames} talking nearby.`,
-          importance: 3,
+          content,
+          importance,
           timestamp: Date.now(),
           relatedAgentIds: conv.participants,
         }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (bystander):', (err as Error).message); });
@@ -1566,6 +1718,15 @@ export class SimulationEngine {
           console.log(
             `[Engine] Election for ${resolved.position} resolved — winner: ${winner?.config.name ?? 'none'}`,
           );
+          // Auto-populate village memory
+          if (winner) {
+            this.world.addVillageMemory({
+              content: `${winner.config.name} won the election for ${resolved.position}.`,
+              type: 'election',
+              day: this.world.time.day,
+              significance: 7,
+            });
+          }
         }
       }
     }
@@ -1681,6 +1842,9 @@ export class SimulationEngine {
    * Separated so both killAgent() and the controller onDeath callback can use it.
    */
   private handleDeathAftermath(agent: Agent, cause: string): void {
+    // Skip obituaries/artifacts for werewolf — deaths handled by phase manager
+    if (this.werewolfManager) return;
+
     const agentId = agent.id;
     const name = agent.config.name;
     const areaId = this.world.getAreaAt(agent.position)?.id;
@@ -2452,7 +2616,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
-    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRules());
+    const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRulesForAgent(agent));
     this.wireFourStreamMemory(cognition, agent, memoryStore);
     this.cognitions.set(agentId, cognition);
 
@@ -2595,7 +2759,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       }
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
       const startingParts = buildStartingWorldViewParts(spawnArea);
-      const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts, this.getGameRules());
+      const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
       this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
       this.cognitions.set(agent.id, cognition);
 
@@ -2631,6 +2795,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       controller.onDeath = (id, cause) => this.onControllerDeath(id, cause);
       controller.bus = this.bus;
       controller.decisionQueue = this.decisionQueue;
+    if (this.werewolfManager) controller.werewolfManager = this.werewolfManager;
       this.controllers.set(agent.id, controller);
 
       console.log(`[FreshStart] Agent ${agent.config.name} reset at ${spawnArea}`);

@@ -64,6 +64,7 @@ export class AgentController {
   private lastHungerConcernBand: number = 0;
   public lastOutcomeDescription: string = '';
   decisionQueue?: DecisionQueue;  // Infra 3: injected by engine
+  werewolfManager?: import('./werewolf/phase-manager.js').WerewolfPhaseManager;  // injected by engine when werewolf map active
   // Refactor v2: structured decision system
   public currentGoals: string[] = [];
   private decidingInProgress: boolean = false;
@@ -264,6 +265,15 @@ export class AgentController {
     // Dead agents don't tick
     if (this.agent.alive === false) return;
 
+    // Werewolf: enforce sleep for villagers during night phase
+    // This catches agents whose async LLM call completed after sleep was set
+    if (this.werewolfManager?.shouldAgentSleep(this.agent.id) && this.state !== 'sleeping') {
+      this.state = 'sleeping';
+      this.actionQueue = [];
+      this.world.updateAgentState(this.agent.id, 'sleeping', 'sleeping');
+      return;
+    }
+
     // Sync current time so LLM prompts are time-aware
     this.cognition.currentTime = { day: time.day, hour: time.hour };
 
@@ -349,8 +359,10 @@ export class AgentController {
 
       case 'moving': {
         // Move every 3 ticks so agents walk visibly instead of teleporting
+        // Werewolf night: active roles move at 3x speed (every tick) for urgency
+        const moveThreshold = (this.werewolfManager?.phase === 'night' && this.agent.werewolfRole && this.agent.werewolfRole !== 'villager') ? 1 : 3;
         this.moveTick++;
-        if (this.moveTick >= 3) {
+        if (this.moveTick >= moveThreshold) {
           this.moveTick = 0;
           this.advanceMovement();
         }
@@ -469,6 +481,36 @@ export class AgentController {
       minute: this.world.time.minute,
       totalMinutes: this.world.time.totalMinutes,
     });
+  }
+
+  /**
+   * Force-interrupt the agent's current activity and trigger an immediate decision.
+   * Used when a vote starts — agents must stop what they're doing and vote.
+   */
+  interruptForVote(): void {
+    if (this.agent.alive === false) return;
+    if (this.apiExhausted) return;
+
+    // Abort conversation if in one
+    if (this.state === 'conversing') {
+      this.state = 'idle';
+      this.conversationCooldown = 0;
+    }
+
+    // Clear all pending state
+    this.state = 'idle';
+    this.idleTimer = 0;
+    this.activityTimer = 0;
+    this.actionQueue = [];
+    this.postConversationPending = false;
+    this.postConvWaitTimer = 0;
+    this.windingDown = false;
+
+    // Trigger immediate decision — the vote prompt is in memory, situation will show vote phase
+    if (!this.decidingInProgress) {
+      this.lastTrigger = 'A VOTE has been called! You must cast your vote NOW.';
+      void this.decideAndAct();
+    }
   }
 
   async doPlan(time: GameTime): Promise<void> {
@@ -772,6 +814,9 @@ export class AgentController {
   }
 
   private tickVitals(): void {
+    // Skip vitals (hunger/starvation) when disabled by map config (e.g. werewolf)
+    if (!this.mapConfig.systems?.hunger) return;
+
     const v = this.agent.vitals;
     if (!v) return;
 
@@ -1130,10 +1175,14 @@ export class AgentController {
   }
 
   private shouldWake(time: GameTime): boolean {
+    // Werewolf: PhaseManager controls sleep/wake, not time
+    if (this.mapConfig.systems?.werewolf) return false;
     return time.hour === this.wakeHour && time.minute === 0;
   }
 
   private shouldSleep(time: GameTime): boolean {
+    // Werewolf: PhaseManager controls sleep/wake, not time
+    if (this.mapConfig.systems?.werewolf) return false;
     // Trigger once at exact sleep hour — sleepTriggered flag prevents re-firing
     return time.hour === this.sleepHour && time.minute === 0;
   }
@@ -1395,12 +1444,502 @@ export class AgentController {
   }
 
   // =====================================================================
+  // Werewolf: Phase-aware situation builder
+  // =====================================================================
+
+  private buildWerewolfSituation(trigger: string, recentOutcome?: string): AgentSituation {
+    const wm = this.werewolfManager!;
+    const phase = wm.phase;
+    const role = this.agent.werewolfRole;
+    const area = getAreaAt(this.agent.position);
+    const areaId = area?.id ?? 'plaza';
+
+    // Map werewolf action categories to AvailableAction categories
+    const catMap: Record<string, 'physical' | 'movement' | 'social' | 'rest' | 'creative'> = {
+      movement: 'movement', combat: 'physical', survival: 'physical', social: 'social', rest: 'rest',
+    };
+
+    // Get phase-filtered actions from the phase manager
+    const mapActions = wm.getActionsForAgent(this.agent.id);
+    const availableActions: AvailableAction[] = mapActions.map(a => ({
+      id: a.id,
+      label: a.label,
+      category: catMap[a.category ?? 'social'] ?? 'social',
+    }));
+
+    // Nearby agents (living, non-sleeping during day; all visible during night for active roles)
+    const nearby = this.world.getNearbyAgents(this.agent.position, 5)
+      .filter(a => a.id !== this.agent.id && a.alive !== false);
+    const nearbyForSituation = nearby.map(a => ({
+      name: a.config.name,
+      activity: a.state ?? 'idle',
+      id: a.id,
+    }));
+
+    // Build phase-specific situation text
+    let situationText = '';
+
+    if (phase === 'night') {
+      const nightPrompt = wm.getNightPrompt(this.agent.id);
+      situationText = nightPrompt ?? 'You are sleeping. Wait for dawn.';
+    } else if (phase === 'day' || phase === 'meeting') {
+      const dayPrompt = wm.getDayPrompt();
+      // Add private knowledge based on role
+      let privateKnowledge = '';
+      if (role === 'sheriff' && this.agent.investigations?.length) {
+        privateKnowledge = '\n\nYOUR INVESTIGATION RESULTS (PRIVATE):\n' +
+          this.agent.investigations.map(inv =>
+            `- Night ${inv.night}: ${inv.targetName} — ${inv.result === 'werewolf' ? 'WEREWOLF!' : 'NOT a werewolf'}`
+          ).join('\n');
+      } else if (role === 'healer' && this.agent.lastGuarded) {
+        const guardedAgent = this.world.getAgent(this.agent.lastGuarded);
+        privateKnowledge = `\n\nLast night you guarded: ${guardedAgent?.config.name ?? 'someone'}.`;
+      } else if (role === 'werewolf') {
+        privateKnowledge = '\n\nRemember: you are pretending to be a villager. Do not reveal your role.';
+      }
+
+      // Vote history
+      let voteHistory = '';
+      if (this.agent.votingHistory?.length) {
+        voteHistory = '\n\nYOUR PREVIOUS VOTES:\n' +
+          this.agent.votingHistory.map((v: { day: number; targetId: string; targetName: string }) => {
+            return `- Day ${v.day}: you voted to exile ${v.targetName}`;
+          }).join('\n');
+      }
+
+      situationText = dayPrompt + privateKnowledge + voteHistory;
+    } else if (phase === 'vote') {
+      // --- Alive agents list ---
+      const aliveList = wm.getAliveList();
+      const aliveBlock = aliveList.map(a => `- ${a.name}`).join('\n');
+
+      // --- Dossiers from FourStream for all alive agents ---
+      let dossiersBlock = '';
+      if (this.cognition.fourStream) {
+        const dossierLines: string[] = [];
+        for (const a of aliveList) {
+          if (a.id === this.agent.id) continue; // skip self
+          const dossier = this.cognition.fourStream.getDossier(a.id);
+          if (dossier) {
+            let line = `${a.name}: ${dossier.summary}`;
+            if (dossier.trust !== undefined) {
+              line += ` (trust: ${dossier.trust > 0 ? '+' : ''}${dossier.trust}/100)`;
+            }
+            dossierLines.push(line);
+          }
+        }
+        if (dossierLines.length > 0) {
+          dossiersBlock = '\nWHAT YOU KNOW ABOUT OTHERS:\n' + dossierLines.map(l => `- ${l}`).join('\n') + '\n';
+        }
+      }
+
+      // --- Private role knowledge ---
+      let privateKnowledge = '';
+      if (role === 'sheriff' && this.agent.investigations?.length) {
+        privateKnowledge = '\nYOUR INVESTIGATIONS:\n' +
+          this.agent.investigations.map((inv: { night: number; targetName: string; result: string }) =>
+            `- Night ${inv.night}: ${inv.targetName} — ${inv.result === 'werewolf' ? 'WEREWOLF!' : 'not a werewolf'}`
+          ).join('\n') + '\n';
+      } else if (role === 'werewolf') {
+        const fellowWolfNames = this.agent.fellowWolves?.map(
+          (wid: string) => this.world.getAgent(wid)?.config.name ?? wid,
+        ) ?? [];
+        if (fellowWolfNames.length > 0) {
+          privateKnowledge = `\nYou are a WEREWOLF. Your partner: ${fellowWolfNames.join(', ')}. Do NOT vote for your partner. Vote strategically to blend in.\n`;
+        } else {
+          privateKnowledge = '\nYou are a WEREWOLF. Vote strategically to blend in.\n';
+        }
+      } else if (role === 'healer') {
+        privateKnowledge = '\nYou are the healer. Losing an innocent villager weakens the village.\n';
+      }
+
+      // --- Own voting history ---
+      let ownVoteHistory = '';
+      if (this.agent.votingHistory?.length) {
+        ownVoteHistory = '\nYOUR PREVIOUS VOTES:\n' +
+          this.agent.votingHistory.map((v: { day: number; targetId: string; targetName: string }) => {
+            return `- Day ${v.day}: you voted to exile ${v.targetName}`;
+          }).join('\n') + '\n';
+      }
+
+      // --- Deaths so far ---
+      let deathsSummary = '';
+      const deaths = wm.getDeaths();
+      if (deaths.length > 0) {
+        deathsSummary = '\nDEATHS SO FAR:\n' +
+          deaths.map(d => `- ${d.name} (${d.night > 0 ? `night ${d.night}` : 'exiled'})`).join('\n') + '\n';
+      }
+
+      // --- Agent's beliefs ---
+      let beliefs = '';
+      if (this.cognition.fourStream) {
+        const topBeliefs = this.cognition.fourStream.getTopBeliefs(5);
+        const werewolfBeliefs = topBeliefs.filter(
+          (b: { content: string }) =>
+            b.content.toLowerCase().includes('werewolf') ||
+            b.content.toLowerCase().includes('suspicious') ||
+            b.content.toLowerCase().includes('trust') ||
+            b.content.toLowerCase().includes('innocent') ||
+            b.content.toLowerCase().includes('wolf'),
+        );
+        if (werewolfBeliefs.length > 0) {
+          beliefs = '\nYOUR BELIEFS:\n' +
+            werewolfBeliefs.map((b: { content: string }) => `- ${b.content}`).join('\n') + '\n';
+        }
+      }
+
+      const aliveCount = wm.getAliveCount();
+
+      situationText = `VOTE: Who should the village exile today?
+
+ALIVE AGENTS:
+${aliveBlock}
+${dossiersBlock}${privateKnowledge}${ownVoteHistory}${deathsSummary}${beliefs}
+${aliveCount} villagers remain alive.
+
+Name your target and explain your reasoning. The person with the most votes will be exiled.
+
+ACTIONS:
+- vote [name] — vote to exile that person
+
+State your vote and explain your reasoning.`;
+    }
+
+    // Build inventory as structured objects
+    const invGroups: Record<string, { name: string; type: string; qty: number }> = {};
+    for (const item of this.agent.inventory) {
+      const key = item.name;
+      if (!invGroups[key]) invGroups[key] = { name: item.name, type: item.type ?? 'item', qty: 0 };
+      invGroups[key].qty++;
+    }
+
+    return {
+      location: area?.name ?? 'plaza',
+      areaId,
+      time: { day: wm.round, hour: this.world.time.hour },
+      hoursUntilDark: 0,
+      hoursUntilSleep: 0,
+      season: 'spring',
+      vitals: this.agent.vitals ?? { hunger: 0, energy: 100, health: 100 },
+      inventory: Object.values(invGroups),
+      nearbyAgents: nearbyForSituation,
+      availableActions,
+      recentOutcome: recentOutcome ?? '',
+      trigger: trigger || situationText,
+    };
+  }
+
+  /**
+   * Normalize LLM-produced compound actionIds like "guard elena" → actionId="guard", targetName="Elena".
+   * Handles space-separated ("guard elena", "investigate marcus") and underscore ("attack_thomas").
+   * Does NOT touch "talk_name" — that's handled by the existing conversation dispatcher.
+   */
+  private normalizeWerewolfAction(decision: AgentDecision & { targetName?: string }): void {
+    if (!this.mapConfig.systems?.werewolf) return;
+    const raw = decision.actionId.trim().toLowerCase();
+
+    // Werewolf actions that take a target (space or underscore separated)
+    const TARGET_ACTIONS = ['attack', 'investigate', 'guard', 'vote', 'accuse', 'whisper', 'change_target'];
+
+    for (const action of TARGET_ACTIONS) {
+      // "guard elena" → guard + elena
+      if (raw.startsWith(action + ' ')) {
+        const targetRaw = raw.slice(action.length + 1).trim();
+        if (targetRaw) {
+          decision.actionId = action;
+          if (!decision.targetName) decision.targetName = targetRaw;
+          return;
+        }
+      }
+      // "investigate_marcus" → investigate + marcus (but not "change_target")
+      if (action !== 'change_target' && raw.startsWith(action + '_')) {
+        const targetRaw = raw.slice(action.length + 1).trim();
+        if (targetRaw) {
+          decision.actionId = action;
+          if (!decision.targetName) decision.targetName = targetRaw;
+          return;
+        }
+      }
+    }
+
+    // If actionId is a known target action but has no targetName, try to extract from reason text
+    if (TARGET_ACTIONS.includes(raw) && !decision.targetName && decision.reason) {
+      const extracted = this.extractTargetFromReason(decision.reason);
+      if (extracted) decision.targetName = extracted;
+    }
+
+    // Alias handling: "look" / "look_around" → "observe", "sleep" → "rest"
+    if (raw === 'look' || raw === 'look_around') {
+      decision.actionId = 'observe';
+      return;
+    }
+    if (raw === 'sleep') {
+      decision.actionId = 'rest';
+      return;
+    }
+    // "go_plaza", "go plaza", "move_to_plaza", "move_to plaza" → "move_to"
+    if (raw.startsWith('go_') || raw.startsWith('go ') || raw.startsWith('move to') || raw === 'move_to_plaza') {
+      decision.actionId = 'move_to';
+      return;
+    }
+  }
+
+  /**
+   * Extract a target agent name from the reason text when the LLM omits targetName.
+   * Matches known alive agent names mentioned in the first sentence.
+   */
+  private extractTargetFromReason(reason: string): string | null {
+    const firstSentence = reason.split(/[.!?]/)[0].toLowerCase();
+    // Try to find an alive agent name in the reason
+    for (const agent of this.world.agents.values()) {
+      if (agent.id === this.agent.id) continue;
+      if (agent.alive === false) continue;
+      const name = agent.config.name.toLowerCase();
+      if (firstSentence.includes(name)) {
+        return agent.config.name;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Handle werewolf-specific actions. Returns true if handled, false to fall through.
+   */
+  private executeWerewolfAction(actionId: string, decision: { actionId: string; targetName?: string; reason?: string }, shortReason: string): boolean {
+    const wm = this.werewolfManager!;
+
+    // Resolve target name → agent ID
+    const resolveTarget = (name?: string): string | null => {
+      if (!name) return null;
+      const lower = name.toLowerCase();
+      for (const agent of this.world.agents.values()) {
+        if (agent.config.name.toLowerCase() === lower && agent.alive !== false) return agent.id;
+      }
+      return null;
+    };
+
+    switch (actionId) {
+      case 'attack': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'attack', targetId);
+          this.broadcaster.agentAction(this.agent.id, `attacks — "${shortReason}"`);
+          this.state = 'performing';
+          this.activityTimer = 3;
+        }
+        return true;
+      }
+
+      case 'change_target': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'change_target', targetId);
+          this.broadcaster.agentAction(this.agent.id, `changes target — "${shortReason}"`);
+        }
+        return true;
+      }
+
+      case 'investigate': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'investigate', targetId);
+          this.broadcaster.agentAction(this.agent.id, `investigates — "${shortReason}"`);
+          this.state = 'performing';
+          this.activityTimer = 3;
+        }
+        return true;
+      }
+
+      case 'guard': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          wm.recordNightAction(this.agent.id, 'guard', targetId);
+          this.broadcaster.agentAction(this.agent.id, `guards — "${shortReason}"`);
+          this.state = 'performing';
+          this.activityTimer = 3;
+        }
+        return true;
+      }
+
+      case 'vote': {
+        if (wm.phase === 'vote') {
+          const targetId = resolveTarget(decision.targetName);
+          if (targetId) {
+            wm.recordVote(this.agent.id, targetId);
+            const targetName = decision.targetName ?? 'someone';
+            this.broadcaster.agentAction(this.agent.id, `votes to exile ${targetName} — "${shortReason}"`);
+          }
+        }
+        return true;
+      }
+
+      case 'accuse': {
+        // Public accusation — broadcast to all
+        this.broadcaster.agentAction(this.agent.id, `accuses ${decision.targetName ?? 'someone'} — "${shortReason}"`);
+        // Add memory to all nearby agents
+        const nearby = this.world.getNearbyAgents(this.agent.position, 8);
+        for (const a of nearby) {
+          if (a.id === this.agent.id || a.alive === false) continue;
+          const cog = this.agentCognitions?.get(a.id);
+          if (cog) {
+            void cog.addMemory({
+              id: crypto.randomUUID(),
+              agentId: a.id,
+              type: 'observation',
+              content: `${this.agent.config.name} publicly accused ${decision.targetName ?? 'someone'}: "${shortReason}"`,
+              importance: 8,
+              timestamp: Date.now(),
+              relatedAgentIds: [this.agent.id],
+            }).catch(() => {});
+          }
+        }
+        this.state = 'performing';
+        this.activityTimer = 3;
+        return true;
+      }
+
+      case 'defend':
+      case 'share_info':
+      case 'reveal_role': {
+        this.broadcaster.agentAction(this.agent.id, `${actionId.replace('_', ' ')} — "${shortReason}"`);
+        // Public statement — memory for nearby
+        const nearbyAgents = this.world.getNearbyAgents(this.agent.position, 8);
+        for (const a of nearbyAgents) {
+          if (a.id === this.agent.id || a.alive === false) continue;
+          const cog = this.agentCognitions?.get(a.id);
+          if (cog) {
+            void cog.addMemory({
+              id: crypto.randomUUID(),
+              agentId: a.id,
+              type: 'observation',
+              content: `${this.agent.config.name} ${actionId.replace('_', ' ')}: "${shortReason}"`,
+              importance: 7,
+              timestamp: Date.now(),
+              relatedAgentIds: [this.agent.id],
+            }).catch(() => {});
+          }
+        }
+        this.state = 'performing';
+        this.activityTimer = 3;
+        return true;
+      }
+
+      case 'whisper': {
+        // Private conversation — use existing conversation system
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          this.pendingConversationTarget = targetId;
+          this.pendingConversationPurpose = shortReason;
+          this.broadcaster.agentAction(this.agent.id, `whispers to ${decision.targetName}`);
+        }
+        return true;
+      }
+
+      case 'follow': {
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          const target = this.world.getAgent(targetId);
+          if (target) {
+            this.startMoveTo(target.position);
+            this.broadcaster.agentAction(this.agent.id, `follows ${decision.targetName}`);
+          }
+        }
+        return true;
+      }
+
+      case 'move_to': {
+        // Try to move to a named target agent or to the plaza area
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          const target = this.world.getAgent(targetId);
+          if (target) {
+            this.startMoveTo(target.position);
+          }
+        } else {
+          // Move to plaza as default gathering spot
+          const plaza = getAreaEntrance('plaza');
+          if (plaza) {
+            this.startMoveTo(plaza);
+          } else {
+            // Wander randomly nearby
+            const jitter = () => Math.floor(Math.random() * 6) - 3;
+            this.startMoveTo({ x: this.agent.position.x + jitter(), y: this.agent.position.y + jitter() });
+          }
+        }
+        return true;
+      }
+
+      case 'rest': {
+        this.state = 'performing';
+        this.activityTimer = 5;
+        this.world.updateAgentState(this.agent.id, 'idle', 'resting');
+        this.broadcaster.agentAction(this.agent.id, `rests — "${shortReason}"`);
+        return true;
+      }
+
+      case 'observe': {
+        // Watch who's nearby and talking — soft evidence for deduction
+        const nearbyAgents = this.world.getNearbyAgents(this.agent.position, 8)
+          .filter(a => a.id !== this.agent.id && a.alive !== false);
+        const observations = nearbyAgents.map(a => {
+          const isTalking = a.currentAction === 'conversing';
+          return `${a.config.name}${isTalking ? ' (talking)' : ''}`;
+        });
+        const obsText = observations.length > 0
+          ? `You observe nearby: ${observations.join(', ')}.`
+          : 'You look around but no one is nearby.';
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'observation',
+          content: obsText,
+          importance: 5,
+          timestamp: Date.now(),
+          relatedAgentIds: nearbyAgents.map(a => a.id),
+        }).catch(() => {});
+        this.state = 'performing';
+        this.activityTimer = 3;
+        this.world.updateAgentState(this.agent.id, 'active', 'observing');
+        this.broadcaster.agentAction(this.agent.id, 'observes surroundings');
+        return true;
+      }
+
+      case 'think': {
+        // Reflect on evidence — triggers belief reconsideration on next decide cycle
+        void this.cognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: this.agent.id,
+          type: 'observation',
+          content: `You take a moment to think carefully about everything you know. Who has been acting suspicious? What patterns have you noticed?`,
+          importance: 4,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+        }).catch(() => {});
+        this.state = 'performing';
+        this.activityTimer = 5;
+        this.world.updateAgentState(this.agent.id, 'active', 'thinking');
+        this.broadcaster.agentAction(this.agent.id, 'reflects on the evidence');
+        return true;
+      }
+
+      default:
+        // Not a werewolf-specific action — fall through to standard handler
+        return false;
+    }
+  }
+
+  // =====================================================================
   // Refactor v2: Structured Decision System
   // =====================================================================
 
   /** Surface unresolved interpersonal dynamics for the decide prompt */
   /** Step 3: Build the full situation object for the LLM decide() call */
   private buildSituation(trigger: string, recentOutcome?: string): AgentSituation {
+    // Werewolf map: phase-aware situation builder
+    if (this.mapConfig.systems?.werewolf && this.werewolfManager) {
+      return this.buildWerewolfSituation(trigger, recentOutcome);
+    }
+
     const area = getAreaAt(this.agent.position);
     const areaId = area?.id ?? 'plaza';
     const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
@@ -1754,7 +2293,7 @@ export class AgentController {
           .filter(([, score]) => score !== 0)
           .map(([id, score]) => ({ id, score }));
       })(),
-      villageHistory: this.world.getTopVillageMemory(5) || undefined,
+      villageHistory: this.world.getTopVillageMemory(8) || undefined,
     };
   }
 
@@ -2008,11 +2547,20 @@ export class AgentController {
 
   /** Step 5: Execute a structured decision — dispatch to game systems */
   private async executeDecision(decision: AgentDecision, situation: AgentSituation): Promise<void> {
+    // --- Normalize compound actionIds (LLM often produces "guard elena" instead of actionId="guard" + targetName="elena") ---
+    this.normalizeWerewolfAction(decision);
+
     const actionId = decision.actionId;
     // Truncated reason for action broadcasts — "action — reason"
     const shortReason = decision.reason?.length > 80
       ? this.truncateAtSentence(decision.reason, 80)
       : (decision.reason || '');
+
+    // --- Werewolf Actions ---
+    if (this.mapConfig.systems?.werewolf && this.werewolfManager) {
+      const handled = this.executeWerewolfAction(actionId, decision, shortReason);
+      if (handled) return;
+    }
 
     // --- Gather ---
     if (actionId.startsWith('gather_')) {
@@ -2915,10 +3463,10 @@ export class AgentController {
 
         this.broadcaster.institutionUpdate(group);
 
-        // Village collective memory — alliance formed
+        // Village collective memory — institution founded
         this.world.addVillageMemory({
           content: `${this.agent.config.name} and ${target.config.name} founded "${groupName}".`,
-          type: 'alliance',
+          type: 'institution',
           day: this.world.time.day,
           significance: 6,
         });

@@ -81,6 +81,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private sprite: Phaser.GameObjects.Sprite | Phaser.GameObjects.Image;
   private nameLabel: Phaser.GameObjects.Text;
   private actionLabel: Phaser.GameObjects.Text;
+  private roleLabel: Phaser.GameObjects.Text | null = null;
   private speechBubble: SpeechBubble;
   private thoughtBubble: ThoughtBubble;
   private selectionRing: Phaser.GameObjects.Graphics;
@@ -213,12 +214,15 @@ export class AgentSprite extends Phaser.GameObjects.Container {
 
   /** Returns standalone UI objects (labels) that need camera registration. */
   getUIObjects(): Phaser.GameObjects.GameObject[] {
-    return [this.nameLabel, this.actionLabel];
+    const objs: Phaser.GameObjects.GameObject[] = [this.nameLabel, this.actionLabel];
+    if (this.roleLabel) objs.push(this.roleLabel);
+    return objs;
   }
 
   destroy(fromScene?: boolean): void {
     this.nameLabel.destroy();
     this.actionLabel.destroy();
+    if (this.roleLabel) this.roleLabel.destroy();
     super.destroy(fromScene);
   }
 
@@ -362,6 +366,52 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     }
   }
 
+  private static readonly ROLE_COLORS: Record<string, string> = {
+    werewolf: '#ef4444',
+    sheriff: '#fbbf24',
+    healer: '#4ade80',
+    villager: '#9ca3af',
+  };
+
+  setRole(role: string | null, visible: boolean): void {
+    if (!visible || !role) {
+      if (this.roleLabel) {
+        this.roleLabel.setVisible(false);
+      }
+      return;
+    }
+    const color = AgentSprite.ROLE_COLORS[role] ?? '#9ca3af';
+    if (!this.roleLabel) {
+      this.roleLabel = this.scene.add.text(this.x, this.y - 28, '', {
+        fontSize: '5px',
+        fontFamily: '"Press Start 2P", monospace',
+        color,
+        stroke: '#000000',
+        strokeThickness: 2,
+        resolution: 2,
+      });
+      this.roleLabel.setOrigin(0.5, 0.5);
+      this.roleLabel.setDepth(9000);
+    }
+    this.roleLabel.setText(role.toUpperCase());
+    this.roleLabel.setColor(color);
+    this.roleLabel.setVisible(true);
+    this.labelsDirty = true;
+  }
+
+  setDead(dead: boolean): void {
+    if (dead) {
+      this.setAlpha(0.3);
+      this.nameLabel.setColor('#666666');
+      this.actionLabel.setText('');
+      this.moodRing.setVisible(false);
+    } else {
+      this.setAlpha(1);
+      this.nameLabel.setColor('#222222');
+      this.moodRing.setVisible(true);
+    }
+  }
+
   /** Play sleep animation — uses death animation to show lying down, then pulses. */
   sleep(): void {
     if (this.isSleeping) return;
@@ -440,6 +490,9 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private syncLabels(): void {
     this.nameLabel.setPosition(this.x, this.y - 45);
     this.actionLabel.setPosition(this.x, this.y - 36);
+    if (this.roleLabel) {
+      this.roleLabel.setPosition(this.x, this.y - 28);
+    }
   }
 
   /** Current tile position (for wall occlusion checks by the scene). */

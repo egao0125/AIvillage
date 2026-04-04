@@ -8,7 +8,8 @@ export const MAP_WIDTH = 68;
 export const MAP_HEIGHT = 45;
 
 export function createGameConfig(parent: string, activeMap?: string): Phaser.Types.Core.GameConfig {
-  const bgColor = activeMap === 'battle_royale' ? '#1B3A4B' : '#f0ede4';
+  const isArena = activeMap === 'battle_royale' || activeMap === 'werewolf';
+  const bgColor = isArena ? '#1B3A4B' : '#f0ede4';
 
   return {
     type: Phaser.AUTO,

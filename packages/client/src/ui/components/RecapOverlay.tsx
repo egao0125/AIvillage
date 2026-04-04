@@ -1,5 +1,5 @@
 import React from 'react';
-import { useActiveRecap, useAgents } from '../../core/hooks';
+import { useActiveRecap, useAgents, useIsMobile } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 import { nameToColor, hexToString } from '../../utils/color';
 import { FONTS } from '../styles';
@@ -7,6 +7,7 @@ import { FONTS } from '../styles';
 export const RecapOverlay: React.FC = () => {
   const recap = useActiveRecap();
   const agents = useAgents();
+  const isMobile = useIsMobile();
 
   if (!recap) return null;
 
@@ -64,6 +65,7 @@ export const RecapOverlay: React.FC = () => {
 
   return (
     <div
+      onClick={dismiss}
       style={{
         position: 'fixed',
         inset: 0,
@@ -73,15 +75,20 @@ export const RecapOverlay: React.FC = () => {
         alignItems: 'center',
         justifyContent: 'center',
         animation: 'fadeIn 1s ease-out',
+        cursor: 'pointer',
+        pointerEvents: 'auto',
+        overflowY: 'auto',
       }}
     >
       <div
+        onClick={(e) => e.stopPropagation()}
         style={{
           maxWidth: 650,
-          width: '90%',
-          maxHeight: '85vh',
+          width: isMobile ? '100%' : '90%',
+          maxHeight: '90vh',
           overflowY: 'auto',
-          padding: '40px',
+          padding: isMobile ? '20px 16px' : '40px',
+          cursor: 'default',
         }}
       >
         {/* Title */}

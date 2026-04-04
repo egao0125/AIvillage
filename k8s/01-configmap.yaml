@@ -21,3 +21,5 @@ data:
   COGNITO_USER_POOL_ID: "us-east-1_LSh6e5TIf"
   # Replace with: terraform output cognito_client_id
   COGNITO_CLIENT_ID: "4b825c3un7ce5mcfdr9qvfqget"
+  # Comma-separated list of admin emails — grants dev panel + simulation control.
+  ADMIN_EMAILS: "ozawaegao@gmail.com"

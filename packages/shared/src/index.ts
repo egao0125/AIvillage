@@ -96,6 +96,7 @@ export interface Agent {
   dossiers?: RelationshipDossier[];
   activeConcerns?: ActiveConcern[];
   beliefs?: { content: string; timestamp: number }[];
+  learnedStrategies?: { content: string; timestamp: number }[];
 
   // --- Strategy Tracking ---
   strategyHistory?: StrategySnapshot[];
@@ -103,6 +104,13 @@ export interface Agent {
   // --- Commitment System ---
   commitments?: Commitment[];
   archivedCommitments?: Commitment[];
+
+  // --- Werewolf Game Mode ---
+  werewolfRole?: 'werewolf' | 'sheriff' | 'healer' | 'villager';
+  fellowWolves?: string[];
+  investigations?: { targetId: string; targetName: string; result: 'werewolf' | 'not_werewolf'; night: number }[];
+  lastGuarded?: string;
+  votingHistory?: { day: number; targetId: string; targetName: string }[];
 }
 
 // --- Strategy Tracking ---
@@ -137,10 +145,10 @@ export interface Commitment {
 }
 
 // --- Village Memory ---
-// Collective history shared by all agents — deaths, rules, betrayals, alliances.
+// Collective history shared by all agents — deaths, rules, betrayals, alliances, institutions, elections, discoveries.
 export interface VillageMemoryEntry {
   content: string;
-  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath';
+  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath' | 'institution' | 'election' | 'technology' | 'building';
   day: number;
   significance: number; // 1-10
 }
@@ -595,7 +603,36 @@ export type ServerEvent =
   | { type: "building:update"; building: Building }
   | { type: "technology:discovered"; technology: Technology }
   | { type: "world_object:created"; worldObject: WorldObject }
-  | { type: "world_object:modified"; worldObject: WorldObject };
+  | { type: "world_object:modified"; worldObject: WorldObject }
+  | { type: "werewolf:phase"; phase: string; round: number }
+  | { type: "werewolf:kill"; agentId: string; saved: boolean }
+  | { type: "werewolf:vote"; exiled: string | null; role: string | null }
+  | { type: "werewolf:reveal"; agentId: string; role: string }
+  | { type: "werewolf:end"; winner: 'villagers' | 'werewolves' }
+  | { type: "werewolf:gameOver"; payload: WerewolfGameOverPayload };
+
+export interface WerewolfGameOverPayload {
+  winner: 'villagers' | 'werewolves';
+  roles: {
+    agentId: string;
+    name: string;
+    role: 'werewolf' | 'sheriff' | 'healer' | 'villager';
+    alive: boolean;
+  }[];
+  timeline: {
+    day: number;
+    phase: 'night' | 'dawn' | 'day' | 'meeting' | 'vote';
+    event: string;
+    agentIds?: string[];
+  }[];
+  stats: {
+    totalDays: number;
+    totalKills: number;
+    healerSaves: number;
+    correctExiles: number;
+    wrongExiles: number;
+  };
+}
 
 export type ClientEvent =
   | { type: "viewport:update"; bounds: { x: number; y: number; width: number; height: number } }

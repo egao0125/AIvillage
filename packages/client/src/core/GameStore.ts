@@ -19,6 +19,7 @@ import type {
   Recap,
   SocialLedgerEntry,
   VillageMemoryEntry,
+  WerewolfGameOverPayload,
 } from '@ai-village/shared';
 
 export interface ActionLogEntry {
@@ -52,6 +53,16 @@ interface GameState {
   actionLog: Map<string, ActionLogEntry[]>;
   activeMode: 'watch' | 'analyze';
   inspectTarget: InspectTarget | null;
+  werewolfGameOver: WerewolfGameOverPayload | null;
+  werewolfGodMode: boolean;
+  werewolfPhase: string | null;
+  werewolfRound: number;
+  werewolfRoles: Map<string, string>;
+  werewolfKills: Array<{ agentId: string; saved: boolean; round: number }>;
+  werewolfVotes: Array<{ round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }>;
+  werewolfNightActions: Array<{ round: number; type: string; agentId: string; targetId: string; result?: string }>;
+  werewolfMeetingTranscripts: Array<{ round: number; transcript: Array<{ name: string; message: string }> }>;
+  isAdmin: boolean;
 }
 
 export interface InspectTarget {
@@ -68,6 +79,8 @@ export interface ChatEntry {
   message: string;
   timestamp: number;
   conversationId: string;
+  /** Werewolf phase when this message was sent (e.g. 'meeting', 'day') */
+  phase?: string;
 }
 
 export interface ThoughtEntry {
@@ -104,6 +117,16 @@ class GameStore {
     actionLog: new Map(),
     activeMode: 'watch',
     inspectTarget: null,
+    werewolfGameOver: null,
+    werewolfGodMode: false,
+    werewolfPhase: null,
+    werewolfRound: 0,
+    werewolfRoles: new Map(),
+    werewolfKills: [],
+    werewolfVotes: [],
+    werewolfNightActions: [],
+    werewolfMeetingTranscripts: [],
+    isAdmin: false,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -192,6 +215,11 @@ class GameStore {
 
   setConnected(connected: boolean): void {
     this.state = { ...this.state, connected };
+    this.notify();
+  }
+
+  setAdmin(isAdmin: boolean): void {
+    this.state = { ...this.state, isAdmin };
     this.notify();
   }
 
@@ -599,6 +627,63 @@ class GameStore {
 
   setVillageMemory(villageMemory: VillageMemoryEntry[]): void {
     this.state = { ...this.state, villageMemory };
+    this.notify();
+  }
+
+  setWerewolfGameOver(payload: WerewolfGameOverPayload | null): void {
+    this.state = { ...this.state, werewolfGameOver: payload };
+    this.notify();
+  }
+
+  toggleWerewolfGodMode(): void {
+    this.state = { ...this.state, werewolfGodMode: !this.state.werewolfGodMode };
+    this.notify();
+  }
+
+  setWerewolfPhase(phase: string | null, round: number): void {
+    this.state = { ...this.state, werewolfPhase: phase, werewolfRound: round };
+    this.notify();
+  }
+
+  setWerewolfRole(agentId: string, role: string): void {
+    const roles = new Map(this.state.werewolfRoles);
+    roles.set(agentId, role);
+    this.state = { ...this.state, werewolfRoles: roles };
+    this.notify();
+  }
+
+  clearWerewolfState(): void {
+    this.state = {
+      ...this.state,
+      werewolfPhase: null,
+      werewolfRound: 0,
+      werewolfRoles: new Map(),
+      werewolfGameOver: null,
+      werewolfKills: [],
+      werewolfVotes: [],
+      werewolfNightActions: [],
+      werewolfMeetingTranscripts: [],
+    };
+    this.notify();
+  }
+
+  addWerewolfKill(kill: { agentId: string; saved: boolean; round: number }): void {
+    this.state = { ...this.state, werewolfKills: [...this.state.werewolfKills, kill] };
+    this.notify();
+  }
+
+  addWerewolfVote(vote: { round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }): void {
+    this.state = { ...this.state, werewolfVotes: [...this.state.werewolfVotes, vote] };
+    this.notify();
+  }
+
+  addWerewolfNightAction(action: { round: number; type: string; agentId: string; targetId: string; result?: string }): void {
+    this.state = { ...this.state, werewolfNightActions: [...this.state.werewolfNightActions, action] };
+    this.notify();
+  }
+
+  addWerewolfMeetingTranscript(entry: { round: number; transcript: Array<{ name: string; message: string }> }): void {
+    this.state = { ...this.state, werewolfMeetingTranscripts: [...this.state.werewolfMeetingTranscripts, entry] };
     this.notify();
   }
 }
