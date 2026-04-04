@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface MapDef {
   id: string;
@@ -37,6 +38,7 @@ interface Props {
 }
 
 export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
+  const { colors } = useTheme();
   const [selected, setSelected] = useState<string | null>(null);
   const starsRef = useRef<HTMLDivElement>(null);
 
@@ -70,7 +72,7 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
     <div
       style={{
         background: '#f5f5f0',
-        color: COLORS.text,
+        color: colors.text,
         minHeight: '100vh',
         display: 'flex',
         flexDirection: 'column',
@@ -91,10 +93,10 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
 
       {/* Title */}
       <div style={{ textAlign: 'center', marginBottom: 48, animation: 'slideUp .5s ease-out' }}>
-        <h1 style={{ fontFamily: FONTS.pixel, fontSize: 14, color: COLORS.accent, letterSpacing: 6, margin: 0 }}>
+        <h1 style={{ fontFamily: FONTS.pixel, fontSize: 14, color: colors.accent, letterSpacing: 6, margin: 0 }}>
           AI VILLAGE
         </h1>
-        <p style={{ fontFamily: FONTS.pixel, fontSize: 7, color: COLORS.textDim, marginTop: 12, letterSpacing: 2 }}>
+        <p style={{ fontFamily: FONTS.pixel, fontSize: 7, color: colors.textDim, marginTop: 12, letterSpacing: 2 }}>
           CHOOSE YOUR WORLD
         </p>
       </div>
@@ -117,8 +119,8 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
               key={map.id}
               onClick={() => !disabled && setSelected(map.id)}
               style={{
-                background: COLORS.bg,
-                border: `1px solid ${isSelected ? COLORS.accent : COLORS.border}`,
+                background: colors.bg,
+                border: `1px solid ${isSelected ? colors.accent : colors.border}`,
                 borderRadius: 8,
                 padding: '28px 24px',
                 cursor: disabled ? 'default' : 'pointer',
@@ -144,8 +146,8 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
               }}>
                 {map.status === 'live' ? (
                   <>
-                    <span style={{ width: 4, height: 4, borderRadius: '50%', background: COLORS.accent, display: 'inline-block' }} />
-                    <span style={{ color: COLORS.accent }}>LIVE</span>
+                    <span style={{ width: 4, height: 4, borderRadius: '50%', background: colors.accent, display: 'inline-block' }} />
+                    <span style={{ color: colors.accent }}>LIVE</span>
                   </>
                 ) : (
                   <span style={{
@@ -163,7 +165,7 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
               <h2 style={{
                 fontFamily: FONTS.pixel,
                 fontSize: 10,
-                color: disabled ? '#555577' : COLORS.text,
+                color: disabled ? '#555577' : colors.text,
                 letterSpacing: 2,
                 marginBottom: 12,
                 margin: 0,
@@ -175,7 +177,7 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
               {/* Description */}
               <p style={{
                 fontSize: 13,
-                color: disabled ? '#555577' : COLORS.textDim,
+                color: disabled ? '#555577' : colors.textDim,
                 lineHeight: 1.6,
                 marginBottom: 16,
                 marginTop: 12,
@@ -189,7 +191,7 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
                 gap: 16,
                 fontFamily: FONTS.pixel,
                 fontSize: 6,
-                color: disabled ? '#555577' : COLORS.textDim,
+                color: disabled ? '#555577' : colors.textDim,
                 marginBottom: 12,
               }}>
                 <span>{map.players}</span>
@@ -204,8 +206,8 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
                     style={{
                       fontFamily: FONTS.pixel,
                       fontSize: 5,
-                      color: disabled ? '#555577' : COLORS.accent,
-                      border: `1px solid ${disabled ? '#3a3a5a' : COLORS.accentDim}`,
+                      color: disabled ? '#555577' : colors.accent,
+                      border: `1px solid ${disabled ? '#3a3a5a' : colors.accentDim}`,
                       borderRadius: 3,
                       padding: '2px 8px',
                       letterSpacing: 1,
@@ -224,7 +226,7 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
                   left: 0,
                   right: 0,
                   height: 2,
-                  background: COLORS.accent,
+                  background: colors.accent,
                 }} />
               )}
             </div>
@@ -241,9 +243,9 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
             padding: '12px 48px',
             fontFamily: FONTS.pixel,
             fontSize: 9,
-            color: selected ? COLORS.accent : '#555577',
+            color: selected ? colors.accent : '#555577',
             background: 'transparent',
-            border: `2px solid ${selected ? COLORS.accent : '#555577'}`,
+            border: `2px solid ${selected ? colors.accent : '#555577'}`,
             borderRadius: 4,
             cursor: selected ? 'pointer' : 'not-allowed',
             letterSpacing: 4,

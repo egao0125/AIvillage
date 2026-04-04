@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS, LIGHT_COLORS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { useSocialGraph } from './useSocialGraph';
 import { useForceLayout } from './useForceLayout';
 import { useMapLayout } from './useMapLayout';
@@ -19,9 +20,9 @@ class SocialGraphErrorBoundary extends React.Component<
   render() {
     if (this.state.error) {
       return (
-        <div style={{ position: 'absolute', inset: 0, background: COLORS.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
-          <div style={{ color: COLORS.warning, fontFamily: FONTS.pixel, fontSize: 12 }}>SOCIAL VIEW ERROR</div>
-          <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 12, maxWidth: 500, textAlign: 'center' }}>{this.state.error.message}</div>
+        <div style={{ position: 'absolute', inset: 0, background: LIGHT_COLORS.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+          <div style={{ color: LIGHT_COLORS.warning, fontFamily: FONTS.pixel, fontSize: 12 }}>SOCIAL VIEW ERROR</div>
+          <div style={{ color: LIGHT_COLORS.textDim, fontFamily: FONTS.body, fontSize: 12, maxWidth: 500, textAlign: 'center' }}>{this.state.error.message}</div>
         </div>
       );
     }
@@ -36,6 +37,7 @@ export const SocialGraph: React.FC = () => (
 );
 
 const SocialGraphInner: React.FC = () => {
+  const { colors } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [layout, setLayout] = useState<LayoutMode>('force');
@@ -127,7 +129,7 @@ const SocialGraphInner: React.FC = () => {
         position: 'relative',
         width: '100%',
         height: '100%',
-        background: COLORS.bg,
+        background: colors.bg,
         display: 'flex',
         flexDirection: 'column',
       }}
@@ -209,10 +211,10 @@ const SocialGraphInner: React.FC = () => {
             transform: 'translate(-50%, -50%)',
             textAlign: 'center',
           }}>
-            <div style={{ color: COLORS.textDim, fontFamily: FONTS.pixel, fontSize: 12, letterSpacing: 1 }}>
+            <div style={{ color: colors.textDim, fontFamily: FONTS.pixel, fontSize: 12, letterSpacing: 1 }}>
               NO AGENTS
             </div>
-            <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 12, marginTop: 8 }}>
+            <div style={{ color: colors.textDim, fontFamily: FONTS.body, fontSize: 12, marginTop: 8 }}>
               Add agents to the village to see social dynamics.
             </div>
           </div>
@@ -225,11 +227,11 @@ const SocialGraphInner: React.FC = () => {
             transform: 'translateX(-50%)',
             textAlign: 'center',
             padding: '8px 16px',
-            background: COLORS.bgCard,
+            background: colors.bgCard,
             borderRadius: 6,
-            border: `1px solid ${COLORS.border}`,
+            border: `1px solid ${colors.border}`,
           }}>
-            <div style={{ color: COLORS.textDim, fontFamily: FONTS.body, fontSize: 11 }}>
+            <div style={{ color: colors.textDim, fontFamily: FONTS.body, fontSize: 11 }}>
               No connections yet — agents need to interact before relationships appear.
             </div>
           </div>
@@ -244,10 +246,10 @@ const SocialGraphInner: React.FC = () => {
               top: 12,
               right: hasPanel ? 362 : 12,
               padding: '4px 10px',
-              background: COLORS.bgCard,
-              border: `1px solid ${COLORS.border}`,
+              background: colors.bgCard,
+              border: `1px solid ${colors.border}`,
               borderRadius: 4,
-              color: COLORS.textDim,
+              color: colors.textDim,
               cursor: 'pointer',
               fontFamily: FONTS.pixel,
               fontSize: 8,
@@ -266,25 +268,25 @@ const SocialGraphInner: React.FC = () => {
             bottom: 16,
             right: hasPanel ? 366 : 16,
             padding: '10px 14px',
-            background: `${COLORS.bgCard}ee`,
-            border: `1px solid ${COLORS.border}`,
+            background: `${colors.bgCard}ee`,
+            border: `1px solid ${colors.border}`,
             borderRadius: 6,
             fontFamily: FONTS.body,
             fontSize: 10,
-            color: COLORS.textDim,
+            color: colors.textDim,
             lineHeight: 1.8,
             zIndex: 2,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <span style={{ fontFamily: FONTS.pixel, fontSize: 8, letterSpacing: 1, color: COLORS.text }}>LEGEND</span>
+              <span style={{ fontFamily: FONTS.pixel, fontSize: 8, letterSpacing: 1, color: colors.text }}>LEGEND</span>
               <span onClick={() => setLegendVisible(false)} style={{ cursor: 'pointer', fontSize: 12, lineHeight: 1 }}>&times;</span>
             </div>
-            <div><span style={{ color: COLORS.text }}>---</span> thick line = many interactions</div>
+            <div><span style={{ color: colors.text }}>---</span> thick line = many interactions</div>
             <div><span style={{ color: 'hsl(140, 75%, 50%)' }}>---</span> green = trust &nbsp; <span style={{ color: 'hsl(0, 70%, 45%)' }}>---</span> red = distrust</div>
             <div><span style={{ color: '#ff4444' }}>{'\u25cf'}</span> red pulse = conflict / disagreement</div>
             <div><span style={{ color: '#a78bfa' }}>{'\u25cb'}</span> ring color = agent mood</div>
             <div><span style={{ color: '#fbbf24' }}>{'\u25cf'}</span> traveling dot = active conversation</div>
-            <div style={{ color: COLORS.textDim, marginTop: 2 }}>Scroll to zoom &middot; Drag to pan</div>
+            <div style={{ color: colors.textDim, marginTop: 2 }}>Scroll to zoom &middot; Drag to pan</div>
           </div>
         )}
       </div>

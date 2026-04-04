@@ -336,7 +336,7 @@ Relationships: ${mentalModels}`;
         soul: finalSoul,
         backstory: safeBackstory,
         goal: safeGoal,
-        spriteId: 'default',
+        spriteId: typeof req.body.spriteId === 'string' ? sanitizeText(req.body.spriteId, 20) : 'default',
         fears: Array.isArray(req.body.fears)
           ? req.body.fears.filter((s: unknown) => typeof s === 'string').map((s: string) => sanitizeText(s, 100)).filter(Boolean).slice(0, 5)
           : undefined,

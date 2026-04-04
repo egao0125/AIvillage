@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Agent } from '@ai-village/shared';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { nameToColor, hexToString } from '../../utils/color';
 import { gameStore } from '../../core/GameStore';
 import { useAgentsMap } from '../../core/hooks';
@@ -12,17 +13,18 @@ function trustColor(trust: number): string {
 }
 
 export const Relationships: React.FC<{ agent: Agent }> = ({ agent }) => {
+  const { colors } = useTheme();
   const agentsMap = useAgentsMap();
   const models = agent.mentalModels;
 
   return (
     <div style={{ padding: '8px 0' }}>
-      <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.textDim, letterSpacing: 2, marginBottom: 8 }}>
+      <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.textDim, letterSpacing: 2, marginBottom: 8 }}>
         RELATIONSHIPS
       </div>
 
       {!models || models.length === 0 ? (
-        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.textDim }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: colors.textDim }}>
           No known relationships yet
         </div>
       ) : (
@@ -55,7 +57,7 @@ export const Relationships: React.FC<{ agent: Agent }> = ({ agent }) => {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {/* Name - clickable */}
                   <div
-                    style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.accent, cursor: 'pointer' }}
+                    style={{ fontFamily: FONTS.body, fontSize: 12, color: colors.accent, cursor: 'pointer' }}
                     onClick={() => gameStore.drillToAgentDetail(model.targetId)}
                   >
                     {targetName}
@@ -63,7 +65,7 @@ export const Relationships: React.FC<{ agent: Agent }> = ({ agent }) => {
 
                   {/* Trust bar */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                    <div style={{ flex: 1, height: 4, backgroundColor: COLORS.border, borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ flex: 1, height: 4, backgroundColor: colors.border, borderRadius: 2, overflow: 'hidden' }}>
                       <div style={{
                         width: `${(model.trust / 200) * 100}%`,
                         height: '100%',
@@ -79,7 +81,7 @@ export const Relationships: React.FC<{ agent: Agent }> = ({ agent }) => {
 
                   {/* Emotional stance */}
                   {model.emotionalStance && (
-                    <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim, marginTop: 2 }}>
+                    <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim, marginTop: 2 }}>
                       {model.emotionalStance}
                     </div>
                   )}

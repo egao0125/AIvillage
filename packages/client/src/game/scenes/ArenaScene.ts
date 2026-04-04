@@ -7,7 +7,7 @@ import {
   ARENA_LOCATIONS,
 } from '../data/arena-map';
 import { getArenaTileConfig } from '../data/arena-tiles';
-import { AgentSprite } from '../entities/AgentSprite';
+import { AgentSprite, resolveCharacterModel } from '../entities/AgentSprite';
 import { eventBus } from '../../core/EventBus';
 import { gameStore } from '../../core/GameStore';
 import { sendViewportUpdate } from '../../network/socket';
@@ -370,11 +370,15 @@ export class ArenaScene extends Phaser.Scene {
           if (agent.alive === false) continue;
           if (!this.agentSprites.has(agent.id)) {
             this.spawnAgent(agent);
-          } else {
-            const sprite = this.agentSprites.get(agent.id)!;
-            sprite.moveToTile(agent.position.x, agent.position.y);
-            if (agent.currentAction) sprite.setAction(agent.currentAction);
           }
+          const sprite = this.agentSprites.get(agent.id);
+          if (!sprite) continue;
+          if (agent.state === 'sleeping') {
+            sprite.sleep();
+          } else {
+            sprite.moveToTile(agent.position.x, agent.position.y);
+          }
+          if (agent.currentAction) sprite.setAction(agent.currentAction);
         }
         if (snapshot.time) this.updateDayNight(snapshot.time);
       }),
@@ -429,9 +433,10 @@ export class ArenaScene extends Phaser.Scene {
       const { shirt, hair } = agentColorsFromName(agent.config.name);
       generateAgentTexture(this, texKey, shirt, hair);
     }
+    const charModel = resolveCharacterModel(agent.config.spriteId, agent.config.name);
     const agentSprite = new AgentSprite(
       this, agent.id, agent.config.name, texKey,
-      agent.position.x, agent.position.y
+      agent.position.x, agent.position.y, charModel,
     );
     if (agent.currentAction) agentSprite.setAction(agent.currentAction);
     this.agentSprites.set(agent.id, agentSprite);
@@ -440,14 +445,10 @@ export class ArenaScene extends Phaser.Scene {
   private despawnAgent(agentId: string): void {
     const sprite = this.agentSprites.get(agentId);
     if (!sprite) return;
-    this.tweens.add({
-      targets: sprite,
-      alpha: 0,
-      duration: 1500,
-      onComplete: () => {
-        sprite.destroy();
-        this.agentSprites.delete(agentId);
-      },
+
+    sprite.die().then(() => {
+      sprite.destroy();
+      this.agentSprites.delete(agentId);
     });
   }
 

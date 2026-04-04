@@ -1,10 +1,16 @@
 import Phaser from 'phaser';
 import { ISO_TILE_W, ISO_TILE_H } from '../iso';
 import {
-  ASTRO_FRAME_W, ASTRO_FRAME_H,
-  ASTRO_FRAMES_PER_DIR, ASTRO_DIRECTIONS,
-  ASTRO_IDLE_FPS, ASTRO_WALK_FPS, ASTRO_DIE_FPS,
-} from '../data/astronaut-config';
+  STRIP_FRAME_W, STRIP_FRAME_H,
+  STRIP_FRAMES_PER_DIR, STRIP_DIRECTIONS,
+  STRIP_IDLE_FPS, STRIP_WALK_FPS, STRIP_DIE_FPS, STRIP_SLEEP_FPS,
+  FOX_FRAME_W, FOX_FRAME_H, FOX_IDLE_FRAMES, FOX_WALK_FRAMES,
+  FOX_DIRECTIONS, FOX_IDLE_FPS, FOX_WALK_FPS,
+  DOG_FRAME_W, DOG_FRAME_H, DOG_FRAMES_PER_DIR, DOG_DIRECTIONS,
+  DOG_IDLE_FPS, DOG_WALK_FPS,
+  GIRL_FRAME_W, GIRL_FRAME_H, GIRL_WALK_FRAMES,
+  GIRL_DIRECTIONS, GIRL_WALK_FPS,
+} from '../data/sprite-config';
 
 // Fan-tasy Tileset spritesheet URLs — served from public/ directory.
 // Using absolute paths (not Vite imports) to avoid hashing/LFS issues in Docker builds.
@@ -258,19 +264,46 @@ export class BootScene extends Phaser.Scene {
       });
     }
 
-    // Load astronaut spritesheets (single-row strips: 30 frames of 258×258)
-    this.load.spritesheet('astro_idle', '/astronaut/IDLE.png', {
-      frameWidth: ASTRO_FRAME_W,
-      frameHeight: ASTRO_FRAME_H,
+    // Load character spritesheets
+
+    // ── Strip-based characters (single-row strips: 30 frames of 258×258) ──
+    const stripOpts = { frameWidth: STRIP_FRAME_W, frameHeight: STRIP_FRAME_H };
+
+    this.load.spritesheet('astro_idle', '/astronaut/IDLE.png', stripOpts);
+    this.load.spritesheet('astro_walk', '/astronaut/WALKING.png', stripOpts);
+    this.load.spritesheet('astro_die', '/astronaut/DIE.png', stripOpts);
+
+    this.load.spritesheet('ogre_idle', '/ogre/IDLE.png', stripOpts);
+    this.load.spritesheet('ogre_walk', '/ogre/WALK.png', stripOpts);
+    this.load.spritesheet('ogre_die', '/ogre/DIE.png', stripOpts);
+
+    this.load.spritesheet('smith_idle', '/smith/SMITH_IDLE_NEW.png', stripOpts);
+    this.load.spritesheet('smith_walk', '/smith/SMITH_WALK.png', stripOpts);
+    this.load.spritesheet('smith_die', '/smith/SMITH_DIE.png', stripOpts);
+
+    // ── Fox (8-direction, separate files per direction, grid layout) ──
+    const foxOpts = { frameWidth: FOX_FRAME_W, frameHeight: FOX_FRAME_H };
+    for (let d = 1; d <= FOX_DIRECTIONS; d++) {
+      this.load.spritesheet(`fox_idle_dir${d}`, `/fox/Fox_Idle/Fox_Idle_dir${d}.png`, foxOpts);
+      this.load.spritesheet(`fox_walk_dir${d}`, `/fox/Fox_Walk/Fox_Walk_dir${d}.png`, foxOpts);
+    }
+
+    // ── Dog (single spritesheet, 32×32 frames) ──
+    this.load.spritesheet('dog_sheet', '/dog/GoldenRetriever_spritesheet_free.png', {
+      frameWidth: DOG_FRAME_W,
+      frameHeight: DOG_FRAME_H,
     });
-    this.load.spritesheet('astro_walk', '/astronaut/WALKING.png', {
-      frameWidth: ASTRO_FRAME_W,
-      frameHeight: ASTRO_FRAME_H,
-    });
-    this.load.spritesheet('astro_die', '/astronaut/DIE.png', {
-      frameWidth: ASTRO_FRAME_W,
-      frameHeight: ASTRO_FRAME_H,
-    });
+
+    // ── Girl (8-direction, separate files per direction) ──
+    const girlOpts = { frameWidth: GIRL_FRAME_W, frameHeight: GIRL_FRAME_H };
+    const girlDirs: Record<number, string> = {
+      1: 'DownLeft', 2: 'Left', 3: 'UpLeft', 4: 'Up',
+      5: 'UpRight', 6: 'Right', 7: 'DownRight', 8: 'Down',
+    };
+    for (let d = 1; d <= GIRL_DIRECTIONS; d++) {
+      this.load.spritesheet(`girl_walk_dir${d}`, `/girl/GirlSample_Walk_256Update/GirlSample_Walk_${girlDirs[d]}.png`, girlOpts);
+      this.load.spritesheet(`girl_die_dir${d}`, `/girl/GirlSample_Death/GirlSample_Death_${girlDirs[d]}.png`, girlOpts);
+    }
 
     // Load Kenney isometric prototype tiles (individual PNGs, 256×512)
     this.load.image('kenney_floor', '/kenney_iso/Isometric/floor_E.png');
@@ -2772,58 +2805,136 @@ export class BootScene extends Phaser.Scene {
   // ASTRONAUT ANIMATIONS
   // ═══════════════════════════════════════════════════════════
   private registerAstronautAnimations(): void {
-    if (!this.textures.exists('astro_idle') || !this.textures.exists('astro_walk')) {
-      console.warn('[BootScene] Astronaut spritesheets not loaded — skipping animation registration');
-      return;
+    // ── Strip-based characters (astronaut, ogre, smith) ──
+    const stripTypes = ['astro', 'ogre', 'smith'];
+
+    for (const charType of stripTypes) {
+      const idleKey = `${charType}_idle`;
+      const walkKey = `${charType}_walk`;
+      const dieKey = `${charType}_die`;
+
+      if (!this.textures.exists(idleKey) || !this.textures.exists(walkKey)) {
+        console.warn(`[BootScene] ${charType} spritesheets not loaded — skipping`);
+        continue;
+      }
+
+      // Looping: idle, walk
+      for (const [sheetKey, fps] of [[idleKey, STRIP_IDLE_FPS], [walkKey, STRIP_WALK_FPS]] as [string, number][]) {
+        for (let dir = 0; dir < STRIP_DIRECTIONS; dir++) {
+          const animKey = `${sheetKey}_${dir}`;
+          if (this.anims.exists(animKey)) continue;
+          const start = dir * STRIP_FRAMES_PER_DIR;
+          this.anims.create({
+            key: animKey,
+            frames: this.anims.generateFrameNumbers(sheetKey, { start, end: start + STRIP_FRAMES_PER_DIR - 1 }),
+            frameRate: fps,
+            repeat: -1,
+          });
+        }
+      }
+
+      // Die + sleep (one-shot)
+      if (this.textures.exists(dieKey)) {
+        for (let dir = 0; dir < STRIP_DIRECTIONS; dir++) {
+          const start = dir * STRIP_FRAMES_PER_DIR;
+          const frames = this.anims.generateFrameNumbers(dieKey, { start, end: start + STRIP_FRAMES_PER_DIR - 1 });
+
+          if (!this.anims.exists(`${dieKey}_${dir}`)) {
+            this.anims.create({ key: `${dieKey}_${dir}`, frames, frameRate: STRIP_DIE_FPS, repeat: 0 });
+          }
+          if (!this.anims.exists(`${charType}_sleep_${dir}`)) {
+            this.anims.create({ key: `${charType}_sleep_${dir}`, frames: [...frames], frameRate: STRIP_SLEEP_FPS, repeat: 0 });
+          }
+        }
+      }
     }
 
-    // Looping animations: idle, walk
-    const loopSheets: [string, number][] = [
-      ['astro_idle', ASTRO_IDLE_FPS],
-      ['astro_walk', ASTRO_WALK_FPS],
-    ];
+    // ── Fox (8-direction, separate files per direction) ──
+    for (let d = 1; d <= FOX_DIRECTIONS; d++) {
+      const idleSheet = `fox_idle_dir${d}`;
+      const walkSheet = `fox_walk_dir${d}`;
 
-    for (const [sheetKey, fps] of loopSheets) {
-      for (let dir = 0; dir < ASTRO_DIRECTIONS; dir++) {
-        const animKey = `${sheetKey}_${dir}`;
-        if (this.anims.exists(animKey)) continue;
-
-        const startFrame = dir * ASTRO_FRAMES_PER_DIR;
-        const frames = this.anims.generateFrameNumbers(sheetKey, {
-          start: startFrame,
-          end: startFrame + ASTRO_FRAMES_PER_DIR - 1,
-        });
-
+      if (this.textures.exists(idleSheet) && !this.anims.exists(`fox_idle_${d}`)) {
         this.anims.create({
-          key: animKey,
-          frames,
-          frameRate: fps,
+          key: `fox_idle_${d}`,
+          frames: this.anims.generateFrameNumbers(idleSheet, { start: 0, end: FOX_IDLE_FRAMES - 1 }),
+          frameRate: FOX_IDLE_FPS,
+          repeat: -1,
+        });
+      }
+      if (this.textures.exists(walkSheet) && !this.anims.exists(`fox_walk_${d}`)) {
+        this.anims.create({
+          key: `fox_walk_${d}`,
+          frames: this.anims.generateFrameNumbers(walkSheet, { start: 0, end: FOX_WALK_FRAMES - 1 }),
+          frameRate: FOX_WALK_FPS,
           repeat: -1,
         });
       }
     }
 
-    // One-shot animation: death
-    if (this.textures.exists('astro_die')) {
-      for (let dir = 0; dir < ASTRO_DIRECTIONS; dir++) {
-        const animKey = `astro_die_${dir}`;
-        if (this.anims.exists(animKey)) continue;
+    // ── Dog (single spritesheet: row 0 = idle, row 1 = walk, 8 dirs x 4 frames) ──
+    if (this.textures.exists('dog_sheet')) {
+      const cols = 32; // 1024 / 32
+      for (let d = 0; d < DOG_DIRECTIONS; d++) {
+        // Row 0: idle frames for each direction (4 frames per dir)
+        const idleStart = d * DOG_FRAMES_PER_DIR;
+        if (!this.anims.exists(`dog_idle_${d + 1}`)) {
+          this.anims.create({
+            key: `dog_idle_${d + 1}`,
+            frames: this.anims.generateFrameNumbers('dog_sheet', { start: idleStart, end: idleStart + DOG_FRAMES_PER_DIR - 1 }),
+            frameRate: DOG_IDLE_FPS,
+            repeat: -1,
+          });
+        }
+        // Row 1: walk frames for each direction
+        const walkStart = cols + d * DOG_FRAMES_PER_DIR;
+        if (!this.anims.exists(`dog_walk_${d + 1}`)) {
+          this.anims.create({
+            key: `dog_walk_${d + 1}`,
+            frames: this.anims.generateFrameNumbers('dog_sheet', { start: walkStart, end: walkStart + DOG_FRAMES_PER_DIR - 1 }),
+            frameRate: DOG_WALK_FPS,
+            repeat: -1,
+          });
+        }
+      }
+    }
 
-        const startFrame = dir * ASTRO_FRAMES_PER_DIR;
-        const frames = this.anims.generateFrameNumbers('astro_die', {
-          start: startFrame,
-          end: startFrame + ASTRO_FRAMES_PER_DIR - 1,
-        });
+    // ── Girl (8-direction, separate files per direction) ──
+    for (let d = 1; d <= GIRL_DIRECTIONS; d++) {
+      const walkSheet = `girl_walk_dir${d}`;
+      const dieSheet = `girl_die_dir${d}`;
 
+      if (this.textures.exists(walkSheet)) {
+        // Walk animation
+        if (!this.anims.exists(`girl_walk_${d}`)) {
+          this.anims.create({
+            key: `girl_walk_${d}`,
+            frames: this.anims.generateFrameNumbers(walkSheet, { start: 0, end: GIRL_WALK_FRAMES - 1 }),
+            frameRate: GIRL_WALK_FPS,
+            repeat: -1,
+          });
+        }
+        // Idle = first frame of walk (no separate idle sheet)
+        if (!this.anims.exists(`girl_idle_${d}`)) {
+          this.anims.create({
+            key: `girl_idle_${d}`,
+            frames: this.anims.generateFrameNumbers(walkSheet, { start: 0, end: 0 }),
+            frameRate: 1,
+            repeat: -1,
+          });
+        }
+      }
+      // Die animation
+      if (this.textures.exists(dieSheet) && !this.anims.exists(`girl_die_${d}`)) {
         this.anims.create({
-          key: animKey,
-          frames,
-          frameRate: ASTRO_DIE_FPS,
-          repeat: 0, // play once
+          key: `girl_die_${d}`,
+          frames: this.anims.generateFrameNumbers(dieSheet, { start: 0, end: GIRL_WALK_FRAMES - 1 }),
+          frameRate: 8,
+          repeat: 0,
         });
       }
     }
 
-    console.log('[BootScene] Astronaut animations registered');
+    console.log('[BootScene] Character animations registered');
   }
 }

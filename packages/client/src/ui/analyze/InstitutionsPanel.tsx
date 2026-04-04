@@ -1,16 +1,18 @@
 import React from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { useInstitutions, useAgentsMap } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 
-const clickableName: React.CSSProperties = {
-  fontFamily: FONTS.body,
-  fontSize: 11,
-  color: COLORS.accent,
-  cursor: 'pointer',
-};
-
 export const InstitutionsPanel: React.FC = () => {
+  const { colors } = useTheme();
+
+  const clickableName: React.CSSProperties = {
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    color: colors.accent,
+    cursor: 'pointer',
+  };
   const institutions = useInstitutions();
   const agentsMap = useAgentsMap();
 
@@ -23,7 +25,7 @@ export const InstitutionsPanel: React.FC = () => {
         style={{
           fontFamily: FONTS.pixel,
           fontSize: 8,
-          color: COLORS.textDim,
+          color: colors.textDim,
           marginBottom: 10,
           letterSpacing: 1,
         }}
@@ -32,7 +34,7 @@ export const InstitutionsPanel: React.FC = () => {
       </div>
 
       {institutions.length === 0 ? (
-        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim }}>
           No institutions formed yet.
         </div>
       ) : (
@@ -42,8 +44,8 @@ export const InstitutionsPanel: React.FC = () => {
               key={inst.id}
               onClick={() => gameStore.openDetail({ type: 'institution', id: inst.id })}
               style={{
-                background: COLORS.bgCard,
-                border: `1px solid ${COLORS.border}`,
+                background: colors.bgCard,
+                border: `1px solid ${colors.border}`,
                 borderRadius: 4,
                 padding: 10,
                 cursor: 'pointer',
@@ -52,15 +54,15 @@ export const InstitutionsPanel: React.FC = () => {
             >
               {/* Header: Name + type badge */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                <span style={{ fontFamily: FONTS.pixel, fontSize: 9, color: COLORS.text }}>
+                <span style={{ fontFamily: FONTS.pixel, fontSize: 9, color: colors.text }}>
                   {inst.name}
                 </span>
                 <span
                   style={{
                     fontFamily: FONTS.pixel,
                     fontSize: 6,
-                    color: COLORS.bgCard,
-                    background: COLORS.accent,
+                    color: colors.bgCard,
+                    background: colors.accent,
                     padding: '1px 5px',
                     borderRadius: 6,
                     textTransform: 'uppercase',
@@ -74,7 +76,7 @@ export const InstitutionsPanel: React.FC = () => {
                       fontFamily: FONTS.pixel,
                       fontSize: 6,
                       color: '#fff',
-                      background: COLORS.warning,
+                      background: colors.warning,
                       padding: '1px 5px',
                       borderRadius: 6,
                       textTransform: 'uppercase',
@@ -87,7 +89,7 @@ export const InstitutionsPanel: React.FC = () => {
 
               {/* Founder */}
               <div style={{ marginBottom: 4 }}>
-                <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.textDim }}>
+                <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim }}>
                   Founder:{' '}
                 </span>
                 <span
@@ -103,10 +105,10 @@ export const InstitutionsPanel: React.FC = () => {
 
               {/* Members + Treasury */}
               <div style={{ display: 'flex', gap: 12, marginBottom: 4 }}>
-                <span style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim }}>
+                <span style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim }}>
                   Members: {inst.members.length}
                 </span>
-                <span style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.gold }}>
+                <span style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.gold }}>
                   Treasury: {inst.treasury}
                 </span>
               </div>
@@ -114,7 +116,7 @@ export const InstitutionsPanel: React.FC = () => {
               {/* Rules — truncated */}
               {inst.rules.length > 0 && (
                 <div style={{ marginTop: 4 }}>
-                  <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.textDim, marginBottom: 2 }}>
+                  <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim, marginBottom: 2 }}>
                     Rules ({inst.rules.length}):
                   </div>
                   {inst.rules.slice(0, 2).map((rule, i) => (
@@ -123,7 +125,7 @@ export const InstitutionsPanel: React.FC = () => {
                       style={{
                         fontFamily: FONTS.body,
                         fontSize: 10,
-                        color: COLORS.text,
+                        color: colors.text,
                         paddingLeft: 8,
                         lineHeight: 1.4,
                         overflow: 'hidden',
@@ -135,7 +137,7 @@ export const InstitutionsPanel: React.FC = () => {
                     </div>
                   ))}
                   {inst.rules.length > 2 && (
-                    <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, paddingLeft: 8 }}>
+                    <div style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim, paddingLeft: 8 }}>
                       +{inst.rules.length - 2} more
                     </div>
                   )}

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { nameToColor, hexToString } from '../../utils/color';
 import { gameStore } from '../../core/GameStore';
 import { useChatLog, useAgentsMap } from '../../core/hooks';
@@ -12,6 +13,7 @@ interface ConversationGroup {
 }
 
 export const GroupChat: React.FC<{ institutionId: string; memberIds: string[] }> = ({ memberIds }) => {
+  const { colors } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const chatLog = useChatLog();
   const agentsMap = useAgentsMap();
@@ -63,7 +65,7 @@ export const GroupChat: React.FC<{ institutionId: string; memberIds: string[] }>
         style={{
           fontFamily: FONTS.pixel,
           fontSize: 8,
-          color: COLORS.textDim,
+          color: colors.textDim,
           letterSpacing: 2,
           cursor: 'pointer',
           userSelect: 'none',
@@ -82,22 +84,22 @@ export const GroupChat: React.FC<{ institutionId: string; memberIds: string[] }>
       {expanded && (
         <div style={{ marginTop: 8 }}>
           {conversations.length === 0 ? (
-            <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim, fontStyle: 'italic' }}>
+            <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim, fontStyle: 'italic' }}>
               No group conversations yet
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {conversations.map((conv) => (
-                <div key={conv.conversationId} style={{ backgroundColor: COLORS.bgCard, borderRadius: 4, padding: 8 }}>
+                <div key={conv.conversationId} style={{ backgroundColor: colors.bgCard, borderRadius: 4, padding: 8 }}>
                   {/* Participant names header */}
-                  <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, marginBottom: 6 }}>
+                  <div style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim, marginBottom: 6 }}>
                     {conv.participantNames.join(', ')}
                   </div>
 
                   {/* Messages */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {conv.messages.map((msg) => (
-                      <div key={msg.id} style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.text }}>
+                      <div key={msg.id} style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.text }}>
                         <span
                           style={{ color: hexToString(nameToColor(msg.agentName)), cursor: 'pointer', fontWeight: 'bold' }}
                           onClick={() => gameStore.drillToAgentDetail(msg.agentId)}

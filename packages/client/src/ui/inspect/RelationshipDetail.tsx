@@ -1,5 +1,6 @@
 import React from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { nameToColor, hexToString } from '../../utils/color';
 import { gameStore } from '../../core/GameStore';
 import { useAgentsMap } from '../../core/hooks';
@@ -11,76 +12,77 @@ function trustColor(trust: number): string {
   return '#fbbf24';
 }
 
-const MentalModelCard: React.FC<{ label: string; model: MentalModel | undefined }> = ({ label, model }) => (
-  <div style={{ flex: 1, minWidth: 0 }}>
-    <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim, marginBottom: 6 }}>{label}</div>
-    {!model ? (
-      <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim, fontStyle: 'italic' }}>No opinion formed</div>
-    ) : (
-      <div>
-        {/* Trust bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-          <div style={{ flex: 1, height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{
-              width: `${(model.trust / 200) * 100}%`,
-              height: '100%',
-              backgroundColor: trustColor(model.trust),
-              borderRadius: 3,
-            }} />
-          </div>
-          <span style={{ fontFamily: FONTS.body, fontSize: 10, color: trustColor(model.trust) }}>{model.trust}</span>
-        </div>
-        {model.emotionalStance && (
-          <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.text, marginBottom: 2 }}>
-            {model.emotionalStance}
-          </div>
-        )}
-        {model.predictedGoal && (
-          <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim, fontStyle: 'italic' }}>
-            Goal: {model.predictedGoal}
-          </div>
-        )}
-      </div>
-    )}
-  </div>
-);
+export const RelationshipDetail: React.FC<{ agentId: string; secondaryId: string }> = ({ agentId, secondaryId }) => {
+  const { colors } = useTheme();
 
-const AvatarName: React.FC<{ agent: Agent }> = ({ agent }) => {
-  const color = hexToString(nameToColor(agent.config.name));
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{
-        width: 40,
-        height: 40,
-        borderRadius: '50%',
-        backgroundColor: color,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#fff',
-        fontWeight: 'bold',
-        fontSize: 16,
-        fontFamily: FONTS.body,
-      }}>
-        {agent.config.name.charAt(0)}
-      </div>
-      <div
-        style={{ fontFamily: FONTS.pixel, fontSize: 11, color: COLORS.accent, cursor: 'pointer' }}
-        onClick={() => gameStore.drillToAgentDetail(agent.id)}
-      >
-        {agent.config.name}
-      </div>
+  const MentalModelCard: React.FC<{ label: string; model: MentalModel | undefined }> = ({ label, model }) => (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim, marginBottom: 6 }}>{label}</div>
+      {!model ? (
+        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim, fontStyle: 'italic' }}>No opinion formed</div>
+      ) : (
+        <div>
+          {/* Trust bar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <div style={{ flex: 1, height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{
+                width: `${(model.trust / 200) * 100}%`,
+                height: '100%',
+                backgroundColor: trustColor(model.trust),
+                borderRadius: 3,
+              }} />
+            </div>
+            <span style={{ fontFamily: FONTS.body, fontSize: 10, color: trustColor(model.trust) }}>{model.trust}</span>
+          </div>
+          {model.emotionalStance && (
+            <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.text, marginBottom: 2 }}>
+              {model.emotionalStance}
+            </div>
+          )}
+          {model.predictedGoal && (
+            <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim, fontStyle: 'italic' }}>
+              Goal: {model.predictedGoal}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
-};
 
-export const RelationshipDetail: React.FC<{ agentId: string; secondaryId: string }> = ({ agentId, secondaryId }) => {
+  const AvatarName: React.FC<{ agent: Agent }> = ({ agent }) => {
+    const color = hexToString(nameToColor(agent.config.name));
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{
+          width: 40,
+          height: 40,
+          borderRadius: '50%',
+          backgroundColor: color,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#fff',
+          fontWeight: 'bold',
+          fontSize: 16,
+          fontFamily: FONTS.body,
+        }}>
+          {agent.config.name.charAt(0)}
+        </div>
+        <div
+          style={{ fontFamily: FONTS.pixel, fontSize: 11, color: colors.accent, cursor: 'pointer' }}
+          onClick={() => gameStore.drillToAgentDetail(agent.id)}
+        >
+          {agent.config.name}
+        </div>
+      </div>
+    );
+  };
   const agentsMap = useAgentsMap();
   const agent1 = agentsMap.get(agentId);
   const agent2 = agentsMap.get(secondaryId);
 
   if (!agent1 || !agent2) {
-    return <div style={{ fontFamily: FONTS.body, fontSize: 13, color: COLORS.textDim, padding: 16 }}>Agent not found</div>;
+    return <div style={{ fontFamily: FONTS.body, fontSize: 13, color: colors.textDim, padding: 16 }}>Agent not found</div>;
   }
 
   const model1of2 = agent1.mentalModels?.find((m) => m.targetId === secondaryId);
@@ -96,7 +98,7 @@ export const RelationshipDetail: React.FC<{ agentId: string; secondaryId: string
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '16px 0' }}>
         <AvatarName agent={agent1} />
-        <span style={{ fontFamily: FONTS.body, fontSize: 14, color: COLORS.textDim }}>{'<->'}</span>
+        <span style={{ fontFamily: FONTS.body, fontSize: 14, color: colors.textDim }}>{'<->'}</span>
         <AvatarName agent={agent2} />
       </div>
 
@@ -108,21 +110,21 @@ export const RelationshipDetail: React.FC<{ agentId: string; secondaryId: string
 
       {/* Shared ledger */}
       <div style={{ padding: '16px 0' }}>
-        <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.textDim, letterSpacing: 2, marginBottom: 8 }}>
+        <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.textDim, letterSpacing: 2, marginBottom: 8 }}>
           SHARED HISTORY
         </div>
         {sharedLedger.length === 0 ? (
-          <div style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.textDim }}>No shared history yet</div>
+          <div style={{ fontFamily: FONTS.body, fontSize: 12, color: colors.textDim }}>No shared history yet</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {sharedLedger.map((entry) => (
-              <div key={entry.id} style={{ backgroundColor: COLORS.bgCard, borderRadius: 4, padding: 8 }}>
+              <div key={entry.id} style={{ backgroundColor: colors.bgCard, borderRadius: 4, padding: 8 }}>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
                   <span style={{
                     fontFamily: FONTS.body,
                     fontSize: 10,
-                    color: COLORS.accent,
-                    backgroundColor: COLORS.accent + '22',
+                    color: colors.accent,
+                    backgroundColor: colors.accent + '22',
                     padding: '1px 6px',
                     borderRadius: 3,
                     textTransform: 'capitalize',
@@ -132,16 +134,16 @@ export const RelationshipDetail: React.FC<{ agentId: string; secondaryId: string
                   <span style={{
                     fontFamily: FONTS.body,
                     fontSize: 10,
-                    color: entry.status === 'fulfilled' ? '#4ade80' : entry.status === 'broken' ? '#ef4444' : COLORS.textDim,
+                    color: entry.status === 'fulfilled' ? '#4ade80' : entry.status === 'broken' ? '#ef4444' : colors.textDim,
                     textTransform: 'capitalize',
                   }}>
                     {entry.status}
                   </span>
-                  <span style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, marginLeft: 'auto' }}>
+                  <span style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim, marginLeft: 'auto' }}>
                     Day {entry.day}
                   </span>
                 </div>
-                <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.text }}>
+                <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.text }}>
                   {entry.description}
                 </div>
               </div>

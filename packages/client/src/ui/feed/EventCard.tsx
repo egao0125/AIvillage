@@ -4,7 +4,8 @@ import type { ChatEntry } from '../../core/GameStore';
 import { ConversationExpander } from './ConversationExpander';
 import { ReactionsExpander, getReactionCount } from './ReactionsExpander';
 import { gameStore } from '../../core/GameStore';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 const TRUNCATE_LENGTH = 140;
 
@@ -20,6 +21,7 @@ interface EventCardProps {
 }
 
 export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
+  const { colors } = useTheme();
   const [showConversation, setShowConversation] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -35,14 +37,14 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
   return (
     <div
       onClick={() => { if (isExpandable) setExpanded(prev => !prev); }}
-      onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
-      onMouseLeave={e => { e.currentTarget.style.background = COLORS.bgCard; }}
+      onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; }}
+      onMouseLeave={e => { e.currentTarget.style.background = colors.bgCard; }}
       style={{
         margin: '6px 10px',
         padding: '12px 14px',
-        background: COLORS.bgCard,
+        background: colors.bgCard,
         borderRadius: 8,
-        border: `1px solid ${COLORS.border}`,
+        border: `1px solid ${colors.border}`,
         cursor: isExpandable ? 'pointer' : undefined,
         transition: 'background 0.15s ease',
       }}
@@ -65,10 +67,10 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
           {event.type.replace('_', ' ')}
         </span>
         {event.author && event.author.id !== 'system' && (
-          <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: COLORS.textDim }}>
+          <span style={{ fontFamily: FONTS.body, fontSize: '11px', color: colors.textDim }}>
             by <span
               onClick={(e) => { e.stopPropagation(); gameStore.openAgentDetail(event.author!.id); }}
-              style={{ color: COLORS.accent, fontWeight: 'bold', cursor: 'pointer' }}
+              style={{ color: colors.accent, fontWeight: 'bold', cursor: 'pointer' }}
             >{event.author.name}</span>
           </span>
         )}
@@ -95,7 +97,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         style={{
           fontFamily: FONTS.body,
           fontSize: '12px',
-          color: COLORS.text,
+          color: colors.text,
           lineHeight: '1.6',
           whiteSpace: 'pre-wrap',
         }}
@@ -105,11 +107,11 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
 
       {/* Footer: day + reaction count hint when collapsed */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-        <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: COLORS.textDim, letterSpacing: 0.5 }}>
+        <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: colors.textDim, letterSpacing: 0.5 }}>
           Day {event.day}
         </span>
         {reactionCount > 0 && !expanded && (
-          <span style={{ fontFamily: FONTS.body, fontSize: '10px', color: COLORS.accent }}>
+          <span style={{ fontFamily: FONTS.body, fontSize: '10px', color: colors.accent }}>
             {reactionCount} reaction{reactionCount === 1 ? '' : 's'}
           </span>
         )}
@@ -125,7 +127,7 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
           style={{
             background: 'none',
             border: 'none',
-            color: COLORS.accent,
+            color: colors.accent,
             fontFamily: FONTS.body,
             fontSize: '11px',
             cursor: 'pointer',

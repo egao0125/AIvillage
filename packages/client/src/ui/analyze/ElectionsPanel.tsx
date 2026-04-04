@@ -1,17 +1,19 @@
 import React, { useMemo } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { useElections, useAgentsMap, useWorldTime } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 
-const clickableName: React.CSSProperties = {
-  fontFamily: FONTS.body,
-  fontSize: 11,
-  color: COLORS.accent,
-  cursor: 'pointer',
-  textDecoration: 'none',
-};
-
 export const ElectionsPanel: React.FC = () => {
+  const { colors } = useTheme();
+
+  const clickableName: React.CSSProperties = {
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    color: colors.accent,
+    cursor: 'pointer',
+    textDecoration: 'none',
+  };
   const elections = useElections();
   const agentsMap = useAgentsMap();
   const time = useWorldTime();
@@ -48,7 +50,7 @@ export const ElectionsPanel: React.FC = () => {
         style={{
           fontFamily: FONTS.pixel,
           fontSize: 8,
-          color: COLORS.textDim,
+          color: colors.textDim,
           marginBottom: 10,
           letterSpacing: 1,
         }}
@@ -57,7 +59,7 @@ export const ElectionsPanel: React.FC = () => {
       </div>
 
       {elections.length === 0 ? (
-        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim }}>
           No elections held yet.
         </div>
       ) : (
@@ -70,17 +72,17 @@ export const ElectionsPanel: React.FC = () => {
               <div
                 key={el.id}
                 style={{
-                  background: COLORS.bgCard,
-                  border: `1px solid ${COLORS.accent}`,
+                  background: colors.bgCard,
+                  border: `1px solid ${colors.accent}`,
                   borderRadius: 4,
                   padding: 10,
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <span style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.accent }}>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.accent }}>
                     {el.position}
                   </span>
-                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.gold }}>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.gold }}>
                     {daysLeft > 0 ? `${daysLeft}d left` : 'Ending today'}
                   </span>
                 </div>
@@ -96,7 +98,7 @@ export const ElectionsPanel: React.FC = () => {
                       >
                         {agentName(cId)}
                       </span>
-                      <span style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.text }}>
+                      <span style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.text }}>
                         {counts[cId] ?? 0} votes
                       </span>
                     </div>
@@ -113,24 +115,24 @@ export const ElectionsPanel: React.FC = () => {
               <div
                 key={el.id}
                 style={{
-                  background: COLORS.bgCard,
-                  border: `1px solid ${COLORS.border}`,
+                  background: colors.bgCard,
+                  border: `1px solid ${colors.border}`,
                   borderRadius: 4,
                   padding: 10,
                   opacity: 0.8,
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.textDim }}>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.textDim }}>
                     {el.position}
                   </span>
-                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.textDim }}>
+                  <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim }}>
                     Day {el.endDay}
                   </span>
                 </div>
                 {el.winner && (
                   <div style={{ marginBottom: 4 }}>
-                    <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: COLORS.textDim }}>Winner: </span>
+                    <span style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim }}>Winner: </span>
                     <span
                       style={clickableName}
                       onClick={() => gameStore.openAgentDetail(el.winner!)}
@@ -141,7 +143,7 @@ export const ElectionsPanel: React.FC = () => {
                 )}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {el.candidates.map((cId) => (
-                    <span key={cId} style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim }}>
+                    <span key={cId} style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim }}>
                       {agentName(cId)}: {counts[cId] ?? 0}
                     </span>
                   ))}

@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Agent } from '@ai-village/shared';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { nameToColor, hexToString } from '../../utils/color';
 
 const MOOD_COLORS: Record<string, string> = {
@@ -15,9 +16,10 @@ const MOOD_COLORS: Record<string, string> = {
 };
 
 export const ProfileHeader: React.FC<{ agent: Agent }> = ({ agent }) => {
+  const { colors } = useTheme();
   const isDead = agent.alive === false;
   const avatarColor = hexToString(nameToColor(agent.config.name));
-  const moodColor = MOOD_COLORS[agent.mood] ?? COLORS.textDim;
+  const moodColor = MOOD_COLORS[agent.mood] ?? colors.textDim;
 
   return (
     <div style={{ opacity: isDead ? 0.5 : 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '16px 0' }}>
@@ -39,20 +41,20 @@ export const ProfileHeader: React.FC<{ agent: Agent }> = ({ agent }) => {
       </div>
 
       {/* Name */}
-      <div style={{ fontFamily: FONTS.pixel, fontSize: 14, color: COLORS.text }}>
+      <div style={{ fontFamily: FONTS.pixel, fontSize: 14, color: colors.text }}>
         {agent.config.name}
       </div>
 
       {/* Occupation */}
       {agent.config.occupation && (
-        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.textDim }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: colors.textDim }}>
           {agent.config.occupation}
         </div>
       )}
 
       {/* Age */}
       {agent.config.age != null && (
-        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim }}>
           Age {agent.config.age}
         </div>
       )}
@@ -74,14 +76,14 @@ export const ProfileHeader: React.FC<{ agent: Agent }> = ({ agent }) => {
 
       {/* Current action */}
       {agent.currentAction && (
-        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.textDim, fontStyle: 'italic', textAlign: 'center' }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: colors.textDim, fontStyle: 'italic', textAlign: 'center' }}>
           {agent.currentAction}
         </div>
       )}
 
       {/* Death notice */}
       {isDead && (
-        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: COLORS.warning }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 12, color: colors.warning }}>
           {'💀'} {agent.causeOfDeath ?? 'Deceased'}
         </div>
       )}

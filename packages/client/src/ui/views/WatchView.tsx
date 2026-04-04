@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { SpectatorChat } from '../components/SpectatorChat';
 import { NarrativeBar } from '../components/NarrativeBar';
 import { OverlayPanel } from '../components/OverlayPanel';
@@ -19,11 +20,12 @@ interface WatchViewProps {
 }
 
 export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
+  const { colors } = useTheme();
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
   const activeRecap = useActiveRecap();
   const inspectTarget = useInspectTarget();
 
-  const sidebarWidth = inspectTarget ? PANEL_WIDTH : eventFeedOpen ? PANEL_WIDTH : 0;
+  const sidebarWidth = (eventFeedOpen ? PANEL_WIDTH : 0) + (inspectTarget ? PANEL_WIDTH : 0);
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -35,12 +37,12 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
         <SidePanel position="primary" width={PANEL_WIDTH}>
           <div style={{
             padding: '10px 14px',
-            borderBottom: `1px solid ${COLORS.border}`,
+            borderBottom: `1px solid ${colors.border}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
-            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
+            <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: colors.accent, letterSpacing: 1 }}>
               EVENT FEED
             </span>
             <button
@@ -48,7 +50,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
               style={{
                 background: 'none',
                 border: 'none',
-                color: COLORS.textDim,
+                color: colors.textDim,
                 cursor: 'pointer',
                 fontSize: '14px',
                 fontFamily: FONTS.body,
@@ -61,15 +63,20 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
         </SidePanel>
       )}
 
-      {/* Stacked: Detail panel (ContextPanel) */}
+      {/* Stacked: Detail panel (ContextPanel) — right-aligned to feed, or to screen edge if feed closed */}
       {inspectTarget && (
-        <SidePanel position="stacked" width={PANEL_WIDTH} onClose={() => gameStore.closeDetail()}>
+        <SidePanel
+          position="stacked"
+          width={PANEL_WIDTH}
+          rightOffset={eventFeedOpen ? PANEL_WIDTH : 0}
+          onClose={() => gameStore.closeDetail()}
+        >
           <ContextPanel />
         </SidePanel>
       )}
 
       {/* Event Feed toggle when closed */}
-      {!eventFeedOpen && !inspectTarget && (
+      {!eventFeedOpen && (
         <button
           onClick={() => setEventFeedOpen(true)}
           style={{
@@ -79,15 +86,15 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
             pointerEvents: 'auto',
             width: 24,
             height: 48,
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
             borderRight: 'none',
             borderRadius: '6px 0 0 6px',
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: COLORS.accent,
+            color: colors.accent,
             fontFamily: FONTS.pixel,
             fontSize: '12px',
             zIndex: 11,

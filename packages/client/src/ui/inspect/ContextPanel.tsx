@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { gameStore, type InspectTarget } from '../../core/GameStore';
 import { useInspectTarget, useAgentsMap } from '../../core/hooks';
 import { AgentDetail } from './AgentDetail';
@@ -28,6 +29,7 @@ function targetLabel(target: InspectTarget, agentsMap: Map<string, { config: { n
 }
 
 export const ContextPanel: React.FC = () => {
+  const { colors } = useTheme();
   const inspectTarget = useInspectTarget();
   const agentsMap = useAgentsMap();
   const [breadcrumbs, setBreadcrumbs] = useState<InspectTarget[]>([]);
@@ -68,7 +70,7 @@ export const ContextPanel: React.FC = () => {
   const renderContent = () => {
     if (!inspectTarget) {
       return (
-        <div style={{ fontFamily: FONTS.body, fontSize: 13, color: COLORS.textDim, textAlign: 'center', paddingTop: 40 }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 13, color: colors.textDim, textAlign: 'center', paddingTop: 40 }}>
           Select an entity to inspect
         </div>
       );
@@ -87,7 +89,7 @@ export const ContextPanel: React.FC = () => {
         return <InstitutionDetail institutionId={inspectTarget.id} />;
       default:
         return (
-          <div style={{ fontFamily: FONTS.body, fontSize: 13, color: COLORS.textDim, padding: 16 }}>
+          <div style={{ fontFamily: FONTS.body, fontSize: 13, color: colors.textDim, padding: 16 }}>
             Unknown target type
           </div>
         );
@@ -108,7 +110,7 @@ export const ContextPanel: React.FC = () => {
           style={{
             fontFamily: FONTS.body,
             fontSize: 12,
-            color: COLORS.accent,
+            color: colors.accent,
             cursor: 'pointer',
             marginBottom: 6,
           }}
@@ -119,12 +121,12 @@ export const ContextPanel: React.FC = () => {
 
         {/* Breadcrumbs */}
         {inspectTarget && breadcrumbs.length > 0 && (
-          <div style={{ fontFamily: FONTS.body, fontSize: 10, color: COLORS.textDim, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+          <div style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
             <span
               onClick={() => { setBreadcrumbs([]); prevTargetRef.current = null; gameStore.closeDetail(); }}
               style={{ cursor: 'pointer' }}
-              onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}
-              onMouseLeave={e => { (e.target as HTMLElement).style.color = COLORS.textDim; }}
+              onMouseEnter={e => { (e.target as HTMLElement).style.color = colors.accent; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.color = colors.textDim; }}
             >
               Watch
             </span>
@@ -139,15 +141,15 @@ export const ContextPanel: React.FC = () => {
                     gameStore.openDetail(bc);
                   }}
                   style={{ cursor: 'pointer' }}
-                  onMouseEnter={e => { (e.target as HTMLElement).style.color = COLORS.accent; }}
-                  onMouseLeave={e => { (e.target as HTMLElement).style.color = COLORS.textDim; }}
+                  onMouseEnter={e => { (e.target as HTMLElement).style.color = colors.accent; }}
+                  onMouseLeave={e => { (e.target as HTMLElement).style.color = colors.textDim; }}
                 >
                   {targetLabel(bc, agentsMap as Map<string, { config: { name: string } }>)}
                 </span>
               </React.Fragment>
             ))}
             <span style={{ margin: '0 2px' }}>&gt;</span>
-            <span style={{ color: COLORS.text }}>
+            <span style={{ color: colors.text }}>
               {targetLabel(inspectTarget, agentsMap as Map<string, { config: { name: string } }>)}
             </span>
           </div>

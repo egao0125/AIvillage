@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { nameToColor, hexToString } from '../../utils/color';
 import { getToken, setToken, clearToken, authHeaders, setUserId, setEmail } from '../../utils/auth';
+import { type CharacterModel } from '../../game/data/sprite-config';
+import { CharacterPicker } from './CharacterPicker';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,6 +50,7 @@ Example:
 // ---------------------------------------------------------------------------
 
 export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
+  const { colors } = useTheme();
   // --- Auth state ---
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -63,6 +67,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
 
   // --- Agent creator state ---
   const [name, setName] = useState('');
+  const [spriteId, setSpriteId] = useState<CharacterModel>('astronaut');
   const [age, setAge] = useState(30);
   const [occupation, setOccupation] = useState('');
   const [backstory, setBackstory] = useState('');
@@ -228,6 +233,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           name: name.trim(),
+          spriteId,
           age,
           occupation: occupation.trim(),
           backstory: backstory.trim(),
@@ -271,6 +277,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
 
       // Reset form
       setName('');
+      setSpriteId('astronaut');
       setAge(30);
       setOccupation('');
       setBackstory('');
@@ -374,7 +381,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
           border-color: ${ACCENT} !important;
           box-shadow: 0 0 0 1px rgba(100, 255, 218, 0.12);
         }
-        .s-input::placeholder, .s-textarea::placeholder { color: #3a3a5a; }
+        .s-input::placeholder, .s-textarea::placeholder { color: #999990; }
         .s-btn:hover:not(:disabled) {
           background: ${ACCENT} !important;
           color: ${BG} !important;
@@ -424,18 +431,18 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               left: 24,
               padding: '6px 14px',
               background: 'transparent',
-              border: `1px solid ${COLORS.border}`,
+              border: `1px solid ${colors.border}`,
               borderRadius: 4,
               cursor: 'pointer',
-              color: COLORS.textDim,
+              color: colors.textDim,
               fontFamily: FONTS.pixel,
               fontSize: '7px',
               letterSpacing: 1,
               zIndex: 10,
               transition: 'border-color .2s, color .2s',
             }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = COLORS.accent; e.currentTarget.style.color = COLORS.accent; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.textDim; }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = colors.accent; e.currentTarget.style.color = colors.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = colors.border; e.currentTarget.style.color = colors.textDim; }}
           >
             &larr; MAPS
           </button>
@@ -447,7 +454,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
             style={{
               fontFamily: FONTS.pixel,
               fontSize: 32,
-              color: COLORS.textAccent,
+              color: colors.textAccent,
               margin: 0,
               letterSpacing: 6,
               animation: 'glow 4s ease-in-out infinite',
@@ -468,7 +475,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
             style={{
               fontFamily: FONTS.pixel,
               fontSize: 8,
-              color: COLORS.text,
+              color: colors.text,
               margin: 0,
               lineHeight: 2.2,
             }}
@@ -491,7 +498,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 borderRadius: 4,
               }}
             >
-              <span style={{ fontFamily: FONTS.pixel, fontSize: 7, color: COLORS.text }}>
+              <span style={{ fontFamily: FONTS.pixel, fontSize: 7, color: colors.text }}>
                 {user.email}
               </span>
               <button
@@ -627,7 +634,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   padding: '10px 52px 10px 12px',
                   fontFamily: 'monospace',
                   fontSize: 11,
-                  color: COLORS.text,
+                  color: colors.text,
                   background: INPUT_BG,
                   border: `1px solid ${BORDER_DIM}`,
                   borderRadius: 4,
@@ -665,7 +672,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 padding: '10px 24px 10px 10px',
                 fontFamily: FONTS.pixel,
                 fontSize: 7,
-                color: COLORS.text,
+                color: colors.text,
                 background: INPUT_BG,
                 border: `1px solid ${BORDER_DIM}`,
                 borderRadius: 4,
@@ -717,29 +724,40 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               padding: 24,
             }}
           >
-            {/* Name + Age row */}
-            <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>NAME</label>
-                <input
-                  ref={nameInputRef}
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Yuki Tanaka"
-                  className="s-input"
-                  style={inputStyle}
-                />
-              </div>
-              <div style={{ width: 70 }}>
-                <label style={labelStyle}>AGE</label>
-                <input
-                  type="number"
-                  value={age}
-                  onChange={(e) => setAge(Math.max(1, Math.min(120, parseInt(e.target.value) || 30)))}
-                  className="s-input"
-                  style={{ ...inputStyle, textAlign: 'center' as const }}
-                />
+            {/* Character picker + Name/Age */}
+            <div style={{ display: 'flex', gap: 16, marginBottom: 14, alignItems: 'flex-start' }}>
+              <CharacterPicker
+                value={spriteId}
+                onChange={setSpriteId}
+                accentColor={ACCENT}
+                labelColor={LABEL_COLOR}
+                bgColor={INPUT_BG}
+              />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <label style={labelStyle}>NAME</label>
+                  <input
+                    ref={nameInputRef}
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Yuki Tanaka"
+                    className="s-input"
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <div style={{ width: 70 }}>
+                    <label style={labelStyle}>AGE</label>
+                    <input
+                      type="number"
+                      value={age}
+                      onChange={(e) => setAge(Math.max(1, Math.min(120, parseInt(e.target.value) || 30)))}
+                      className="s-input"
+                      style={{ ...inputStyle, textAlign: 'center' as const }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -949,8 +967,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   padding: '14px 14px',
                   fontFamily: '"Press Start 2P", monospace',
                   fontSize: 7,
-                  color: COLORS.text,
-                  background: '#0a0a1a',
+                  color: '#333330',
+                  background: INPUT_BG,
                   border: `1px solid ${BORDER_DIM}`,
                   borderRadius: 4,
                   boxSizing: 'border-box' as const,
@@ -967,7 +985,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 style={{
                   fontFamily: FONTS.pixel,
                   fontSize: 7,
-                  color: COLORS.warning,
+                  color: colors.warning,
                   marginBottom: 14,
                   padding: '8px 10px',
                   background: 'rgba(255,80,80,0.06)',
@@ -1090,7 +1108,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                       {agent.name.charAt(0)}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: COLORS.text }}>
+                      <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.text }}>
                         {agent.name}
                       </div>
                       <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: LABEL_COLOR, marginTop: 2 }}>
@@ -1230,7 +1248,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
 const labelStyle: React.CSSProperties = {
   fontFamily: '"Press Start 2P", monospace',
   fontSize: 6,
-  color: '#8888aa',
+  color: LABEL_COLOR,
   display: 'block',
   marginBottom: 6,
   letterSpacing: 1,
@@ -1241,9 +1259,9 @@ const inputStyle: React.CSSProperties = {
   padding: '10px 12px',
   fontFamily: '"Press Start 2P", monospace',
   fontSize: 8,
-  color: '#e0e0e0',
-  background: '#1a1a2e',
-  border: '1px solid #2a2a4a',
+  color: '#333330',
+  background: INPUT_BG,
+  border: `1px solid ${BORDER_DIM}`,
   borderRadius: 4,
   boxSizing: 'border-box',
   transition: 'border-color 0.2s',

@@ -1,5 +1,6 @@
 import React from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { gameStore } from '../../core/GameStore';
 import { useActiveMode } from '../../core/hooks';
 
@@ -11,6 +12,7 @@ const MODES: { key: Mode; icon: string; label: string }[] = [
 ];
 
 export const ModeSelector: React.FC = () => {
+  const { colors } = useTheme();
   const activeMode = useActiveMode();
 
   return (
@@ -26,11 +28,11 @@ export const ModeSelector: React.FC = () => {
               alignItems: 'center',
               gap: 4,
               padding: '4px 10px',
-              background: isActive ? COLORS.bgHover : 'transparent',
-              border: `1px solid ${isActive ? COLORS.accent : COLORS.border}`,
+              background: isActive ? colors.bgHover : 'transparent',
+              border: `1px solid ${isActive ? colors.accent : colors.border}`,
               borderRadius: 4,
               cursor: 'pointer',
-              color: isActive ? COLORS.accent : COLORS.textDim,
+              color: isActive ? colors.accent : colors.textDim,
               fontFamily: FONTS.pixel,
               fontSize: '7px',
               letterSpacing: 1,

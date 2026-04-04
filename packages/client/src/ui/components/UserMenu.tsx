@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getEmail, authHeaders, clearToken } from '../../utils/auth';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface UserMenuProps {
   onChangeMap: () => void;
@@ -8,6 +9,7 @@ interface UserMenuProps {
 }
 
 export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => {
+  const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const email = getEmail();
@@ -51,7 +53,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => 
     borderRadius: 0,
     fontFamily: FONTS.pixel,
     fontSize: 7,
-    color: COLORS.text,
+    color: colors.text,
     cursor: 'pointer',
     textAlign: 'left',
     letterSpacing: 0.5,
@@ -62,13 +64,13 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => 
       <button
         onClick={() => setOpen(!open)}
         style={{
-          background: COLORS.bg,
-          border: `1px solid ${COLORS.border}`,
+          background: colors.bg,
+          border: `1px solid ${colors.border}`,
           borderRadius: 4,
           padding: '4px 8px',
           fontFamily: FONTS.pixel,
           fontSize: 7,
-          color: COLORS.text,
+          color: colors.text,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
         }}
@@ -84,8 +86,8 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => 
             top: '100%',
             marginTop: 4,
             zIndex: 50,
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
             borderRadius: 6,
             minWidth: 180,
             boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
@@ -98,8 +100,8 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => 
               padding: '8px 12px',
               fontFamily: FONTS.pixel,
               fontSize: 6,
-              color: COLORS.textDim,
-              borderBottom: `1px solid ${COLORS.border}`,
+              color: colors.textDim,
+              borderBottom: `1px solid ${colors.border}`,
               wordBreak: 'break-all',
             }}>
               {email}
@@ -108,7 +110,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => 
 
           <button
             style={menuItemStyle}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.background = COLORS.bgHover; }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.background = colors.bgHover; }}
             onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'none'; }}
             onClick={() => { setOpen(false); onChangeMap(); }}
           >
@@ -116,8 +118,8 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onChangeMap, onLogout }) => 
           </button>
 
           <button
-            style={{ ...menuItemStyle, color: COLORS.warning }}
-            onMouseEnter={(e) => { (e.target as HTMLElement).style.background = COLORS.bgHover; }}
+            style={{ ...menuItemStyle, color: colors.warning }}
+            onMouseEnter={(e) => { (e.target as HTMLElement).style.background = colors.bgHover; }}
             onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'none'; }}
             onClick={handleLogout}
           >

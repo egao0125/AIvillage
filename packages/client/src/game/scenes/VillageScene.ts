@@ -8,12 +8,13 @@ import {
   BUILDINGS,
   FURNITURE,
 } from '../data/village-map';
-import { AgentSprite } from '../entities/AgentSprite';
+import { AgentSprite, resolveCharacterModel } from '../entities/AgentSprite';
 import { eventBus } from '../../core/EventBus';
 import { gameStore } from '../../core/GameStore';
 import { sendViewportUpdate } from '../../network/socket';
 import { generateAgentTexture, agentColorsFromName } from './BootScene';
 import { tileToScreen, screenToTile, isoDepth, isoWorldBounds } from '../iso';
+import { getOccludingWalls } from '../wallOcclusion';
 import type { Agent, GameTime } from '@ai-village/shared';
 
 /** Kenney tile key + tint per terrain type.
@@ -34,6 +35,7 @@ const DEPTH_MUL = 10;
 /** Parse CSS hex color to Phaser number */
 const hex = (css: string) => parseInt(css.replace('#', ''), 16);
 
+
 interface KenneyTileDef { key: string; tint?: number; yOffset?: number; depthBoost?: number }
 const KENNEY_TILE_MAP: Record<number, KenneyTileDef> = {
   [TILE_TYPES.GRASS]:      { key: 'kenney_floor', tint: hex('#bbeebb') },
@@ -53,11 +55,16 @@ export class VillageScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSprite> = new Map();
   private selectedAgentId: string | null = null;
   private agentClickedThisFrame = false;
-  private dayNightOverlay!: Phaser.GameObjects.Rectangle;
+  private dayNightRT!: Phaser.GameObjects.RenderTexture;
+  private nightAlpha: number = 0;
   private conversationGraphics!: Phaser.GameObjects.Graphics;
   private cleanupFns: (() => void)[] = [];
   /** Objects rendered on a separate no-bloom camera */
   private uiObjects: Phaser.GameObjects.GameObject[] = [];
+  /** Wall tile images keyed by "x,y" for occlusion alpha control */
+  private wallTiles: Map<string, Phaser.GameObjects.Image> = new Map();
+  /** Warm candle glow sprites per agent, rendered below the night RT */
+  private candleGlows: Map<string, Phaser.GameObjects.Image> = new Map();
   // Infra 6: Viewport tracking — throttled to avoid spamming server
   private lastViewportKey: string = '';
   private viewportThrottleTime: number = 0;
@@ -78,18 +85,20 @@ export class VillageScene extends Phaser.Scene {
     this.conversationGraphics = this.add.graphics();
     this.conversationGraphics.setDepth(9999);
 
-    // Day/night overlay — sized to isometric world bounds
+    // Day/night lighting — RenderTexture with erase() for agent light pools
     const wb = isoWorldBounds(MAP_WIDTH, MAP_HEIGHT);
-    this.dayNightOverlay = this.add
-      .rectangle(
-        wb.centerX,
-        wb.centerY,
-        wb.width + 200, // extra padding so edges aren't visible
-        wb.height + 200,
-        0x000033,
-        0
-      )
-      .setDepth(5000);
+    const pad = 800;
+    const rtW = wb.width + pad * 2;
+    const rtH = wb.height + pad * 2;
+    this.dayNightRT = this.add.renderTexture(
+      wb.x - pad,
+      wb.y - pad,
+      rtW,
+      rtH,
+    ).setDepth(5000).setOrigin(0, 0);
+
+    // Generate soft radial glow texture for agent lights
+    this.generateLightGlow();
 
     this.setupCamera();
     this.setupEventListeners();
@@ -97,7 +106,7 @@ export class VillageScene extends Phaser.Scene {
 
     // Subtle bloom glow — main camera only (excludes UI text)
     if (this.cameras.main.postFX) {
-      this.cameras.main.postFX.addBloom(0xffffff, 0.85, 0.15, 0.6, 1.5);
+      this.cameras.main.postFX.addBloom(0xffffff, 0.85, 0.15, 0.6, 1.8);
     }
 
     // No-bloom camera for text/agents: renders on top with transparent bg
@@ -125,6 +134,9 @@ export class VillageScene extends Phaser.Scene {
     for (const sprite of this.agentSprites.values()) {
       sprite.update(time, delta);
     }
+    this.updateWallOcclusion();
+    this.lerpNightAlpha();
+    this.redrawNightLighting();
     // Keep UI camera synced with main camera
     const uiCam = this.cameras.cameras[1];
     if (uiCam) {
@@ -134,6 +146,31 @@ export class VillageScene extends Phaser.Scene {
     }
     this.drawConversationLines();
     this.emitViewportUpdate(time);
+  }
+
+  /** Fade wall tiles that are occluding agents, restore others. */
+  private updateWallOcclusion(): void {
+    // Collect all wall keys that should be transparent
+    const fadedWalls = new Set<string>();
+    for (const sprite of this.agentSprites.values()) {
+      const pos = sprite.getTilePos();
+      const walls = getOccludingWalls(pos.x, pos.y);
+      for (const key of walls) {
+        fadedWalls.add(key);
+      }
+    }
+
+    // Apply alpha to wall tiles
+    for (const [key, img] of this.wallTiles) {
+      const targetAlpha = fadedWalls.has(key) ? 0.5 : 1.0;
+      // Lerp alpha for smooth transitions
+      const current = img.alpha;
+      if (Math.abs(current - targetAlpha) > 0.01) {
+        img.setAlpha(current + (targetAlpha - current) * 0.15);
+      } else if (current !== targetAlpha) {
+        img.setAlpha(targetAlpha);
+      }
+    }
   }
 
   /** Infra 6: Emit viewport rectangle to server, throttled to max once per 500ms and only on change */
@@ -225,6 +262,11 @@ export class VillageScene extends Phaser.Scene {
           .setDepth(isoDepth(x, y) * DEPTH_MUL + depthBoost);
 
         if (def.tint) img.setTint(def.tint);
+
+        // Track wall tiles for occlusion transparency
+        if (tileType === TILE_TYPES.WALL) {
+          this.wallTiles.set(`${x},${y}`, img);
+        }
       }
     }
   }
@@ -410,11 +452,15 @@ export class VillageScene extends Phaser.Scene {
           if (agent.alive === false) continue;
           if (!this.agentSprites.has(agent.id)) {
             this.spawnAgent(agent);
-          } else {
-            const sprite = this.agentSprites.get(agent.id)!;
-            sprite.moveToTile(agent.position.x, agent.position.y);
-            if (agent.currentAction) sprite.setAction(agent.currentAction);
           }
+          const sprite = this.agentSprites.get(agent.id);
+          if (!sprite) continue;
+          if (agent.state === 'sleeping') {
+            sprite.sleep();
+          } else {
+            sprite.moveToTile(agent.position.x, agent.position.y);
+          }
+          if (agent.currentAction) sprite.setAction(agent.currentAction);
         }
         if (snapshot.time) this.updateDayNight(snapshot.time);
       }),
@@ -472,6 +518,7 @@ export class VillageScene extends Phaser.Scene {
       generateAgentTexture(this, texKey, shirt, hair);
     }
 
+    const charModel = resolveCharacterModel(agent.config.spriteId, agent.config.name);
     const agentSprite = new AgentSprite(
       this,
       agent.id,
@@ -479,17 +526,32 @@ export class VillageScene extends Phaser.Scene {
       texKey,
       agent.position.x,
       agent.position.y,
-      shirt // tint color for astronaut sprite differentiation
+      charModel,
+      shirt,
     );
     if (agent.currentAction) agentSprite.setAction(agent.currentAction);
     if (agent.mood) agentSprite.setMood(agent.mood);
     this.agentSprites.set(agent.id, agentSprite);
 
+    // Register standalone label objects with camera system (no bloom, always visible)
+    const uiObjs = agentSprite.getUIObjects();
+    this.uiObjects.push(...uiObjs);
+    const main = this.cameras.main;
+    const uiCam = this.cameras.cameras[1];
+    for (const obj of uiObjs) {
+      main.ignore(obj);
+    }
+    // Agent container renders on main camera only (with bloom); hide from UI camera
+    if (uiCam) uiCam.ignore(agentSprite);
   }
 
   private despawnAgent(agentId: string): void {
     const sprite = this.agentSprites.get(agentId);
     if (!sprite) return;
+
+    // Remove label UI objects from tracking
+    const uiObjs = sprite.getUIObjects();
+    this.uiObjects = this.uiObjects.filter((o) => !uiObjs.includes(o));
 
     // Play death animation then destroy
     sprite.die().then(() => {
@@ -533,31 +595,132 @@ export class VillageScene extends Phaser.Scene {
   }
 
   // ── Day/night cycle ───────────────────────────────────────
-  private updateDayNight(time: GameTime): void {
-    const h = time.hour + time.minute / 60;
-    let alpha = 0;
 
-    if (h < 5) {
-      alpha = 0.3;
-    } else if (h < 7) {
-      alpha = 0.3 - ((h - 5) / 2) * 0.3;
-    } else if (h < 18) {
-      alpha = 0;
-    } else if (h < 20) {
-      alpha = ((h - 18) / 2) * 0.2;
-    } else {
-      alpha = 0.2 + ((h - 20) / 4) * 0.1;
+  /** Generate a soft radial glow texture used to erase darkness around agents. */
+  private generateLightGlow(): void {
+    const size = 120;
+    const half = size / 2;
+
+    // Erase mask — white, punches hole in darkness
+    if (!this.textures.exists('light_glow')) {
+      const ge = this.add.graphics();
+      const steps = 16;
+      for (let i = steps; i >= 0; i--) {
+        const r = (i / steps) * half;
+        const t = 1.0 - (i / steps);
+        ge.fillStyle(0xffffff, t * t * 0.35);
+        ge.fillCircle(half, half, r);
+      }
+      ge.generateTexture('light_glow', size, size);
+      ge.destroy();
     }
 
-    this.dayNightOverlay.setAlpha(alpha);
+    // Warm candle glow — drawn on the scene layer below the RT
+    if (!this.textures.exists('light_candle')) {
+      const gw = this.add.graphics();
+      const steps = 14;
+      for (let i = steps; i >= 0; i--) {
+        const r = (i / steps) * half * 0.6;
+        const t = 1.0 - (i / steps);
+        gw.fillStyle(0x994411, t * t * 0.25);
+        gw.fillCircle(half, half, r);
+      }
+      gw.generateTexture('light_candle', size, size);
+      gw.destroy();
+    }
+  }
 
-    // Tint color: warm at dawn/dusk, blue at night
-    if (h < 5 || h >= 20) {
-      this.dayNightOverlay.setFillStyle(0x000033, alpha);
-    } else if (h < 7) {
-      this.dayNightOverlay.setFillStyle(0x331a00, alpha);
-    } else if (h >= 18) {
-      this.dayNightOverlay.setFillStyle(0x1a0033, alpha);
+  /** Redraw the night overlay with light pools around agents. */
+  private redrawNightLighting(): void {
+    if (this.nightAlpha <= 0) {
+      this.dayNightRT.clear();
+      return;
+    }
+
+    const rt = this.dayNightRT;
+    // Clear and fill with night darkness
+    rt.clear();
+    rt.fill(0x000033, this.nightAlpha);
+
+    const rtX = rt.x;
+    const rtY = rt.y;
+    const glowHalf = 60; // half of 120px texture
+    const isNight = this.nightAlpha > 0.1;
+
+    // Punch light holes + manage warm candle glow sprites
+    for (const [id, sprite] of this.agentSprites) {
+      const localX = sprite.x - rtX - glowHalf;
+      const localY = sprite.y - rtY - glowHalf - 10;
+      rt.erase('light_glow', localX, localY);
+
+      // Candle glow sprite on main scene (behind agent, visible through the hole)
+      let candle = this.candleGlows.get(id);
+      const tilePos = sprite.getTilePos();
+      const candleDepth = isoDepth(tilePos.x, tilePos.y) * 10 + 4; // behind agent (+5)
+      if (isNight) {
+        if (!candle) {
+          candle = this.add.image(sprite.x, sprite.y - 10, 'light_candle')
+            .setDepth(candleDepth)
+            .setBlendMode(Phaser.BlendModes.ADD);
+          this.candleGlows.set(id, candle);
+          // Hide from UI camera so it only renders on main camera (behind agents)
+          const uiCam = this.cameras.cameras[1];
+          if (uiCam) uiCam.ignore(candle);
+        }
+        candle.setPosition(sprite.x, sprite.y - 10);
+        candle.setDepth(candleDepth);
+        candle.setVisible(true);
+      } else if (candle) {
+        candle.setVisible(false);
+      }
+    }
+
+    // Clean up candle glows for despawned agents
+    for (const [id, candle] of this.candleGlows) {
+      if (!this.agentSprites.has(id)) {
+        candle.destroy();
+        this.candleGlows.delete(id);
+      }
+    }
+  }
+
+  private targetNightAlpha = 0;
+
+  private updateDayNight(time: GameTime): void {
+    const h = time.hour + time.minute / 60;
+
+    // Night max = 0.92, day = 0
+    if (h < 5) {
+      // Deep night
+      this.targetNightAlpha = 0.92;
+    } else if (h < 6.5) {
+      // Pre-dawn: darkness fading
+      const t = (h - 5) / 1.5;
+      this.targetNightAlpha = 0.92 * (1 - t);
+    } else if (h < 19) {
+      // Full daylight
+      this.targetNightAlpha = 0;
+    } else if (h < 21) {
+      // Dusk: darkness creeping in
+      const t = (h - 19) / 2;
+      this.targetNightAlpha = 0.92 * t * 0.6;
+    } else if (h < 22.5) {
+      // Twilight: deepening
+      const t = (h - 21) / 1.5;
+      this.targetNightAlpha = 0.92 * 0.6 + 0.92 * 0.4 * t;
+    } else {
+      // Full night
+      this.targetNightAlpha = 0.92;
+    }
+  }
+
+  /** Smoothly lerp night alpha toward target each frame. */
+  private lerpNightAlpha(): void {
+    const diff = this.targetNightAlpha - this.nightAlpha;
+    if (Math.abs(diff) > 0.002) {
+      this.nightAlpha += diff * 0.03;
+    } else {
+      this.nightAlpha = this.targetNightAlpha;
     }
   }
 

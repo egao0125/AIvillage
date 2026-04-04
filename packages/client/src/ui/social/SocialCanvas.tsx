@@ -3,6 +3,7 @@ import type { SocialNode, SocialEdge } from './types';
 import { SocialNodeComponent } from './SocialNode';
 import { SocialStringComponent } from './SocialString';
 import { useZoomPan } from './useZoomPan';
+import { useTheme } from '../ThemeContext';
 import { useGraphEffects } from './useGraphEffects';
 
 interface SocialCanvasProps {
@@ -30,6 +31,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
   onZoomChange, zoomPanRef,
 }) => {
   const { gRef, onWheel, onPointerDown, onPointerMove, onPointerUp, wasClick, reset, onDefaultChange } = useZoomPan();
+  const { colors, isDark } = useTheme();
 
   // Keep a ref to current nodes for effect position lookups
   const nodesRef = useRef<SocialNode[]>(nodes);
@@ -75,7 +77,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
       onClick={(e) => {
         if (e.target === e.currentTarget && wasClick()) onBackgroundClick();
       }}
-      style={{ display: 'block', cursor: 'grab', background: '#f0ede4' }}
+      style={{ display: 'block', cursor: 'grab', background: isDark ? colors.bg : '#f0ede4' }}
     >
       <defs>
         <radialGradient id="node-gradient" cx="35%" cy="35%">
@@ -86,7 +88,7 @@ export const SocialCanvas: React.FC<SocialCanvasProps> = ({
 
       {/* Subtle background dot grid */}
       <pattern id="dot-grid" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse">
-        <circle cx="15" cy="15" r="0.5" fill="rgba(100,255,218,0.08)" />
+        <circle cx="15" cy="15" r="0.5" fill={isDark ? 'rgba(100,255,218,0.06)' : 'rgba(100,255,218,0.08)'} />
       </pattern>
       <rect width={width} height={height} fill="url(#dot-grid)" style={{ pointerEvents: 'none' }} />
 

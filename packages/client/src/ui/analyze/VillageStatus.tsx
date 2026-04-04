@@ -1,33 +1,7 @@
 import React from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { useAgents, useWorldTime, useWeather, useBuildings } from '../../core/hooks';
-
-const statCard: React.CSSProperties = {
-  background: COLORS.bgCard,
-  border: `1px solid ${COLORS.border}`,
-  borderRadius: 4,
-  padding: 10,
-  textAlign: 'center',
-  overflow: 'hidden',
-};
-
-const labelStyle: React.CSSProperties = {
-  fontFamily: FONTS.pixel,
-  fontSize: 6,
-  color: COLORS.textDim,
-  textTransform: 'uppercase',
-  letterSpacing: 1,
-};
-
-const valueStyle: React.CSSProperties = {
-  fontFamily: FONTS.pixel,
-  fontSize: 9,
-  color: COLORS.text,
-  marginTop: 4,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-};
 
 const weatherIcon = (current: string): string => {
   const icons: Record<string, string> = {
@@ -45,6 +19,34 @@ const seasonName = (season: string): string =>
   season.charAt(0).toUpperCase() + season.slice(1);
 
 export const VillageStatus: React.FC = () => {
+  const { colors } = useTheme();
+
+  const statCard: React.CSSProperties = {
+    background: colors.bgCard,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    padding: 10,
+    textAlign: 'center',
+    overflow: 'hidden',
+  };
+
+  const labelStyle: React.CSSProperties = {
+    fontFamily: FONTS.pixel,
+    fontSize: 6,
+    color: colors.textDim,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  };
+
+  const valueStyle: React.CSSProperties = {
+    fontFamily: FONTS.pixel,
+    fontSize: 9,
+    color: colors.text,
+    marginTop: 4,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  };
   const agents = useAgents();
   const time = useWorldTime();
   const weather = useWeather();

@@ -1,9 +1,12 @@
 import React from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface SidePanelProps {
   width?: number;
   position: 'primary' | 'stacked';
+  /** Override the right offset (e.g. 0 when the primary panel is hidden). */
+  rightOffset?: number;
   onClose?: () => void;
   header?: React.ReactNode;
   children: React.ReactNode;
@@ -12,12 +15,14 @@ interface SidePanelProps {
 export const SidePanel: React.FC<SidePanelProps> = ({
   width = 420,
   position,
+  rightOffset,
   onClose,
   header,
   children,
 }) => {
+  const { colors } = useTheme();
   const zIndex = position === 'stacked' ? 15 : 10;
-  const right = position === 'stacked' ? width : 0;
+  const right = rightOffset !== undefined ? rightOffset : (position === 'stacked' ? width : 0);
 
   return (
     // Outer wrapper: solid background, no scroll — never reveals canvas
@@ -28,8 +33,8 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         right,
         bottom: 0,
         width,
-        background: COLORS.bg,
-        borderLeft: `1px solid ${COLORS.border}`,
+        background: colors.bg,
+        borderLeft: `1px solid ${colors.border}`,
         zIndex,
         pointerEvents: 'auto',
         boxSizing: 'border-box',
@@ -43,11 +48,11 @@ export const SidePanel: React.FC<SidePanelProps> = ({
         <div
           style={{
             padding: '10px 14px',
-            borderBottom: `1px solid ${COLORS.border}`,
+            borderBottom: `1px solid ${colors.border}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            background: COLORS.bg,
+            background: colors.bg,
             flexShrink: 0,
           }}
         >
@@ -58,7 +63,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
               style={{
                 background: 'none',
                 border: 'none',
-                color: COLORS.textDim,
+                color: colors.textDim,
                 cursor: 'pointer',
                 fontSize: '14px',
                 fontFamily: FONTS.body,

@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import { useVillageMemory } from '../../core/hooks';
 
 const TYPE_COLORS: Record<string, string> = {
@@ -11,35 +12,36 @@ const TYPE_COLORS: Record<string, string> = {
   broken_oath: '#ff6b6b',
 };
 
-const badgeStyle = (type: string): React.CSSProperties => ({
-  fontFamily: FONTS.pixel,
-  fontSize: 6,
-  color: '#000',
-  background: TYPE_COLORS[type] ?? COLORS.textDim,
-  padding: '2px 6px',
-  borderRadius: 8,
-  textTransform: 'uppercase',
-  letterSpacing: 0.5,
-  flexShrink: 0,
-});
-
-const SignificanceBar: React.FC<{ value: number }> = ({ value }) => (
-  <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-    {Array.from({ length: 10 }, (_, i) => (
-      <div
-        key={i}
-        style={{
-          width: 4,
-          height: 4,
-          borderRadius: '50%',
-          background: i < value ? COLORS.accent : COLORS.border,
-        }}
-      />
-    ))}
-  </div>
-);
-
 export const VillageHistory: React.FC = () => {
+  const { colors } = useTheme();
+
+  const badgeStyle = (type: string): React.CSSProperties => ({
+    fontFamily: FONTS.pixel,
+    fontSize: 6,
+    color: '#000',
+    background: TYPE_COLORS[type] ?? colors.textDim,
+    padding: '2px 6px',
+    borderRadius: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    flexShrink: 0,
+  });
+
+  const SignificanceBar: React.FC<{ value: number }> = ({ value }) => (
+    <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+      {Array.from({ length: 10 }, (_, i) => (
+        <div
+          key={i}
+          style={{
+            width: 4,
+            height: 4,
+            borderRadius: '50%',
+            background: i < value ? colors.accent : colors.border,
+          }}
+        />
+      ))}
+    </div>
+  );
   const memory = useVillageMemory();
 
   const sorted = useMemo(
@@ -53,7 +55,7 @@ export const VillageHistory: React.FC = () => {
         style={{
           fontFamily: FONTS.pixel,
           fontSize: 8,
-          color: COLORS.textDim,
+          color: colors.textDim,
           marginBottom: 10,
           letterSpacing: 1,
         }}
@@ -62,7 +64,7 @@ export const VillageHistory: React.FC = () => {
       </div>
 
       {sorted.length === 0 ? (
-        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>
+        <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim }}>
           No significant events recorded yet.
         </div>
       ) : (
@@ -74,8 +76,8 @@ export const VillageHistory: React.FC = () => {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 4,
-                background: COLORS.bgCard,
-                border: `1px solid ${COLORS.border}`,
+                background: colors.bgCard,
+                border: `1px solid ${colors.border}`,
                 borderRadius: 4,
                 padding: 8,
               }}
@@ -86,14 +88,14 @@ export const VillageHistory: React.FC = () => {
                   style={{
                     fontFamily: FONTS.pixel,
                     fontSize: 6,
-                    color: COLORS.textDim,
+                    color: colors.textDim,
                     marginLeft: 'auto',
                   }}
                 >
                   Day {entry.day}
                 </span>
               </div>
-              <div style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.text, lineHeight: 1.4 }}>
+              <div style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.text, lineHeight: 1.4 }}>
                 {entry.content}
               </div>
               <SignificanceBar value={entry.significance} />

@@ -3,9 +3,11 @@ import { useEventFeed, useChatLog } from '../../core/hooks';
 import { EventCard } from './EventCard';
 import { EVENT_BADGES } from './types';
 import type { EventType } from './types';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 export const EventFeed: React.FC = () => {
+  const { colors } = useTheme();
   const events = useEventFeed();
   const chatLog = useChatLog();
   const [filterType, setFilterType] = useState<EventType | null>(null);
@@ -21,7 +23,7 @@ export const EventFeed: React.FC = () => {
 
   if (events.length === 0) {
     return (
-      <div style={{ padding: 20, textAlign: 'center', color: COLORS.textDim, fontFamily: FONTS.body, fontSize: '13px' }}>
+      <div style={{ padding: 20, textAlign: 'center', color: colors.textDim, fontFamily: FONTS.body, fontSize: '13px' }}>
         No village events yet.
         <br />
         <span style={{ fontSize: '11px', marginTop: 8, display: 'block' }}>
@@ -40,7 +42,7 @@ export const EventFeed: React.FC = () => {
           display: 'flex',
           gap: 4,
           flexWrap: 'wrap',
-          borderBottom: `1px solid ${COLORS.border}`,
+          borderBottom: `1px solid ${colors.border}`,
         }}>
           <button
             onClick={() => setFilterType(null)}
@@ -49,9 +51,9 @@ export const EventFeed: React.FC = () => {
               fontSize: '6px',
               padding: '3px 6px',
               borderRadius: 3,
-              border: `1px solid ${filterType === null ? COLORS.accent : COLORS.border}`,
-              background: filterType === null ? COLORS.accentDim : 'transparent',
-              color: filterType === null ? COLORS.accent : COLORS.textDim,
+              border: `1px solid ${filterType === null ? colors.accent : colors.border}`,
+              background: filterType === null ? colors.accentDim : 'transparent',
+              color: filterType === null ? colors.accent : colors.textDim,
               cursor: 'pointer',
               textTransform: 'uppercase',
             }}
@@ -70,9 +72,9 @@ export const EventFeed: React.FC = () => {
                   fontSize: '6px',
                   padding: '3px 6px',
                   borderRadius: 3,
-                  border: `1px solid ${filterType === type ? b.color : COLORS.border}`,
+                  border: `1px solid ${filterType === type ? b.color : colors.border}`,
                   background: filterType === type ? b.color + '22' : 'transparent',
-                  color: filterType === type ? b.color : COLORS.textDim,
+                  color: filterType === type ? b.color : colors.textDim,
                   cursor: 'pointer',
                   textTransform: 'uppercase',
                 }}

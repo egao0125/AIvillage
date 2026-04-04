@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useBoard, useInstitutions } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 export const VillageInfo: React.FC = () => {
+  const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const board = useBoard();
   const institutions = useInstitutions();
@@ -13,7 +15,7 @@ export const VillageInfo: React.FC = () => {
   const totalCount = passedRules.length + activeInstitutions.length;
 
   return (
-    <div style={{ position: 'absolute', top: 48, left: 120, zIndex: 20, pointerEvents: 'auto', background: COLORS.bg, borderRadius: 6 }}>
+    <div style={{ position: 'absolute', top: 48, left: 120, zIndex: 20, pointerEvents: 'auto', background: colors.bg, borderRadius: 6 }}>
       {/* Toggle pill */}
       <button
         onClick={() => setOpen(prev => !prev)}
@@ -21,9 +23,9 @@ export const VillageInfo: React.FC = () => {
           padding: '5px 12px',
           fontFamily: FONTS.pixel,
           fontSize: '8px',
-          color: open ? COLORS.accent : COLORS.textDim,
-          background: COLORS.bg,
-          border: `1px solid ${open ? COLORS.accent : COLORS.border}`,
+          color: open ? colors.accent : colors.textDim,
+          background: colors.bg,
+          border: `1px solid ${open ? colors.accent : colors.border}`,
           borderRadius: 4,
           cursor: 'pointer',
           letterSpacing: 0.5,
@@ -41,8 +43,8 @@ export const VillageInfo: React.FC = () => {
             maxHeight: 400,
             overflowY: 'auto',
             overscrollBehavior: 'contain',
-            background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
             borderRadius: 6,
             boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
             padding: '8px 0',
@@ -65,15 +67,15 @@ export const VillageInfo: React.FC = () => {
                   key={rule.id}
                   style={{
                     padding: '8px 14px',
-                    borderBottom: `1px solid ${COLORS.border}`,
+                    borderBottom: `1px solid ${colors.border}`,
                     fontFamily: FONTS.body,
                     fontSize: '11px',
-                    color: COLORS.textDim,
+                    color: colors.textDim,
                     lineHeight: 1.4,
                   }}
                 >
-                  <span style={{ color: COLORS.text }}>{rule.content}</span>
-                  <div style={{ fontSize: '10px', color: COLORS.textDim, marginTop: 2 }}>
+                  <span style={{ color: colors.text }}>{rule.content}</span>
+                  <div style={{ fontSize: '10px', color: colors.textDim, marginTop: 2 }}>
                     by {rule.authorName} — Day {rule.day}
                   </div>
                 </div>
@@ -100,18 +102,18 @@ export const VillageInfo: React.FC = () => {
                   onClick={() => { gameStore.openDetail({ type: 'institution', id: inst.id }); setOpen(false); }}
                   style={{
                     padding: '8px 14px',
-                    borderBottom: `1px solid ${COLORS.border}`,
+                    borderBottom: `1px solid ${colors.border}`,
                     fontFamily: FONTS.body,
                     fontSize: '11px',
-                    color: COLORS.textDim,
+                    color: colors.textDim,
                     cursor: 'pointer',
                     transition: 'background 0.15s',
                   }}
-                  onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
+                  onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >
-                  <span style={{ color: COLORS.text, fontWeight: 'bold' }}>{inst.name}</span>
-                  <span style={{ marginLeft: 6, color: COLORS.textDim }}>({inst.type})</span>
+                  <span style={{ color: colors.text, fontWeight: 'bold' }}>{inst.name}</span>
+                  <span style={{ marginLeft: 6, color: colors.textDim }}>({inst.type})</span>
                   <div style={{ fontSize: '10px', marginTop: 2 }}>
                     {inst.members.length} members — Treasury: {inst.treasury}
                   </div>
@@ -121,7 +123,7 @@ export const VillageInfo: React.FC = () => {
           )}
 
           {totalCount === 0 && (
-            <div style={{ padding: '16px 14px', textAlign: 'center', fontFamily: FONTS.body, fontSize: '12px', color: COLORS.textDim }}>
+            <div style={{ padding: '16px 14px', textAlign: 'center', fontFamily: FONTS.body, fontSize: '12px', color: colors.textDim }}>
               No active rules or institutions yet.
             </div>
           )}

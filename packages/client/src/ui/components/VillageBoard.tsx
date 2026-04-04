@@ -1,6 +1,7 @@
 import React from 'react';
 import { useBoard } from '../../core/hooks';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 const TYPE_STYLES: Record<string, { icon: string; color: string }> = {
   decree: { icon: '\u{1F451}', color: '#ff6b6b' },
@@ -13,6 +14,7 @@ const TYPE_STYLES: Record<string, { icon: string; color: string }> = {
 };
 
 export const VillageBoard: React.FC = () => {
+  const { colors } = useTheme();
   const board = useBoard();
 
   return (
@@ -21,14 +23,14 @@ export const VillageBoard: React.FC = () => {
         padding: 12,
         fontFamily: FONTS.body,
         fontSize: '13px',
-        color: COLORS.text,
+        color: colors.text,
       }}
     >
       {board.length === 0 ? (
         <div
           style={{
             textAlign: 'center',
-            color: COLORS.textDim,
+            color: colors.textDim,
             padding: '24px 12px',
           }}
         >
@@ -47,7 +49,7 @@ export const VillageBoard: React.FC = () => {
               style={{
                 marginBottom: 8,
                 padding: '8px 10px',
-                background: COLORS.bgCard,
+                background: colors.bgCard,
                 borderRadius: 4,
                 borderLeft: `3px solid ${style.color}`,
               }}
@@ -72,16 +74,16 @@ export const VillageBoard: React.FC = () => {
                 >
                   {post.type}
                 </span>
-                <span style={{ color: COLORS.textDim, fontSize: '11px' }}>
+                <span style={{ color: colors.textDim, fontSize: '11px' }}>
                   by {post.authorName}
                 </span>
               </div>
-              <div style={{ color: COLORS.text, lineHeight: '1.6' }}>
+              <div style={{ color: colors.text, lineHeight: '1.6' }}>
                 {post.content}
               </div>
               <div
                 style={{
-                  color: COLORS.textDim,
+                  color: colors.textDim,
                   fontSize: '10px',
                   marginTop: 4,
                 }}

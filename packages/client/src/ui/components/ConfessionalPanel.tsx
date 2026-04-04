@@ -1,9 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { useBoard, useAgents } from '../../core/hooks';
 import { nameToColor, hexToString } from '../../utils/color';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 export const ConfessionalPanel: React.FC = () => {
+  const { colors } = useTheme();
   const board = useBoard();
   const agents = useAgents();
   const [filterAgentId, setFilterAgentId] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export const ConfessionalPanel: React.FC = () => {
       <div
         style={{
           padding: '16px 18px',
-          borderBottom: `1px solid ${COLORS.border}`,
+          borderBottom: `1px solid ${colors.border}`,
           display: 'flex',
           alignItems: 'center',
           gap: 10,
@@ -68,9 +70,9 @@ export const ConfessionalPanel: React.FC = () => {
           style={{
             width: '100%',
             padding: '6px 10px',
-            background: COLORS.bgCard,
-            color: COLORS.text,
-            border: `1px solid ${COLORS.border}`,
+            background: colors.bgCard,
+            color: colors.text,
+            border: `1px solid ${colors.border}`,
             borderRadius: 4,
             fontFamily: FONTS.body,
             fontSize: '13px',
@@ -133,7 +135,7 @@ export const ConfessionalPanel: React.FC = () => {
             style={{
               fontFamily: FONTS.body,
               fontSize: '11px',
-              color: COLORS.textDim,
+              color: colors.textDim,
               marginBottom: 12,
               maxWidth: 340,
             }}
@@ -174,7 +176,7 @@ export const ConfessionalPanel: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: COLORS.textDim,
+            color: colors.textDim,
             fontFamily: FONTS.body,
             fontSize: '14px',
             fontStyle: 'italic',
@@ -189,7 +191,7 @@ export const ConfessionalPanel: React.FC = () => {
         style={{
           maxHeight: 200,
           overflowY: 'auto',
-          borderTop: `1px solid ${COLORS.border}`,
+          borderTop: `1px solid ${colors.border}`,
         }}
       >
         {reactions.slice(0, 20).map((r, i) => (
