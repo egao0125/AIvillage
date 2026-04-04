@@ -168,10 +168,27 @@ export async function verifyTokenFull(token: string): Promise<{ userId: string; 
     if (payload['client_id'] !== COGNITO_CLIENT_ID) return null;
     const userId = payload.sub as string | undefined;
     if (!userId) return null;
-    // Cognito access tokens include cognito:username (the email for email-based signup)
-    const email = (payload['cognito:username'] as string | undefined)
-      ?? (payload['email'] as string | undefined)
-      ?? null;
+    // With username_attributes=["email"], cognito:username is a UUID, not the email.
+    // Try cognito:username first — if it looks like an email, use it directly.
+    // Otherwise fall back to AdminGetUser to resolve the actual email attribute.
+    const cognitoUsername = payload['cognito:username'] as string | undefined;
+    let email: string | null = null;
+    if (cognitoUsername && cognitoUsername.includes('@')) {
+      email = cognitoUsername;
+    } else if (payload['email']) {
+      email = payload['email'] as string;
+    } else if (cognitoUsername && COGNITO_USER_POOL_ID) {
+      // Resolve email from Cognito user record
+      try {
+        const user = await cognitoClient.send(new AdminGetUserCommand({
+          UserPoolId: COGNITO_USER_POOL_ID,
+          Username: cognitoUsername,
+        }));
+        email = user.UserAttributes?.find(a => a.Name === 'email')?.Value ?? null;
+      } catch {
+        // AdminGetUser failed — email stays null
+      }
+    }
     return { userId, email };
   } catch {
     return null;
