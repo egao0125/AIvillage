@@ -83,10 +83,10 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
 
       {/* Title */}
       <div style={{ textAlign: 'center', marginBottom: 48, animation: 'slideUp .5s ease-out' }}>
-        <h1 style={{ fontFamily: FONTS.pixel, fontSize: 14, color: COLORS.accent, letterSpacing: 6, margin: 0 }}>
+        <h1 style={{ fontFamily: FONTS.pixel, fontSize: 28, color: COLORS.accent, letterSpacing: 6, margin: 0 }}>
           AI VILLAGE
         </h1>
-        <p style={{ fontFamily: FONTS.pixel, fontSize: 7, color: COLORS.textDim, marginTop: 12, letterSpacing: 2 }}>
+        <p style={{ fontFamily: FONTS.pixel, fontSize: 14, color: COLORS.textDim, marginTop: 12, letterSpacing: 2 }}>
           CHOOSE YOUR WORLD
         </p>
       </div>
@@ -249,10 +249,10 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
 
       <p style={{
         fontFamily: FONTS.pixel,
-        fontSize: 5,
+        fontSize: 20,
         color: '#555577',
         marginTop: 24,
-        letterSpacing: 1,
+        letterSpacing: 2,
         opacity: 0.5,
       }}>
         More worlds coming soon
