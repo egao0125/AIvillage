@@ -244,7 +244,9 @@ io.use(async (socket, next) => {
     const result = await verifyTokenFull(token);
     if (result) {
       socket.data.userId = result.userId;
-      socket.data.isAdmin = !!(result.email && ADMIN_EMAILS.has(result.email.toLowerCase()));
+      const emailLower = result.email?.toLowerCase() ?? '';
+      socket.data.isAdmin = !!(emailLower && ADMIN_EMAILS.has(emailLower));
+      console.log(`[Auth] Socket ${socket.id}: userId=${result.userId}, email=${emailLower}, isAdmin=${socket.data.isAdmin}, adminEmails=[${[...ADMIN_EMAILS].join(',')}]`);
     }
   }
   next(); // always allow connection — spectators are valid users
