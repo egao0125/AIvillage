@@ -243,11 +243,15 @@ io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
   if (typeof token === 'string' && token.length > 0) {
     const result = await verifyTokenFull(token);
+    console.log(`[Auth] Socket ${socket.id}: token=${token.length}chars, verifyResult=${result ? `userId=${result.userId},email=${result.email}` : 'null'}`);
     if (result) {
       socket.data.userId = result.userId;
       const emailLower = result.email?.toLowerCase() ?? '';
       socket.data.isAdmin = !!(emailLower && ADMIN_EMAILS.has(emailLower));
+      console.log(`[Auth] Socket ${socket.id}: emailLower=${emailLower}, isAdmin=${socket.data.isAdmin}, adminEmails=[${[...ADMIN_EMAILS]}]`);
     }
+  } else {
+    console.log(`[Auth] Socket ${socket.id}: no token provided (length=${typeof token === 'string' ? token.length : 'not-string'})`);
   }
   next(); // always allow connection — spectators are valid users
 });

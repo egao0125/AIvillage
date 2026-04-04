@@ -39,6 +39,7 @@ export function connectSocket(): Socket {
     transports: ['websocket', 'polling'],
     auth: async (cb) => {
       const token = await getValidToken();
+      console.log('[Socket] auth: token=' + (token ? `${token.length}chars` : 'null'));
       cb({ token: token ?? '' });
     },
     // Cap reconnection attempts to prevent a permanently-gone server from causing
@@ -54,6 +55,7 @@ export function connectSocket(): Socket {
   });
 
   socket.on('auth:admin', (data: { isAdmin: boolean }) => {
+    console.log('[Socket] auth:admin received:', data);
     gameStore.setAdmin(data.isAdmin);
   });
 
