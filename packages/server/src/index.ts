@@ -158,32 +158,6 @@ if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
 }
 app.use('/api', optionalAuth());
 
-// Temporary debug endpoint — check admin auth state (remove after debugging)
-app.get('/api/debug/admin-check', async (req, res) => {
-  const authHdr = req.headers.authorization;
-  const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
-  if (!token) {
-    res.json({ error: 'no token', adminEmails: [...ADMIN_EMAILS] });
-    return;
-  }
-  // Decode raw JWT claims for debugging
-  let rawClaims: Record<string, unknown> = {};
-  try {
-    const parts = token.split('.');
-    if (parts.length === 3) {
-      rawClaims = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
-    }
-  } catch { /* ignore */ }
-
-  const result = await verifyTokenFull(token);
-  if (!result) {
-    res.json({ error: 'token verification failed', rawClaims, adminEmails: [...ADMIN_EMAILS] });
-    return;
-  }
-  const emailLower = result.email?.toLowerCase() ?? '';
-  const isAdmin = !!(emailLower && ADMIN_EMAILS.has(emailLower));
-  res.json({ userId: result.userId, email: emailLower, isAdmin, rawClaims, adminEmails: [...ADMIN_EMAILS] });
-});
 
 // Follower-guard: simulation state mutations must only execute on the leader Pod.
 // Auth endpoints (login, logout, refresh) are excluded — they use their own DB (Cognito)
@@ -273,7 +247,6 @@ io.use(async (socket, next) => {
       socket.data.userId = result.userId;
       const emailLower = result.email?.toLowerCase() ?? '';
       socket.data.isAdmin = !!(emailLower && ADMIN_EMAILS.has(emailLower));
-      console.log(`[Auth] Socket ${socket.id}: userId=${result.userId}, email=${emailLower}, isAdmin=${socket.data.isAdmin}, adminEmails=[${[...ADMIN_EMAILS].join(',')}]`);
     }
   }
   next(); // always allow connection — spectators are valid users
