@@ -49,9 +49,14 @@ export function connectSocket(): Socket {
     gameStore.setConnected(true);
   });
 
+  socket.on('auth:admin', (data: { isAdmin: boolean }) => {
+    gameStore.setAdmin(data.isAdmin);
+  });
+
   socket.on('disconnect', () => {
     console.log('Disconnected from server');
     gameStore.setConnected(false);
+    gameStore.setAdmin(false);
     // Clear the last-seen-day timer on disconnect to avoid accumulation on reconnect
     if (lastSeenDayTimer !== null) {
       clearInterval(lastSeenDayTimer);
@@ -411,19 +416,17 @@ export function sendSpectatorComment(message: string): void {
 }
 
 // --- Dev tools ---
-// Server requires DEV_ADMIN_TOKEN as first argument for all dev:* commands.
-// Set VITE_DEV_ADMIN_TOKEN in the client build environment (e.g. .env.local)
-// to enable the dev panel. Leave unset to disable dev commands from this client.
+// Authorization: server checks either DEV_ADMIN_TOKEN (local dev) or socket.data.isAdmin
+// (production, via ADMIN_EMAILS env var). The token arg is sent for backwards compat with
+// local dev; in production it's empty and the server falls through to admin email check.
 const DEV_TOKEN: string = import.meta.env.VITE_DEV_ADMIN_TOKEN ?? '';
 
-// Guard all dev commands: if DEV_TOKEN is not configured, emit nothing.
-// The server would reject empty tokens anyway, but this avoids spurious socket events.
-export function devPause(): void { if (DEV_TOKEN) socket?.emit('dev:pause', DEV_TOKEN); }
-export function devResume(): void { if (DEV_TOKEN) socket?.emit('dev:resume', DEV_TOKEN); }
-export function devStep(): void { if (DEV_TOKEN) socket?.emit('dev:step', DEV_TOKEN); }
-export function devResetVitals(): void { if (DEV_TOKEN) socket?.emit('dev:reset-vitals', DEV_TOKEN); }
-export function devFreshStart(): void { if (DEV_TOKEN) socket?.emit('dev:fresh-start', DEV_TOKEN); }
-export function devRequestStatus(): void { if (DEV_TOKEN) socket?.emit('dev:status-request', DEV_TOKEN); }
+export function devPause(): void { socket?.emit('dev:pause', DEV_TOKEN); }
+export function devResume(): void { socket?.emit('dev:resume', DEV_TOKEN); }
+export function devStep(): void { socket?.emit('dev:step', DEV_TOKEN); }
+export function devResetVitals(): void { socket?.emit('dev:reset-vitals', DEV_TOKEN); }
+export function devFreshStart(): void { socket?.emit('dev:fresh-start', DEV_TOKEN); }
+export function devRequestStatus(): void { socket?.emit('dev:status-request', DEV_TOKEN); }
 export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void {
   socket?.on('dev:status', cb);
   return () => { socket?.off('dev:status', cb); };

@@ -62,6 +62,13 @@ export function useConnected(): boolean {
   );
 }
 
+export function useIsAdmin(): boolean {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().isAdmin
+  );
+}
+
 export function useBoard(): BoardPost[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),

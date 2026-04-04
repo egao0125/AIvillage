@@ -149,6 +149,15 @@ const JWKS = createRemoteJWKSet(
  * Shared by Express middleware (optionalAuth) and Socket.IO io.use() middleware.
  */
 export async function verifyToken(token: string): Promise<string | null> {
+  const result = await verifyTokenFull(token);
+  return result?.userId ?? null;
+}
+
+/**
+ * Verify a Cognito access token and return userId + email.
+ * Returns null if the token is invalid or missing required claims.
+ */
+export async function verifyTokenFull(token: string): Promise<{ userId: string; email: string | null } | null> {
   try {
     const { payload } = await jwtVerify(token, JWKS, {
       algorithms: ['RS256'],
@@ -157,7 +166,13 @@ export async function verifyToken(token: string): Promise<string | null> {
     });
     if (payload['token_use'] !== 'access') return null;
     if (payload['client_id'] !== COGNITO_CLIENT_ID) return null;
-    return (payload.sub as string) ?? null;
+    const userId = payload.sub as string | undefined;
+    if (!userId) return null;
+    // Cognito access tokens include cognito:username (the email for email-based signup)
+    const email = (payload['cognito:username'] as string | undefined)
+      ?? (payload['email'] as string | undefined)
+      ?? null;
+    return { userId, email };
   } catch {
     return null;
   }

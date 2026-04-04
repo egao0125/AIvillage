@@ -12,11 +12,8 @@ import { WerewolfGameOver } from './components/WerewolfGameOver';
 import { WerewolfControls } from './components/WerewolfControls';
 import { DevPanel } from './components/DevPanel';
 import { connectSocket, werewolfPlayAgain } from '../network/socket';
-import { useActiveRecap, useWerewolfGameOver } from '../core/hooks';
+import { useActiveRecap, useWerewolfGameOver, useIsAdmin } from '../core/hooks';
 import { gameStore } from '../core/GameStore';
-
-// Toggle dev tools — controlled by VITE_DEV_TOOLS_ENABLED env var (default: false)
-const DEV_TOOLS_ENABLED = import.meta.env.VITE_DEV_TOOLS_ENABLED === 'true';
 
 export const App: React.FC = () => {
   const [selectedMap, setSelectedMap] = useState<string | null>(null);
@@ -57,6 +54,7 @@ export const App: React.FC = () => {
 
   const activeRecap = useActiveRecap();
   const werewolfGameOver = useWerewolfGameOver();
+  const isAdmin = useIsAdmin();
 
   if (!selectedMap) {
     return <MapSelectPage onSelect={handleMapSelect} />;
@@ -121,8 +119,8 @@ export const App: React.FC = () => {
       >
         + ADD AGENT
       </button>
-      {/* Dev tools — toggle via DEV_TOOLS_ENABLED */}
-      {DEV_TOOLS_ENABLED && <DevPanel />}
+      {/* Dev tools — visible only to admin users */}
+      {isAdmin && <DevPanel />}
     </div>
   );
 };

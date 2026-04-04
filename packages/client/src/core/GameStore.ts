@@ -62,6 +62,7 @@ interface GameState {
   werewolfVotes: Array<{ round: number; votes: Record<string, string>; result: 'exiled' | 'no_exile'; exiledId: string | null }>;
   werewolfNightActions: Array<{ round: number; type: string; agentId: string; targetId: string; result?: string }>;
   werewolfMeetingTranscripts: Array<{ round: number; transcript: Array<{ name: string; message: string }> }>;
+  isAdmin: boolean;
 }
 
 export interface InspectTarget {
@@ -125,6 +126,7 @@ class GameStore {
     werewolfVotes: [],
     werewolfNightActions: [],
     werewolfMeetingTranscripts: [],
+    isAdmin: false,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -213,6 +215,11 @@ class GameStore {
 
   setConnected(connected: boolean): void {
     this.state = { ...this.state, connected };
+    this.notify();
+  }
+
+  setAdmin(isAdmin: boolean): void {
+    this.state = { ...this.state, isAdmin };
     this.notify();
   }
 

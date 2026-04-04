@@ -8,10 +8,8 @@ import { DevPanel } from '../components/DevPanel';
 import { EventFeed } from '../feed/EventFeed';
 import { SidePanel } from '../shared/SidePanel';
 import { ContextPanel } from '../inspect/ContextPanel';
-import { useActiveRecap, useInspectTarget } from '../../core/hooks';
+import { useActiveRecap, useInspectTarget, useIsAdmin } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
-
-const DEV_TOOLS_ENABLED = !!import.meta.env.VITE_DEV_ADMIN_TOKEN;
 const PANEL_WIDTH = 420;
 
 interface WatchViewProps {
@@ -22,6 +20,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
   const activeRecap = useActiveRecap();
   const inspectTarget = useInspectTarget();
+  const isAdmin = useIsAdmin();
 
   const sidebarWidth = inspectTarget ? PANEL_WIDTH : eventFeedOpen ? PANEL_WIDTH : 0;
 
@@ -106,7 +105,7 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
 
       {/* Overlays — kept as-is */}
       {activeRecap && <RecapOverlay />}
-      {DEV_TOOLS_ENABLED && <DevPanel />}
+      {isAdmin && <DevPanel />}
     </div>
   );
 };

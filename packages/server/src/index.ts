@@ -8,7 +8,7 @@ import { createAdapter } from '@socket.io/redis-streams-adapter';
 import { timingSafeEqual, createHash } from 'crypto';
 import { SimulationEngine } from './simulation/engine.js';
 import { createRouter } from './routes.js';
-import { createAuthRouter, optionalAuth, verifyToken, stopAuthRateLimitCleaner } from './auth.js';
+import { createAuthRouter, optionalAuth, verifyToken, verifyTokenFull, stopAuthRateLimitCleaner } from './auth.js';
 import { setupRedis, closeRedis, getRedis } from './redis.js';
 import { isEncryptionConfigured } from './crypto.js';
 import path from 'path';
@@ -46,6 +46,15 @@ if (isProduction && process.env.DEV_ADMIN_TOKEN) {
   console.error('[Security] FATAL: DEV_ADMIN_TOKEN must not be set in production.');
   process.exit(1);
 }
+
+// ADMIN_EMAILS: comma-separated list of emails that get admin privileges (dev panel, sim control).
+// In production, this replaces DEV_ADMIN_TOKEN for authorizing simulation control commands.
+const ADMIN_EMAILS: Set<string> = new Set(
+  (process.env.ADMIN_EMAILS ?? '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 // Redis: setup client before Socket.IO so the adapter is ready at startup.
 // Falls back to in-memory (single-instance) when REDIS_URL is not set.
@@ -226,8 +235,11 @@ function isDevAuthorized(token: unknown): boolean {
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
   if (typeof token === 'string' && token.length > 0) {
-    const userId = await verifyToken(token);
-    if (userId) socket.data.userId = userId;
+    const result = await verifyTokenFull(token);
+    if (result) {
+      socket.data.userId = result.userId;
+      socket.data.isAdmin = !!(result.email && ADMIN_EMAILS.has(result.email.toLowerCase()));
+    }
   }
   next(); // always allow connection — spectators are valid users
 });
@@ -237,6 +249,11 @@ io.on('connection', (socket) => {
 
   // Send initial snapshot
   socket.emit('world:snapshot', engine.getSnapshot());
+
+  // Notify client of admin status (controls dev panel visibility)
+  if (socket.data.isAdmin) {
+    socket.emit('auth:admin', { isAdmin: true });
+  }
 
   // UUID v4 format validation for agentId inputs (OWASP WebSocket Security Cheat Sheet)
   const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -392,7 +409,7 @@ io.on('connection', (socket) => {
 
   // --- Dev tools (token-gated) ---
   socket.on('dev:pause', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot pause' });
       return;
@@ -402,7 +419,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:resume', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot resume' });
       return;
@@ -412,7 +429,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:step', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot step' });
       return;
@@ -422,7 +439,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:reset-vitals', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot reset vitals' });
       return;
@@ -435,7 +452,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:fresh-start', async (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     if (!engine.isLeader) {
       socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot fresh-start' });
       return;
@@ -452,7 +469,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:status-request', (token: unknown) => {
-    if (!isDevAuthorized(token)) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
     socket.emit('dev:status', { paused: !engine.isRunning });
   });
 
