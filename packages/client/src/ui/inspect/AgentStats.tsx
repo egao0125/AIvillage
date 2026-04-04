@@ -6,7 +6,7 @@ const StatBar: React.FC<{ label: string; value: number; max: number; color: stri
   <div style={{ marginBottom: 6 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim, marginBottom: 2 }}>
       <span>{label}</span>
-      <span>{value}/{max}</span>
+      <span>{Math.round(value)}/{max}</span>
     </div>
     <div style={{ height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: 'hidden' }}>
       <div style={{
