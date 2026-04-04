@@ -187,6 +187,11 @@ jobs:
             --for=condition=complete \
             --timeout=300s
 
+      - name: Apply Kubernetes manifests
+        run: |
+          # Apply ConfigMap and other non-secret manifests so env var changes take effect
+          kubectl apply -f k8s/01-configmap.yaml
+
       - name: Deploy application
         run: |
           IMAGE_URI="${{ needs.build.outputs.image_uri }}"
