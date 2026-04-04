@@ -40,7 +40,7 @@ variable "aws_profile" {
 }
 
 locals {
-  account_id  = "YOUR_AWS_ACCOUNT_ID"  # Replace with: aws sts get-caller-identity --query Account --output text
+  account_id  = "053442321898"  # Replace with: aws sts get-caller-identity --query Account --output text
   # us-east-1 backend bucket — separate from the old ap-northeast-1 bucket
   # Old bucket: ai-village-terraform-state-YOUR_AWS_ACCOUNT_ID (ap-northeast-1, keep until migration verified)
   bucket_name = "ai-village-tfstate-us1-${local.account_id}"

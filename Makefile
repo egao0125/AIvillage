@@ -82,8 +82,7 @@ k8s-status:
 # ---- ECR Image Push ----
 
 IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
-# Replace YOUR_AWS_ACCOUNT_ID with your AWS account ID (from: aws sts get-caller-identity)
-ECR_REPO  := $(or $(AWS_ACCOUNT_ID),YOUR_AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/ai-village
+ECR_REPO  := $(or $(AWS_ACCOUNT_ID),053442321898).dkr.ecr.$(AWS_REGION).amazonaws.com/ai-village
 
 ecr-login:
 	aws ecr get-login-password --region $(AWS_REGION) --profile $(AWS_PROFILE) | \

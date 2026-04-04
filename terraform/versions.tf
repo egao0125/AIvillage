@@ -35,9 +35,8 @@ terraform {
   # ---------------------------------------------------------------------------
   backend "s3" {
     # us-east-1 backend — created by terraform/bootstrap (run once before terraform init)
-    # Old ap-northeast-1 bucket: ai-village-terraform-state-YOUR_AWS_ACCOUNT_ID (keep until migration verified)
-    # Replace YOUR_AWS_ACCOUNT_ID with your AWS account ID
-    bucket         = "ai-village-tfstate-us1-YOUR_AWS_ACCOUNT_ID"
+    # Old ap-northeast-1 bucket: ai-village-terraform-state-053442321898 (keep until migration verified)
+    bucket         = "ai-village-tfstate-us1-053442321898"
     key            = "infra/eks/terraform.tfstate"
     region         = "us-east-1"
     encrypt        = true
