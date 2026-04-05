@@ -401,14 +401,31 @@ export class AgentSprite extends Phaser.GameObjects.Container {
 
   setDead(dead: boolean): void {
     if (dead) {
-      this.setAlpha(0.3);
+      this.isLerping = false;
       this.nameLabel.setColor('#666666');
       this.actionLabel.setText('');
       this.moodRing.setVisible(false);
+
+      // Play death animation to show lying on the ground
+      if (this.useAnimated && this.sprite instanceof Phaser.GameObjects.Sprite) {
+        const dieKey = `${this.prefix}_die_${this.dirSuffix()}`;
+        if (this.scene.anims.exists(dieKey)) {
+          this.sprite.play(dieKey);
+          this.sprite.once('animationcomplete', () => {
+            this.setAlpha(0.3);
+          });
+          return;
+        }
+      }
+      this.setAlpha(0.3);
     } else {
       this.setAlpha(1);
       this.nameLabel.setColor('#222222');
       this.moodRing.setVisible(true);
+      if (this.useAnimated && this.sprite instanceof Phaser.GameObjects.Sprite) {
+        this.sprite.setAlpha(1);
+      }
+      this.playAnim('idle');
     }
   }
 

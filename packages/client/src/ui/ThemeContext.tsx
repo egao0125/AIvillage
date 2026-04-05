@@ -18,9 +18,10 @@ const ThemeContext = createContext<ThemeContextValue>({
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isDark, setIsDark] = useState(() => {
     try {
-      return localStorage.getItem(STORAGE_KEY) === 'dark';
+      const stored = localStorage.getItem(STORAGE_KEY);
+      return stored === null ? true : stored === 'dark';
     } catch {
-      return false;
+      return true;
     }
   });
 
