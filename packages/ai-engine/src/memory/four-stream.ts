@@ -94,7 +94,7 @@ export class FourStreamMemory {
   seedIdentity(config: AgentConfig): void {
     const soul = config.soul || config.backstory || '';
     this.identity = [{
-      id: 'identity-core',
+      id: crypto.randomUUID(),
       agentId: this.agentId,
       type: 'reflection',
       content: `I am ${config.name}, age ${config.age}. ${soul}`,
@@ -105,7 +105,7 @@ export class FourStreamMemory {
     }];
     if (config.goal) {
       this.identity.push({
-        id: 'identity-goal',
+        id: crypto.randomUUID(),
         agentId: this.agentId,
         type: 'reflection',
         content: `My goal: ${config.goal}`,
@@ -1564,7 +1564,18 @@ JSON array of strings. Only genuinely new insights. Empty array [] if nothing ne
         prompt,
       );
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
-      const lessons = JSON.parse(cleaned);
+      let lessons: unknown;
+      try {
+        lessons = JSON.parse(cleaned);
+      } catch {
+        // Fallback: extract JSON array from prose (LLM sometimes appends explanation after the array)
+        const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          lessons = JSON.parse(arrayMatch[0]);
+        } else {
+          throw new Error(`No JSON array found in response: "${cleaned.substring(0, 120)}..."`);
+        }
+      }
 
       if (Array.isArray(lessons)) {
         for (const lesson of lessons.slice(0, 2)) {
@@ -1669,7 +1680,17 @@ JSON array with at most 1 string. Empty array [] if failures were random/unavoid
         prompt,
       );
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
-      const lessons = JSON.parse(cleaned);
+      let lessons: unknown;
+      try {
+        lessons = JSON.parse(cleaned);
+      } catch {
+        const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+        if (arrayMatch) {
+          lessons = JSON.parse(arrayMatch[0]);
+        } else {
+          throw new Error(`No JSON array found in response: "${cleaned.substring(0, 120)}..."`);
+        }
+      }
       if (!Array.isArray(lessons) || lessons.length === 0) return;
 
       const lesson = lessons[0];

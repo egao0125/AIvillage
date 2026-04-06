@@ -21,14 +21,14 @@ export class TieredMemory {
     const soul = config.soul || config.backstory || '';
     this.identity = [
       {
-        id: 'identity-core', agentId: this.agentId, type: 'reflection',
+        id: crypto.randomUUID(), agentId: this.agentId, type: 'reflection',
         content: `I am ${config.name}, age ${config.age}. ${soul}`,
         importance: 10, isCore: true, timestamp: 0, relatedAgentIds: [],
       },
     ];
     if (config.goal) {
       this.identity.push({
-        id: 'identity-goal', agentId: this.agentId, type: 'reflection',
+        id: crypto.randomUUID(), agentId: this.agentId, type: 'reflection',
         content: `My goal: ${config.goal}`,
         importance: 10, isCore: true, timestamp: 0, relatedAgentIds: [],
       });

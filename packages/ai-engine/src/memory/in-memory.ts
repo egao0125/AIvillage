@@ -66,6 +66,9 @@ export class InMemoryStore implements MemoryStore {
   private hydeCache: Map<string, { expanded: string; timestamp: number }> = new Map();
   /** Cache neural query embeddings to avoid redundant API calls */
   private neuralQueryCache: Map<string, { vec: number[]; ts: number }> = new Map();
+  /** Log once flags — avoid spamming embedding success/failure per memory */
+  private _loggedEmbedSuccess = false;
+  private _loggedEmbedFailure = false;
   private static readonly HYDE_CACHE_TTL = 300_000; // 5 minutes
 
   private getAgentMemories(agentId: string): Memory[] {
@@ -104,11 +107,20 @@ export class InMemoryStore implements MemoryStore {
     embedder.addDocument(memory.content);
     memory.embedding = embedder.embed(memory.content);
 
-    // Neural embedding — fire-and-forget. Failures are silent (TF-IDF is the floor).
+    // Neural embedding — fire-and-forget. TF-IDF is the floor.
     if (this.embeddingProvider && !memory.neuralEmbedding) {
       this.embeddingProvider.embed(memory.content).then(vec => {
         memory.neuralEmbedding = vec;
-      }).catch(() => { /* TF-IDF fallback — no action needed */ });
+        if (!this._loggedEmbedSuccess) {
+          console.log(`[Embedding] Neural embedding OK (${vec.length}d) for agent ${memory.agentId}`);
+          this._loggedEmbedSuccess = true;
+        }
+      }).catch((err: unknown) => {
+        if (!this._loggedEmbedFailure) {
+          console.warn(`[Embedding] Neural embedding failed for agent ${memory.agentId}:`, (err as Error).message);
+          this._loggedEmbedFailure = true;
+        }
+      });
     }
   }
 

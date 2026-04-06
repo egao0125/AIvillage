@@ -29,6 +29,9 @@ export class RdsMemoryStore implements MemoryStore {
   private hydeCache: Map<string, { expanded: string; timestamp: number }> = new Map();
   private neuralQueryCache: Map<string, { vec: number[]; ts: number }> = new Map();
   private static readonly HYDE_CACHE_TTL = 300_000; // 5 minutes
+  /** Log once flags — avoid spamming embedding success/failure per memory */
+  private _loggedEmbedSuccess = false;
+  private _loggedEmbedFailure = false;
 
   constructor(private pool: Pool) {}
 
@@ -99,7 +102,16 @@ export class RdsMemoryStore implements MemoryStore {
     if (this.embeddingProvider && !memory.neuralEmbedding) {
       this.embeddingProvider.embed(memory.content).then(vec => {
         memory.neuralEmbedding = vec;
-      }).catch(() => { /* TF-IDF fallback */ });
+        if (!this._loggedEmbedSuccess) {
+          console.log(`[Embedding] Neural embedding OK (${vec.length}d) for agent ${memory.agentId}`);
+          this._loggedEmbedSuccess = true;
+        }
+      }).catch((err: unknown) => {
+        if (!this._loggedEmbedFailure) {
+          console.warn(`[Embedding] Neural embedding failed for agent ${memory.agentId}:`, (err as Error).message);
+          this._loggedEmbedFailure = true;
+        }
+      });
     }
 
     try {
