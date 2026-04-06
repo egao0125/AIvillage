@@ -464,19 +464,26 @@ io.on('connection', (socket) => {
   });
 
   socket.on('dev:fresh-start', async (token: unknown) => {
-    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) {
+      console.warn(`[Server] Fresh start DENIED — socket ${socket.id} not authorized (isAdmin=${socket.data.isAdmin})`);
+      socket.emit('dev:fresh-start:error', { error: 'Not authorized' });
+      return;
+    }
     if (!engine.isLeader) {
-      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot fresh-start' });
+      socket.emit('dev:fresh-start:error', { error: 'Not the leader Pod — cannot fresh-start' });
       return;
     }
     console.log('[Server] Fresh start requested');
+    socket.emit('dev:fresh-start:ack');
     try {
       await engine.freshStart();
       io.emit('world:snapshot', engine.getSnapshot());
       io.emit('dev:status', { paused: !engine.isRunning });
+      io.emit('dev:fresh-start:done');
       console.log('[Server] Fresh start complete — snapshot broadcast');
     } catch (err) {
       console.error('[Server] Fresh start failed:', (err as Error).message);
+      socket.emit('dev:fresh-start:error', { error: (err as Error).message });
     }
   });
 

@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { devPause, devResume, devStep, devResetVitals, devFreshStart, devRequestStatus, onDevStatus } from '../../network/socket';
+import { devPause, devResume, devStep, devResetVitals, devFreshStart, devRequestStatus, onDevStatus, onFreshStartAck, onFreshStartDone, onFreshStartError } from '../../network/socket';
 
 export const DevPanel: React.FC = () => {
   const [paused, setPaused] = useState(false);
+  const [freshStarting, setFreshStarting] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 8 });
   const dragging = useRef(false);
   const offset = useRef({ x: 0, y: 0 });
@@ -19,7 +20,13 @@ export const DevPanel: React.FC = () => {
   useEffect(() => {
     devRequestStatus();
     const unsub = onDevStatus((data) => setPaused(data.paused));
-    return unsub;
+    const unsubAck = onFreshStartAck(() => setFreshStarting(true));
+    const unsubDone = onFreshStartDone(() => setFreshStarting(false));
+    const unsubErr = onFreshStartError((data) => {
+      setFreshStarting(false);
+      alert(`Fresh Start failed: ${data.error}`);
+    });
+    return () => { unsub(); unsubAck(); unsubDone(); unsubErr(); };
   }, []);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
@@ -85,11 +92,15 @@ export const DevPanel: React.FC = () => {
         <button style={{ ...btnStyle, background: '#5a2a2a' }} onClick={devPause}>Pause</button>
       )}
       <button style={btnStyle} onClick={devResetVitals}>Reset Vitals</button>
-      <button style={{ ...btnStyle, background: '#5a3a2a' }} onClick={() => {
-        if (confirm('Fresh Start: Wipe all memories and world state? Agents keep their identity but lose all experiences.')) {
-          devFreshStart();
-        }
-      }}>Fresh Start</button>
+      <button
+        style={{ ...btnStyle, background: freshStarting ? '#3a3a3a' : '#5a3a2a', opacity: freshStarting ? 0.6 : 1 }}
+        disabled={freshStarting}
+        onClick={() => {
+          if (confirm('Fresh Start: Wipe all memories and world state? Agents keep their identity but lose all experiences.')) {
+            devFreshStart();
+          }
+        }}
+      >{freshStarting ? 'Resetting...' : 'Fresh Start'}</button>
       <span style={{ color: paused ? '#f88' : '#8f8', fontSize: 11, fontFamily: 'monospace' }}>
         {paused ? 'PAUSED' : 'RUNNING'}
       </span>

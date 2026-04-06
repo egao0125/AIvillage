@@ -437,6 +437,18 @@ export function onDevStatus(cb: (data: { paused: boolean }) => void): () => void
   socket?.on('dev:status', cb);
   return () => { socket?.off('dev:status', cb); };
 }
+export function onFreshStartAck(cb: () => void): () => void {
+  socket?.on('dev:fresh-start:ack', cb);
+  return () => { socket?.off('dev:fresh-start:ack', cb); };
+}
+export function onFreshStartDone(cb: () => void): () => void {
+  socket?.on('dev:fresh-start:done', cb);
+  return () => { socket?.off('dev:fresh-start:done', cb); };
+}
+export function onFreshStartError(cb: (data: { error: string }) => void): () => void {
+  socket?.on('dev:fresh-start:error', cb);
+  return () => { socket?.off('dev:fresh-start:error', cb); };
+}
 
 export function selectAgent(agentId: string): void {
   socket?.emit('agent:select', agentId);
