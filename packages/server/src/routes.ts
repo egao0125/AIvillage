@@ -230,6 +230,7 @@ export function createRouter(engine: SimulationEngine): Router {
         id: a.id,
         name: a.config.name,
         occupation: a.config.occupation,
+        soul: a.config.soul,
         personality: a.config.personality,
         currency: a.currency,
       })),
@@ -256,19 +257,54 @@ export function createRouter(engine: SimulationEngine): Router {
       return;
     }
 
-    // Simple arc summary from available data (no LLM for now — can be upgraded later)
     const timeline = engine.getCharacterTimeline(id, 20);
-    const recentEvents = timeline.map(e => e.description).join('. ');
+    const soul = agent.config.soul || '';
+    const backstory = agent.config.backstory || '';
+    const goal = agent.config.goal || '';
+    const worldView = agent.worldView || '';
 
-    const mentalModels = agent.mentalModels?.map(m => {
+    // Build narrative arc from soul + recent history + relationships
+    const parts: string[] = [];
+
+    // Identity
+    if (soul) {
+      parts.push(soul.length > 150 ? soul.slice(0, 150) + '...' : soul);
+    }
+
+    // Current state
+    const stateDesc = agent.currentAction && agent.currentAction !== 'idle'
+      ? `Currently: ${agent.currentAction}.`
+      : '';
+    if (stateDesc) parts.push(stateDesc);
+
+    // World view (agent's own perspective)
+    if (worldView) {
+      parts.push(worldView.length > 200 ? worldView.slice(0, 200) + '...' : worldView);
+    }
+
+    // Key relationships
+    const relationships = agent.mentalModels?.slice(0, 5).map(m => {
       const target = snapshot.agents.find(a => a.id === m.targetId);
-      return `${target?.config.name ?? 'Unknown'}: trust ${m.trust}, feels ${m.emotionalStance}`;
-    }).join('; ') ?? 'None';
+      const name = target?.config.name ?? 'Unknown';
+      const trustWord = m.trust > 60 ? 'trusts' : m.trust > 30 ? 'is wary of' : 'distrusts';
+      return `${trustWord} ${name} (${m.emotionalStance})`;
+    }) ?? [];
+    if (relationships.length > 0) {
+      parts.push(`${agent.config.name} ${relationships.join(', ')}.`);
+    }
 
-    const summary = `${agent.config.name}${agent.config.occupation ? ', ' + agent.config.occupation : ''}, age ${agent.config.age}. Mood: ${agent.mood}. ${recentEvents || 'Just arrived in the village.'}
+    // Recent notable events
+    const recentEvents = timeline.slice(0, 5).map(e => e.description).filter(Boolean);
+    if (recentEvents.length > 0) {
+      parts.push(`Recent: ${recentEvents.join('. ')}.`);
+    }
 
-Relationships: ${mentalModels}`;
+    // Goal
+    if (goal) {
+      parts.push(`Driving goal: ${goal}`);
+    }
 
+    const summary = parts.join('\n\n') || 'Their story is just beginning...';
     res.json({ summary });
   });
 
