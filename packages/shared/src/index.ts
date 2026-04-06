@@ -188,6 +188,53 @@ export const DEFAULT_REWARD_WEIGHTS: RewardVector = {
   villageImpact: 0.08,
 };
 
+/**
+ * Derive per-agent reward weights from Big Five personality traits.
+ * Shifts the default profile so personality shapes what the agent optimizes for:
+ *   - High neuroticism  → heavier hp (survival anxiety)
+ *   - High agreeableness → heavier social + villageImpact (prosocial)
+ *   - Low agreeableness  → heavier resources (competitive)
+ *   - High conscientiousness → heavier goalProgress + normDeviation (rule-following)
+ *   - High openness → heavier exploration (novelty-seeking)
+ *   - High extraversion → heavier social (relationship-driven)
+ * Weights are normalized to sum to 1.0 so scalar reward stays in ~[-1, +1].
+ */
+export function deriveRewardWeights(personality: AgentPersonality): RewardVector {
+  // Start from defaults, shift by trait deltas (centered at 0.5)
+  const d = DEFAULT_REWARD_WEIGHTS;
+  const o = personality.openness - 0.5;       // [-0.5, +0.5]
+  const c = personality.conscientiousness - 0.5;
+  const e = personality.extraversion - 0.5;
+  const a = personality.agreeableness - 0.5;
+  const n = personality.neuroticism - 0.5;
+
+  // Each trait shifts 1-2 axes. Magnitude: ±0.08 at extremes (±0.5 * 0.16).
+  const raw = {
+    hp:              d.hp              + n * 0.16,                    // neurotic → survival
+    resources:       d.resources       - a * 0.12,                   // disagreeable → resources
+    social:          d.social          + a * 0.10 + e * 0.08,        // agreeable+extraverted → social
+    goalProgress:    d.goalProgress    + c * 0.12,                   // conscientious → goals
+    exploration:     d.exploration     + o * 0.10,                   // open → exploration
+    normDeviation:   d.normDeviation   + c * 0.08 + a * 0.06,       // conscientious+agreeable → norms
+    villageImpact:   (d.villageImpact ?? 0.08) + a * 0.08,          // agreeable → commons
+  };
+
+  // Floor at 0.02 (no axis goes to zero) then normalize to sum = 1.0
+  const floored = Object.fromEntries(
+    Object.entries(raw).map(([k, v]) => [k, Math.max(0.02, v)])
+  ) as Record<string, number>;
+  const sum = Object.values(floored).reduce((s, v) => s + v, 0);
+  return {
+    hp:            floored.hp / sum,
+    resources:     floored.resources / sum,
+    social:        floored.social / sum,
+    goalProgress:  floored.goalProgress / sum,
+    exploration:   floored.exploration / sum,
+    normDeviation: floored.normDeviation / sum,
+    villageImpact: floored.villageImpact / sum,
+  };
+}
+
 // Scalarize a reward vector against an agent's weights. Result in roughly [-1, +1].
 // If no weights provided, uses balanced defaults. Legacy agent rewardWeights without
 // normDeviation / villageImpact fields fall back to the default weight for each

@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
-import { EventBus } from '@ai-village/shared';
+import { EventBus, deriveRewardWeights } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, VoyageEmbeddingProvider, OpenAIEmbeddingProvider, SEASONS, getMapConfig, buildWerewolfRules } from '@ai-village/ai-engine';
 import type { EmbeddingProvider } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
@@ -752,6 +752,11 @@ export class SimulationEngine {
         const agent = agents[i];
         // Backwards compat: tag agents loaded before map_id migration
         if (!agent.mapId) agent.mapId = mapId;
+        // Backfill personality-derived reward weights for agents created before this feature
+        if (!agent.rewardWeights && agent.config.personality) {
+          agent.rewardWeights = deriveRewardWeights(agent.config.personality);
+          agent.normWeight = agent.normWeight ?? (0.3 + agent.config.personality.agreeableness * 0.6);
+        }
         this.world.addAgent(agent);
 
         // Restore per-agent BYOK key from RDS only — no global fallback.
@@ -1009,6 +1014,11 @@ export class SimulationEngine {
     agent.activeConcerns = [];
     agent.dossiers = [];
     agent.institutionIds = [];
+
+    // Derive personality-based reward weights + norm sensitivity from Big Five traits.
+    // Each agent now optimizes for different things based on who they are.
+    agent.rewardWeights = deriveRewardWeights(config.personality);
+    agent.normWeight = 0.3 + config.personality.agreeableness * 0.6; // 0.3..0.9
 
     this.world.addAgent(agent);
 
