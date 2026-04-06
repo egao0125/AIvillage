@@ -208,10 +208,11 @@ export function useEventFeed(): VillageEvent[] {
   const villageMemory = useVillageMemory();
   const agentsMap = useAgentsMap();
   const institutions = useInstitutions();
+  const chatLog = useChatLog();
 
   return useMemo(
-    () => synthesizeEvents(board, artifacts, buildings, technologies, elections, villageMemory, agentsMap, institutions),
-    [board, artifacts, buildings, technologies, elections, villageMemory, agentsMap, institutions]
+    () => synthesizeEvents(board, artifacts, buildings, technologies, elections, villageMemory, agentsMap, institutions, chatLog),
+    [board, artifacts, buildings, technologies, elections, villageMemory, agentsMap, institutions, chatLog]
   );
 }
 

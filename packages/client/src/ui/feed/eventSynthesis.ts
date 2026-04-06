@@ -8,6 +8,7 @@ import type {
   Technology,
   VillageMemoryEntry,
 } from '@ai-village/shared';
+import type { ChatEntry } from '../../core/GameStore';
 import type { VillageEvent, EventType } from './types';
 import { EVENT_BADGES } from './types';
 
@@ -28,6 +29,7 @@ export function synthesizeEvents(
   villageMemory: VillageMemoryEntry[],
   agents: Map<string, Agent>,
   institutions: Institution[],
+  chatLog: ChatEntry[] = [],
 ): VillageEvent[] {
   const events: VillageEvent[] = [];
 
@@ -251,6 +253,40 @@ export function synthesizeEvents(
         sourceData: inst,
       });
     }
+  }
+
+  // --- Conversations (grouped by conversationId) ---
+  const convoMap = new Map<string, ChatEntry[]>();
+  for (const entry of chatLog) {
+    if (!entry.conversationId) continue;
+    let arr = convoMap.get(entry.conversationId);
+    if (!arr) { arr = []; convoMap.set(entry.conversationId, arr); }
+    arr.push(entry);
+  }
+  for (const [convoId, messages] of convoMap) {
+    if (messages.length === 0) continue;
+    const participants = new Map<string, string>();
+    for (const m of messages) {
+      participants.set(m.agentId, m.agentName);
+    }
+    const names = [...participants.values()];
+    const b = badge('conversation');
+    const firstMsg = messages[0];
+    const preview = messages.length > 1
+      ? `${firstMsg.agentName}: "${firstMsg.message.slice(0, 60)}${firstMsg.message.length > 60 ? '...' : ''}"`
+      : firstMsg.message;
+    events.push({
+      id: `convo-${convoId}`,
+      type: 'conversation',
+      icon: b.icon,
+      color: b.color,
+      headline: `${names.join(' & ')} — ${preview}`,
+      day: 0,
+      timestamp: firstMsg.timestamp,
+      agentIds: [...participants.keys()],
+      agentNames: names,
+      sourceConversationId: convoId,
+    });
   }
 
   // Sort newest first

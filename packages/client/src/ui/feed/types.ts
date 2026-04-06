@@ -13,7 +13,8 @@ export type EventType =
   | 'announcement'
   | 'news'
   | 'bounty'
-  | 'threat';
+  | 'threat'
+  | 'conversation';
 
 export interface VillageEvent {
   id: string;
@@ -47,4 +48,5 @@ export const EVENT_BADGES: Record<EventType, { icon: string; color: string }> = 
   news:         { icon: '📰', color: '#ec4899' },
   bounty:       { icon: '🎯', color: '#f97316' },
   threat:       { icon: '🔥', color: '#ef4444' },
+  conversation: { icon: '💬', color: '#9ca3af' },
 };
