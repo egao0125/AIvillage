@@ -34,12 +34,7 @@ const MODELS = [
   { value: 'claude-opus-4-6', label: 'Opus 4.6 (smartest)' },
 ];
 
-const ACCENT = '#2a8a6a';
-const BG = '#f5f5f0';
-const CARD_BG = '#ffffff';
-const INPUT_BG = '#eeeee8';
-const LABEL_COLOR = '#777770';
-const BORDER_DIM = '#d0d0c8';
+// Theme colors are used via useTheme() — see colors.accent, colors.bg, etc.
 
 const SOUL_PLACEHOLDER = `Write their inner voice. This is who they are — how they think, speak, and act.
 
@@ -53,6 +48,29 @@ Example:
 export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
   const { colors } = useTheme();
   const isMobile = useIsMobile();
+
+  const labelStyle: React.CSSProperties = {
+    fontFamily: '"Press Start 2P", monospace',
+    fontSize: 6,
+    color: colors.textDim,
+    display: 'block',
+    marginBottom: 6,
+    letterSpacing: 1,
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '10px 12px',
+    fontFamily: '"Press Start 2P", monospace',
+    fontSize: 8,
+    color: colors.text,
+    background: colors.bgLight,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    boxSizing: 'border-box',
+    transition: 'border-color 0.2s',
+  };
+
   // --- Auth state ---
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -338,9 +356,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: BG,
+          background: colors.bg,
           fontFamily: FONTS.pixel,
-          color: LABEL_COLOR,
+          color: colors.textDim,
           fontSize: 9,
         }}
       >
@@ -355,7 +373,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
       style={{
         width: '100vw',
         minHeight: '100vh',
-        background: BG,
+        background: colors.bg,
         position: 'relative',
         overflowX: 'hidden',
         overflowY: 'auto',
@@ -380,18 +398,18 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
         }
         .s-input:focus, .s-textarea:focus, .s-select:focus {
           outline: none;
-          border-color: ${ACCENT} !important;
+          border-color: ${colors.accent} !important;
           box-shadow: 0 0 0 1px rgba(100, 255, 218, 0.12);
         }
-        .s-input::placeholder, .s-textarea::placeholder { color: #999990; }
+        .s-input::placeholder, .s-textarea::placeholder { color: ${colors.textDim}; }
         .s-btn:hover:not(:disabled) {
-          background: ${ACCENT} !important;
-          color: ${BG} !important;
+          background: ${colors.accent} !important;
+          color: ${colors.bg} !important;
           box-shadow: 0 0 24px rgba(100, 255, 218, 0.2);
         }
         .s-btn:active:not(:disabled) { transform: scale(0.98); }
-        .s-skip:hover { color: ${LABEL_COLOR} !important; }
-        .s-show:hover { color: ${ACCENT} !important; }
+        .s-skip:hover { color: ${colors.textDim} !important; }
+        .s-show:hover { color: ${colors.accent} !important; }
         .s-card:hover { border-color: #3a3a5a !important; }
       `}</style>
 
@@ -468,7 +486,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
             style={{
               width: 48,
               height: 2,
-              background: ACCENT,
+              background: colors.accent,
               margin: '18px auto 14px',
               opacity: 0.4,
             }}
@@ -495,8 +513,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 padding: '10px 16px',
-                background: CARD_BG,
-                border: `1px solid ${BORDER_DIM}`,
+                background: colors.bgCard,
+                border: `1px solid ${colors.border}`,
                 borderRadius: 4,
               }}
             >
@@ -510,7 +528,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 style={{
                   fontFamily: FONTS.pixel,
                   fontSize: 5,
-                  color: BORDER_DIM,
+                  color: colors.border,
                   background: 'none',
                   border: 'none',
                   cursor: 'pointer',
@@ -523,8 +541,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
           ) : (
             <div
               style={{
-                background: CARD_BG,
-                border: `1px solid ${BORDER_DIM}`,
+                background: colors.bgCard,
+                border: `1px solid ${colors.border}`,
                 borderRadius: 6,
                 padding: 20,
               }}
@@ -536,11 +554,11 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   style={{
                     fontFamily: FONTS.pixel,
                     fontSize: 7,
-                    color: authMode === 'signup' ? ACCENT : BORDER_DIM,
+                    color: authMode === 'signup' ? colors.accent : colors.border,
                     background: 'none',
                     border: 'none',
                     cursor: 'pointer',
-                    borderBottom: authMode === 'signup' ? `1px solid ${ACCENT}` : '1px solid transparent',
+                    borderBottom: authMode === 'signup' ? `1px solid ${colors.accent}` : '1px solid transparent',
                     paddingBottom: 4,
                   }}
                 >
@@ -552,11 +570,11 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   style={{
                     fontFamily: FONTS.pixel,
                     fontSize: 7,
-                    color: authMode === 'login' ? ACCENT : BORDER_DIM,
+                    color: authMode === 'login' ? colors.accent : colors.border,
                     background: 'none',
                     border: 'none',
                     cursor: 'pointer',
-                    borderBottom: authMode === 'login' ? `1px solid ${ACCENT}` : '1px solid transparent',
+                    borderBottom: authMode === 'login' ? `1px solid ${colors.accent}` : '1px solid transparent',
                     paddingBottom: 4,
                   }}
                 >
@@ -593,9 +611,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   padding: '10px 0',
                   fontFamily: FONTS.pixel,
                   fontSize: 8,
-                  color: authLoading ? BORDER_DIM : ACCENT,
+                  color: authLoading ? colors.border : colors.accent,
                   background: 'transparent',
-                  border: `1px solid ${authLoading ? BORDER_DIM : ACCENT}`,
+                  border: `1px solid ${authLoading ? colors.border : colors.accent}`,
                   borderRadius: 4,
                   cursor: authLoading ? 'wait' : 'pointer',
                   letterSpacing: 2,
@@ -614,7 +632,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
             style={{
               fontFamily: FONTS.pixel,
               fontSize: 6,
-              color: LABEL_COLOR,
+              color: colors.textDim,
               letterSpacing: 2,
               marginBottom: 10,
               textTransform: 'uppercase',
@@ -637,8 +655,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   fontFamily: 'monospace',
                   fontSize: 11,
                   color: colors.text,
-                  background: INPUT_BG,
-                  border: `1px solid ${BORDER_DIM}`,
+                  background: colors.bgLight,
+                  border: `1px solid ${colors.border}`,
                   borderRadius: 4,
                   boxSizing: 'border-box',
                   transition: 'border-color 0.2s',
@@ -655,7 +673,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   transform: 'translateY(-50%)',
                   fontFamily: FONTS.pixel,
                   fontSize: 5,
-                  color: BORDER_DIM,
+                  color: colors.border,
                   background: 'none',
                   border: 'none',
                   cursor: 'pointer',
@@ -675,8 +693,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 fontFamily: FONTS.pixel,
                 fontSize: 7,
                 color: colors.text,
-                background: INPUT_BG,
-                border: `1px solid ${BORDER_DIM}`,
+                background: colors.bgLight,
+                border: `1px solid ${colors.border}`,
                 borderRadius: 4,
                 cursor: 'pointer',
                 appearance: 'none',
@@ -696,7 +714,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               href="https://console.anthropic.com/settings/keys"
               target="_blank"
               rel="noreferrer"
-              style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM, textDecoration: 'none' }}
+              style={{ fontFamily: FONTS.pixel, fontSize: 5, color: colors.border, textDecoration: 'none' }}
             >
               Get a key
             </a>
@@ -709,7 +727,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
             style={{
               fontFamily: FONTS.pixel,
               fontSize: 6,
-              color: LABEL_COLOR,
+              color: colors.textDim,
               letterSpacing: 2,
               marginBottom: 16,
               textTransform: 'uppercase',
@@ -720,8 +738,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
 
           <div
             style={{
-              background: CARD_BG,
-              border: `1px solid ${BORDER_DIM}`,
+              background: colors.bgCard,
+              border: `1px solid ${colors.border}`,
               borderRadius: 6,
               padding: 24,
             }}
@@ -731,9 +749,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               <CharacterPicker
                 value={spriteId}
                 onChange={setSpriteId}
-                accentColor={ACCENT}
-                labelColor={LABEL_COLOR}
-                bgColor={INPUT_BG}
+                accentColor={colors.accent}
+                labelColor={colors.textDim}
+                bgColor={colors.bgLight}
               />
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div>
@@ -766,8 +784,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
             {/* Soul */}
             <div style={{ marginBottom: 18 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <label style={{ ...labelStyle, marginBottom: 0, color: ACCENT, fontSize: 7 }}>SOUL</label>
-                <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: BORDER_DIM }}>{soul.length}/2000</span>
+                <label style={{ ...labelStyle, marginBottom: 0, color: colors.accent, fontSize: 7 }}>SOUL</label>
+                <span style={{ fontFamily: FONTS.pixel, fontSize: 5, color: colors.border }}>{soul.length}/2000</span>
               </div>
               <textarea
                 ref={soulRef}
@@ -781,9 +799,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                   padding: '14px 14px',
                   fontFamily: '"Press Start 2P", monospace',
                   fontSize: 7,
-                  color: '#333330',
-                  background: INPUT_BG,
-                  border: `1px solid ${BORDER_DIM}`,
+                  color: colors.text,
+                  background: colors.bgLight,
+                  border: `1px solid ${colors.border}`,
                   borderRadius: 4,
                   boxSizing: 'border-box' as const,
                   resize: 'vertical' as const,
@@ -822,9 +840,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 padding: '12px 0',
                 fontFamily: FONTS.pixel,
                 fontSize: 9,
-                color: addingAgent ? BORDER_DIM : ACCENT,
+                color: addingAgent ? colors.border : colors.accent,
                 background: 'transparent',
-                border: `1px solid ${addingAgent ? BORDER_DIM : ACCENT}`,
+                border: `1px solid ${addingAgent ? colors.border : colors.accent}`,
                 borderRadius: 4,
                 cursor: addingAgent ? 'wait' : 'pointer',
                 letterSpacing: 3,
@@ -850,7 +868,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               style={{
                 fontFamily: FONTS.pixel,
                 fontSize: 6,
-                color: LABEL_COLOR,
+                color: colors.textDim,
                 letterSpacing: 2,
                 textTransform: 'uppercase',
               }}
@@ -861,7 +879,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               style={{
                 fontFamily: FONTS.pixel,
                 fontSize: 6,
-                color: createdAgents.length > 0 ? ACCENT : BORDER_DIM,
+                color: createdAgents.length > 0 ? colors.accent : colors.border,
               }}
             >
               {createdAgents.length}
@@ -873,10 +891,10 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               style={{
                 fontFamily: FONTS.pixel,
                 fontSize: 7,
-                color: BORDER_DIM,
+                color: colors.border,
                 textAlign: 'center',
                 padding: '20px 0',
-                border: `1px dashed ${BORDER_DIM}`,
+                border: `1px dashed ${colors.border}`,
                 borderRadius: 6,
                 lineHeight: 2,
               }}
@@ -896,8 +914,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                       alignItems: 'center',
                       gap: 12,
                       padding: '10px 14px',
-                      background: CARD_BG,
-                      border: `1px solid ${BORDER_DIM}`,
+                      background: colors.bgCard,
+                      border: `1px solid ${colors.border}`,
                       borderRadius: 5,
                       transition: 'border-color 0.15s',
                     }}
@@ -925,7 +943,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                       <div style={{ fontFamily: FONTS.pixel, fontSize: 8, color: colors.text }}>
                         {agent.name}
                       </div>
-                      <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: LABEL_COLOR, marginTop: 2 }}>
+                      <div style={{ fontFamily: FONTS.pixel, fontSize: 6, color: colors.textDim, marginTop: 2 }}>
                         {agent.soul ? agent.soul.slice(0, 40) + (agent.soul.length > 40 ? '...' : '') : 'no soul written'}
                       </div>
                     </div>
@@ -937,7 +955,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                       style={{
                         fontFamily: FONTS.pixel,
                         fontSize: 8,
-                        color: deletingAgent === agent.id ? BORDER_DIM : '#664444',
+                        color: deletingAgent === agent.id ? colors.border : '#664444',
                         background: 'none',
                         border: 'none',
                         cursor: deletingAgent === agent.id ? 'wait' : 'pointer',
@@ -975,9 +993,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               padding: '14px 0',
               fontFamily: FONTS.pixel,
               fontSize: 11,
-              color: !canEnter ? BORDER_DIM : ACCENT,
+              color: !canEnter ? colors.border : colors.accent,
               background: 'transparent',
-              border: `2px solid ${!canEnter ? BORDER_DIM : ACCENT}`,
+              border: `2px solid ${!canEnter ? colors.border : colors.accent}`,
               borderRadius: 4,
               cursor: !canEnter ? 'not-allowed' : 'pointer',
               letterSpacing: 4,
@@ -999,7 +1017,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               padding: '8px 0',
               fontFamily: FONTS.pixel,
               fontSize: 6,
-              color: BORDER_DIM,
+              color: colors.border,
               background: 'none',
               border: 'none',
               cursor: 'pointer',
@@ -1014,7 +1032,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
             style={{
               fontFamily: FONTS.pixel,
               fontSize: 5,
-              color: BORDER_DIM,
+              color: colors.border,
               marginTop: 20,
               lineHeight: 2.2,
               opacity: 0.5,
@@ -1057,26 +1075,3 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
   );
 };
 
-// --- Shared styles ---
-
-const labelStyle: React.CSSProperties = {
-  fontFamily: '"Press Start 2P", monospace',
-  fontSize: 6,
-  color: LABEL_COLOR,
-  display: 'block',
-  marginBottom: 6,
-  letterSpacing: 1,
-};
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 12px',
-  fontFamily: '"Press Start 2P", monospace',
-  fontSize: 8,
-  color: '#333330',
-  background: INPUT_BG,
-  border: `1px solid ${BORDER_DIM}`,
-  borderRadius: 4,
-  boxSizing: 'border-box',
-  transition: 'border-color 0.2s',
-};

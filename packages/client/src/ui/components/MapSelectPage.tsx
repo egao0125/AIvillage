@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useIsMobile } from '../../core/hooks';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
 import { useTheme } from '../ThemeContext';
 
 interface MapDef {
@@ -50,7 +50,7 @@ export const MapSelectPage: React.FC<Props> = ({ onSelect }) => {
   return (
     <div
       style={{
-        background: '#f5f5f0',
+        background: colors.bg,
         color: colors.text,
         minHeight: '100vh',
         display: 'flex',
