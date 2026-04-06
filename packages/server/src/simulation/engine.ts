@@ -1,7 +1,8 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
 import { EventBus } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, SEASONS, getMapConfig, buildWerewolfRules } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, VoyageEmbeddingProvider, OpenAIEmbeddingProvider, SEASONS, getMapConfig, buildWerewolfRules } from '@ai-village/ai-engine';
+import type { EmbeddingProvider } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import type { MapConfig } from '@ai-village/shared';
 import { getAreaEntrance, setActiveMap } from '../map/map-provider.js';
@@ -37,6 +38,10 @@ export class SimulationEngine {
   private agentApiKeys: Map<string, { apiKey: string; model: string }> = new Map();
   // Shared throttle per API key — limits concurrent LLM calls to prevent OOM
   private static readonly MAX_CONCURRENT_LLM = 10;
+  /** Cheap model for background memory processing (dossiers, beliefs, HyDE). Gap-analysis item 4.2. */
+  private static readonly CHEAP_LLM_MODEL = 'claude-haiku-4-5-20251001';
+  /** Shared neural embedding provider (OpenAI text-embedding-3-small). Created if OPENAI_API_KEY is set. */
+  private sharedEmbeddingProvider: EmbeddingProvider | null = null;
   private throttles: Map<string, ThrottledProvider> = new Map();
   private decisionQueue: DecisionQueue;
   private decisionInterval: NodeJS.Timeout | null = null;
@@ -291,7 +296,23 @@ export class SimulationEngine {
 
       this.storylineDetector = new StorylineDetector(this.world, narratorLlm);
       this.recapGenerator = new RecapGenerator(this.world, this.narrator, this.storylineDetector, narratorLlm);
+    }
+
+    // Neural embedding provider — shared across all agents.
+    // Preference: Voyage-4-large (RTEB #1, $0.12/1M) > OpenAI 3-large ($0.13/1M) > TF-IDF.
+    const voyageKey = process.env.VOYAGE_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (voyageKey) {
+      this.sharedEmbeddingProvider = new VoyageEmbeddingProvider(voyageKey, 'voyage-4-large', 1024);
+      console.log('[Engine] Neural embeddings enabled (voyage-4-large, 1024d)');
+    } else if (openaiKey) {
+      this.sharedEmbeddingProvider = new OpenAIEmbeddingProvider(openaiKey, 'text-embedding-3-large', 1024);
+      console.log('[Engine] Neural embeddings enabled (text-embedding-3-large, 1024d)');
     } else {
+      console.log('[Engine] No embedding API key set — using TF-IDF only for semantic matching');
+    }
+
+    if (!globalKey) {
       // ANTHROPIC_API_KEY not set — narrator/storyline/recap LLM calls will be skipped.
       // Using '' triggers auth errors on any LLM attempt, which providers handle gracefully.
       console.warn('[Engine] ANTHROPIC_API_KEY not set — narrator, storyline, and recap features disabled');
@@ -361,6 +382,52 @@ export class SimulationEngine {
       this.world.resetDailyCounters();
       this.world.spoilFood();
       this.decayWorldObjects();
+      // Bi-temporal context update (gap-analysis item 3.1):
+      // propagate current day to each agent's memory for valid_from/valid_until stamping
+      for (const cog of this.cognitions.values()) {
+        cog.fourStream?.setCurrentDay(this.world.time.day);
+      }
+      // Recompute emergent norms from the rolling 7-day ledger (gap-analysis item 1.2)
+      this.world.aggregateNorms(this.world.time.day, 7);
+      if (this.world.villageNorms.size > 0) {
+        const summary = Array.from(this.world.villageNorms.values())
+          .filter(n => n.enforcementRate >= 0.2)
+          .map(n => `${n.actionType}(enf=${n.enforcementRate.toFixed(2)}, sev=${n.severity.toFixed(2)}, n=${n.observationCount})`)
+          .join(', ');
+        if (summary) console.log(`[Norms] Day ${this.world.time.day}: ${summary}`);
+      }
+      // Propagate yesterday's witnessed events as learned aversions to each witness.
+      // Cheap O(entries × avg_witnesses), runs once per day. (gap-analysis item 1.2)
+      const yesterday = this.world.time.day - 1;
+      const fresh = this.world.villageMemory.filter(
+        e => e.day === yesterday && e.actionType && e.witnessIds && e.witnessIds.length > 0
+      );
+      for (const entry of fresh) {
+        // Valence: negative villageBenefit → aversion, positive → preference.
+        const vb = entry.villageBenefit ?? 0;
+        if (Math.abs(vb) < 0.05) continue;
+        const delta = Math.max(-1, Math.min(1, vb));
+        // Look up actor name once per entry (gap-analysis item 2.2)
+        const actor = entry.actorId ? this.world.getAgent(entry.actorId) : undefined;
+        const actorName = actor?.config.name ?? 'Someone';
+        for (const witnessId of entry.witnessIds!) {
+          if (witnessId === entry.actorId) continue;
+          const cog = this.cognitions.get(witnessId);
+          if (!cog?.fourStream) continue;
+          // (a) Procedural: learn to avoid/seek the action itself
+          cog.fourStream.updateLearnedAversion(entry.actionType!, delta, 'witnessed');
+          // (b) Relational: update dossier on the actor at 0.3 witness confidence
+          if (entry.actorId) {
+            cog.fourStream.updateDossierFromObservation(
+              entry.actorId,
+              actorName,
+              entry.content,
+              vb,
+              entry.day,
+            );
+          }
+        }
+      }
     });
 
     // Tick controllers — per-agent try-catch so one bad agent doesn't pause the sim
@@ -708,14 +775,20 @@ export class SimulationEngine {
 
         // Create cognition with RDS-backed memory + throttled LLM (BYOK key or empty)
         const llmProvider = this.getThrottledProvider(savedKey, effectiveModel);
+        const cheapLlm = this.getThrottledProvider(savedKey, SimulationEngine.CHEAP_LLM_MODEL);
         const ctrlDataForWorldView = controllerDataMap.get(agent.id);
         const savedParts = ctrlDataForWorldView?.worldViewParts;
         const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, savedParts, this.getGameRulesForAgent(agent));
+        cognition.cheapLlmProvider = cheapLlm;
         // Reset MY EXPERIENCE to prevent stale worldView from previous simulation runs
         const spawnArea = ctrlDataForWorldView?.homeArea ?? 'plaza';
         const freshParts = buildStartingWorldViewParts(spawnArea);
         cognition.resetExperience(freshParts.myExperience);
         this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
+        sharedMemoryStore.hydeProvider = cheapLlm;
+        if (this.sharedEmbeddingProvider && sharedMemoryStore instanceof RdsMemoryStore) {
+          sharedMemoryStore.embeddingProvider = this.sharedEmbeddingProvider;
+        }
         this.cognitions.set(agent.id, cognition);
 
         // Restore controller
@@ -963,12 +1036,16 @@ export class SimulationEngine {
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey ?? '', effectiveModel);
+    const cheapLlm = this.getThrottledProvider(effectiveKey ?? '', SimulationEngine.CHEAP_LLM_MODEL);
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
+    cognition.cheapLlmProvider = cheapLlm;
     this.wireFourStreamMemory(cognition, agent, memoryStore);
-    // Wire HyDE provider for semantic query expansion (Phase 3 memory upgrade)
-    if (memoryStore instanceof InMemoryStore) {
-      memoryStore.hydeProvider = llmProvider;
+    // Wire HyDE provider for semantic query expansion (Phase 3 memory upgrade / item 2A).
+    // Uses cheap model — HyDE query expansion is low-stakes and benefits from speed.
+    if (memoryStore instanceof InMemoryStore || memoryStore instanceof RdsMemoryStore) {
+      memoryStore.hydeProvider = cheapLlm;
+      if (this.sharedEmbeddingProvider) memoryStore.embeddingProvider = this.sharedEmbeddingProvider;
     }
     this.cognitions.set(id, cognition);
 
@@ -1138,10 +1215,16 @@ export class SimulationEngine {
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+    const cheapLlm = this.getThrottledProvider(effectiveKey, SimulationEngine.CHEAP_LLM_MODEL);
     // Preserve worldViewParts from old cognition if available
     const oldCognition = this.cognitions.get(id);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRulesForAgent(agent));
+    cognition.cheapLlmProvider = cheapLlm;
     this.wireFourStreamMemory(cognition, agent, memoryStore);
+    if (memoryStore instanceof InMemoryStore || memoryStore instanceof RdsMemoryStore) {
+      memoryStore.hydeProvider = cheapLlm;
+      if (this.sharedEmbeddingProvider) memoryStore.embeddingProvider = this.sharedEmbeddingProvider;
+    }
     this.cognitions.set(id, cognition);
 
     // Recreate controller with default wake/sleep hours
@@ -1252,12 +1335,18 @@ export class SimulationEngine {
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+    const cheapLlm = this.getThrottledProvider(effectiveKey, SimulationEngine.CHEAP_LLM_MODEL);
     const spawnArea = this.mapConfig.spawnAreas[
       Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
     ];
     const startingParts = buildStartingWorldViewParts(spawnArea);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
+    cognition.cheapLlmProvider = cheapLlm;
     this.wireFourStreamMemory(cognition, agent, memoryStore);
+    if (memoryStore instanceof InMemoryStore || memoryStore instanceof RdsMemoryStore) {
+      memoryStore.hydeProvider = cheapLlm;
+      if (this.sharedEmbeddingProvider) memoryStore.embeddingProvider = this.sharedEmbeddingProvider;
+    }
     this.cognitions.set(id, cognition);
 
     // Recreate controller
@@ -2553,6 +2642,7 @@ Answer with ONLY one word: "support" or "oppose".`,
   private wireFourStreamMemory(cognition: AgentCognition, agent: Agent, memoryStore: import('@ai-village/ai-engine').MemoryStore): void {
     const fourStream = new FourStreamMemory(agent.id, memoryStore, agent);
     fourStream.seedIdentity(agent.config);
+    fourStream.setCurrentDay(this.world.time.day);
     cognition.fourStream = fourStream;
   }
 
@@ -2612,12 +2702,18 @@ Answer with ONLY one word: "support" or "oppose".`,
 
     // Create new provider and cognition — preserve worldViewParts
     const llmProvider = this.getThrottledProvider(newApiKey, newModel);
+    const cheapLlm = this.getThrottledProvider(newApiKey, SimulationEngine.CHEAP_LLM_MODEL);
     const memoryStore = this.persistence
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     const oldCognition = this.cognitions.get(agentId);
     const cognition = new AgentCognition(agent, memoryStore, llmProvider, oldCognition?.worldViewParts, this.getGameRulesForAgent(agent));
+    cognition.cheapLlmProvider = cheapLlm;
     this.wireFourStreamMemory(cognition, agent, memoryStore);
+    if (memoryStore instanceof InMemoryStore || memoryStore instanceof RdsMemoryStore) {
+      memoryStore.hydeProvider = cheapLlm;
+      if (this.sharedEmbeddingProvider) memoryStore.embeddingProvider = this.sharedEmbeddingProvider;
+    }
     this.cognitions.set(agentId, cognition);
 
     // Reset controller's API state
@@ -2758,9 +2854,15 @@ Answer with ONLY one word: "support" or "oppose".`,
         console.warn(`[Engine] Agent ${agent.config.name} fresh-started without a BYOK key — LLM calls will be skipped`);
       }
       const llmProvider = this.getThrottledProvider(effectiveKey, effectiveModel);
+      const cheapLlm = this.getThrottledProvider(effectiveKey, SimulationEngine.CHEAP_LLM_MODEL);
       const startingParts = buildStartingWorldViewParts(spawnArea);
       const cognition = new AgentCognition(agent, sharedMemoryStore, llmProvider, startingParts, this.getGameRulesForAgent(agent));
+      cognition.cheapLlmProvider = cheapLlm;
       this.wireFourStreamMemory(cognition, agent, sharedMemoryStore);
+      if (sharedMemoryStore instanceof InMemoryStore || sharedMemoryStore instanceof RdsMemoryStore) {
+        sharedMemoryStore.hydeProvider = cheapLlm;
+        if (this.sharedEmbeddingProvider) sharedMemoryStore.embeddingProvider = this.sharedEmbeddingProvider;
+      }
       this.cognitions.set(agent.id, cognition);
 
       // Seed identity memories — await so they exist in RDS before first decide()

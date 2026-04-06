@@ -95,8 +95,22 @@ export interface Agent {
   // --- Four Stream Memory ---
   dossiers?: RelationshipDossier[];
   activeConcerns?: ActiveConcern[];
-  beliefs?: { content: string; timestamp: number }[];
-  learnedStrategies?: { content: string; timestamp: number }[];
+  beliefs?: { content: string; timestamp: number; validFrom?: number; validUntil?: number }[];
+  learnedStrategies?: LearnedStrategy[];
+  // Total action_outcome count for UCB exploration (gap-analysis item 1.1).
+  totalActionOutcomes?: number;
+  // Running EMA of reasoning-step quality (gap-analysis item 1.3).
+  reasoningScore?: ProcessRubric;
+  // Procedural memory: learned behavioral biases from experience (gap-analysis item 1.2).
+  learnedAversions?: LearnedAversion[];
+  // How much this agent weighs village norm deviation in decisions (gap-analysis item 1.2).
+  // 0 = stoic loner ignores norms; 1 = social climber conforms hard. Default 0.5.
+  normWeight?: number;
+
+  // --- Reward System ---
+  // Per-agent scalarization weights — turn same reward vector into different personalities.
+  // Farmer weights resources+goalProgress; politician weights social; survivor weights hp.
+  rewardWeights?: RewardVector;
 
   // --- Strategy Tracking ---
   strategyHistory?: StrategySnapshot[];
@@ -125,6 +139,106 @@ export interface StrategySnapshot {
   reputation: number;
 }
 
+// --- Reward Vector ---
+// Multi-axis action evaluation. Replaces binary success/failure with rubric scoring.
+// Each axis scored -1 to +1 (delta vs. expected). Scalarized against agent rewardWeights.
+export interface RewardVector {
+  hp: number;             // health / hunger / thirst satisfaction delta
+  resources: number;      // material wealth delta (inventory, currency)
+  social: number;         // trust-weighted relationship change
+  goalProgress: number;   // progress toward long-term goal this action
+  exploration: number;    // novelty bonus — discourage rut behavior
+  normDeviation: number;  // village-norm deviation cost (negative = violated a negative norm)
+  villageImpact?: number; // structural impact on village commons (trust graph, wealth circulation)
+}
+
+// --- Learned Strategy ---
+// Utility-tracked rule extracted from experience. Ranked by empirical success, not LLM eloquence.
+// Evicted by lowest utility (not newest-wins) when cap is hit.
+export interface LearnedStrategy {
+  content: string;          // the rule-of-thumb (LLM prose)
+  createdDay: number;       // game day this strategy was written
+  lastAccessedDay: number;  // last day this strategy was read into a prompt
+  timesUsed: number;        // how many action outcomes matched this strategy's situation
+  timesSuccessful: number;  // how many of those produced positive scalar reward
+  avgRewardDelta: number;   // mean scalar reward across matched outcomes
+}
+
+// Process rubric (gap-analysis item 1.3): finer-grained credit assignment on
+// reasoning steps, separate from terminal action outcomes.
+// Each axis scored -1 to +1. Cheap heuristic scoring — no extra LLM calls.
+//   planAlignment   — did the executed action match what was planned?
+//   thoughtRelevance — did the preceding thought touch entities that showed up in the outcome?
+export interface ProcessRubric {
+  planAlignment: number;
+  thoughtRelevance: number;
+}
+
+// Default reward weights: balanced survival (farmer/generalist profile).
+// Personality → weighting: farmer heavy on resources+goalProgress, politician on social,
+// survivor on hp, explorer on exploration, conformist on normDeviation. Same machinery,
+// emergent personality. Weights sum to 1.0 so scalarized reward stays in ~[-1, +1].
+export const DEFAULT_REWARD_WEIGHTS: RewardVector = {
+  hp: 0.24,
+  resources: 0.15,
+  social: 0.15,
+  goalProgress: 0.15,
+  exploration: 0.08,
+  normDeviation: 0.15,
+  villageImpact: 0.08,
+};
+
+// Scalarize a reward vector against an agent's weights. Result in roughly [-1, +1].
+// If no weights provided, uses balanced defaults. Legacy agent rewardWeights without
+// normDeviation / villageImpact fields fall back to the default weight for each
+// axis (norm-aware + village-aware by default).
+export function computeScalarReward(rubric: RewardVector, weights?: RewardVector): number {
+  const w = weights ?? DEFAULT_REWARD_WEIGHTS;
+  const normDevWeight = w.normDeviation ?? DEFAULT_REWARD_WEIGHTS.normDeviation;
+  const villageImpactWeight = w.villageImpact ?? DEFAULT_REWARD_WEIGHTS.villageImpact!;
+  return (
+    rubric.hp * w.hp +
+    rubric.resources * w.resources +
+    rubric.social * w.social +
+    rubric.goalProgress * w.goalProgress +
+    rubric.exploration * w.exploration +
+    (rubric.normDeviation ?? 0) * normDevWeight +
+    (rubric.villageImpact ?? 0) * villageImpactWeight
+  );
+}
+
+// Utility score for a learned strategy — used for eviction ranking AND selection.
+// Higher = keep / prefer. Combines exploit term (success × reward × recency) with
+// UCB exploration bonus so under-tried strategies get a fair shake.
+// Gap-analysis item 1.1: without UCB, high-utility strategies calcify the book.
+//
+// totalActions: total action_outcome count for the agent (drives exploration term).
+//   When omitted, falls back to pure exploit (use for logging / read-only comparison).
+export function strategyUtility(
+  s: LearnedStrategy,
+  currentDay: number,
+  totalActions?: number,
+): number {
+  const successRate = s.timesUsed > 0 ? s.timesSuccessful / s.timesUsed : 0.5; // prior for unused
+  const daysSinceAccess = Math.max(0, currentDay - s.lastAccessedDay);
+  const recencyFactor = Math.exp(-daysSinceAccess / 7); // ~1 week half-life
+  // Reward delta is roughly [-1, +1], shift to [0, 1] for multiplication
+  const normalizedReward = (s.avgRewardDelta + 1) / 2;
+  const exploit = successRate * normalizedReward * recencyFactor;
+
+  if (totalActions === undefined || totalActions <= 0) return exploit;
+
+  // UCB1: c·√(ln(N) / n_i). Higher bonus for under-tried strategies.
+  // c=0.3 keeps exploration modest — exploit dominates once a strategy has >10 uses.
+  // Untried strategies get a large prior bonus to force first-try sampling.
+  const c = 0.3;
+  const explore = s.timesUsed > 0
+    ? c * Math.sqrt(Math.log(totalActions) / s.timesUsed)
+    : c * 2; // ~0.6 prior for untried — enough to beat a mediocre exploit score
+
+  return exploit + explore;
+}
+
 // --- Commitment System ---
 // Weighted promises: casual(1) = 12hr, promise(3) = 24hr, oath(5) = 48hr.
 // Weight budget of 15 per agent prevents over-promising.
@@ -148,9 +262,44 @@ export interface Commitment {
 // Collective history shared by all agents — deaths, rules, betrayals, alliances, institutions, elections, discoveries.
 export interface VillageMemoryEntry {
   content: string;
-  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath' | 'institution' | 'election' | 'technology' | 'building';
+  type: 'death' | 'rule' | 'betrayal' | 'alliance' | 'crisis' | 'broken_oath' | 'institution' | 'election' | 'technology' | 'building' | 'prosocial' | 'defection';
   day: number;
   significance: number; // 1-10
+  actorId?: string;       // who did it (for prosocial/defection entries)
+  actionType?: string;    // canonical action name for norm aggregation (e.g. "theft", "give", "broken_oath")
+  witnessIds?: string[];  // agents who saw it happen (drives enforcement detection)
+  personalCost?: number;  // scalar reward delta for actor (negative = sacrificed)
+  villageBenefit?: number; // scalar reward delta aggregated across other agents
+}
+
+// --- Village Norms (gap-analysis item 1.2) ---
+// Emergent soft-constraints aggregated from the village memory ledger.
+// No constitutional values — morality is a game-theoretic equilibrium, not an axiom.
+//
+// Aggregated nightly from the last N days of prosocial/defection entries. Feeds
+// into per-agent reward calculation as delayed social cost, and per-agent
+// decision prompts as soft bias (weighted by Agent.normWeight).
+export interface VillageNorm {
+  actionType: string;       // e.g. "theft", "give", "broken_oath", "rule_violation"
+  observationCount: number; // total times this action was witnessed in the window
+  enforcementActions: number; // how many times witnesses responded negatively (trust drops etc)
+  acceptanceRate: number;   // [0,1] — 1 - enforcementRate, higher = more tolerated
+  enforcementRate: number;  // [0,1] — % of witnesses who act against violators
+  severity: number;         // [0,1] — mean normalized |villageBenefit - personalCost|
+  windowDays: number;       // aggregation window (typically 7)
+  lastUpdated: number;      // timestamp of last recompute
+}
+
+// --- Learned Aversions (gap-analysis item 1.2) ---
+// Per-agent procedural memory: behaviors the agent has learned to avoid (or prefer)
+// through first-person experience. Soft filter on decision-making, not hard veto.
+// Confidence grows with evidence; `basis` tracks why the aversion was learned.
+export interface LearnedAversion {
+  actionType: string;       // canonical action name
+  confidence: number;       // [-1, +1] — negative = aversion, positive = preference
+  basis: 'victim' | 'witnessed' | 'punished' | 'rewarded';
+  evidenceCount: number;    // total reinforcement events
+  lastUpdated: number;      // timestamp
 }
 
 export type AgentState =
@@ -350,29 +499,75 @@ export interface MapObject {
 
 // --- Memory ---
 
+/**
+ * Importance vector (gap-analysis H4): a single scalar importance loses information.
+ * A memory can be vital to survival but irrelevant to social life (or vice versa).
+ * When present, retrieval scoring uses the axis most relevant to the current context
+ * (survival-crisis plan → survival axis; conversation → social; planning → strategic).
+ * Falls back to the scalar `importance` field when absent.
+ * Each axis: 1-10, same scale as scalar importance.
+ */
+export interface ImportanceVector {
+  survival: number;   // vitals, threats, resource scarcity
+  social: number;     // relationships, trust, reputation, promises
+  strategic: number;  // goals, long-term plans, identity-aligned ambitions
+  narrative: number;  // identity-shaping events, story beats, core memories
+}
+
 export interface Memory {
   id: string;
   agentId: string;
   type: "observation" | "conversation" | "reflection" | "plan" | "emotion" | "thought" | "action_outcome";
   content: string;
-  importance: number; // 1-10
+  importance: number; // 1-10 (scalar — always populated)
+  importanceVec?: ImportanceVector; // H4: multi-axis importance, preferred when present
   timestamp: number;
   relatedAgentIds: string[];
   embedding?: number[];
+  neuralEmbedding?: number[]; // dense vector from neural model (text-embedding-3-small etc.)
 
   // --- Phase 4: Memory Enhancements ---
   // Consequence: some memories are private, some public. Emotional weight affects recall.
   visibility?: 'private' | 'shared' | 'public';
   emotionalValence?: number; // -1 (painful) to +1 (joyful). High-valence = recalled more.
   isCore?: boolean; // Core identity memories — never pruned, boosted in retrieval
-  actionSuccess?: boolean; // for action_outcome memories
+  actionSuccess?: boolean; // for action_outcome memories (legacy binary signal — kept for backwards compat)
+  actionRubric?: RewardVector; // for action_outcome memories: 5-axis rubric scoring
+  actionType?: string;      // for action_outcome memories: canonical action name for strategy matching
+  processRubric?: ProcessRubric; // gap-analysis 1.3: reasoning-step credit assignment
   sourceAgentId?: string;   // who told them (undefined = firsthand)
+
+  // --- Access tracking (gap-analysis item 5) ---
+  // Importance decays on non-access, boosts on retrieval. The "≥ 8 never pruned"
+  // rule becomes earned, not granted. undefined = treat as never-accessed.
+  lastAccessedAt?: number;
+  accessCount?: number;     // total retrievals since creation
+
+  // --- Keyword tagging (gap-analysis item 9) ---
+  // A-Mem style: 2-5 keywords per event at ingest. Replaces 4-bin theme clustering
+  // (social/economic/survival/political) with emergent keyword-overlap categorization.
+  keywords?: string[];
   hearsayDepth?: number;    // 0 = direct, 1 = secondhand
 
   // --- Freedom 4: Narrative Memory ---
   // Causal linking: enables agents to reason about chains of cause and effect.
   causedBy?: string;        // memory ID that caused this memory
   ledTo?: string[];         // memory IDs that this memory led to
+
+  // --- Bi-temporal modeling (gap-analysis item 3.1) ---
+  // Zep/Graphiti-style: track when a belief was true in the world, independently
+  // of when the agent learned it. Prevents stale beliefs from corrupting reasoning.
+  validFrom?: number;       // game day when this fact became true in the world
+  validUntil?: number;      // game day when it stopped being true (undefined = still valid)
+  supersededBy?: string;    // memory ID that contradicts and replaces this one
+
+  // --- Structured belief extraction (gap-analysis item 4.3) ---
+  // When set, enables programmatic contradiction detection: new belief with same
+  // (subject, predicate) but different value auto-invalidates the old one.
+  // subject is an agent ID for person-beliefs, a free string for world-beliefs.
+  subject?: string;         // who/what the belief is about
+  predicate?: string;       // snake_case fact type (e.g. "trustworthiness", "intent")
+  value?: string;           // the claimed value ("low", "hostile", "farming")
 }
 
 // --- Conversation ---
@@ -713,4 +908,5 @@ export interface WorldSnapshot {
   storylines?: Storyline[];
   weeklySummary?: string | null;
   villageMemory?: VillageMemoryEntry[];
+  villageNorms?: VillageNorm[]; // gap-analysis item 1.2: aggregated soft-constraints
 }

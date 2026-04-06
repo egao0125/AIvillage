@@ -28,9 +28,13 @@ function sanitizeForPrompt(text: string): string {
 
 // --- Memory Stream ---
 
+import type { RetrievalContext } from './memory/in-memory.js';
+export type { RetrievalContext, RetrievalWeights } from './memory/in-memory.js';
+export { RETRIEVAL_PROFILES } from './memory/in-memory.js';
+
 export interface MemoryStore {
   add(memory: Memory): Promise<void>;
-  retrieve(agentId: string, query: string, limit?: number): Promise<Memory[]>;
+  retrieve(agentId: string, query: string, limit?: number, context?: RetrievalContext): Promise<Memory[]>;
   getRecent(agentId: string, limit?: number): Promise<Memory[]>;
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
   getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
@@ -63,6 +67,10 @@ export interface AgentSituation {
   nearbyAgents: { name: string; activity: string; id: string; vitals?: { hunger: number; energy: number; health: number } }[];
   availableActions: AvailableAction[];
   recentOutcome?: string;
+  /** Prediction-error surfacing (gap-analysis Category G): when the agent predicted
+   *  an outcome on the previous cycle, surface it alongside what actually happened
+   *  so the LLM can notice the gap and update its model. Populated by the caller. */
+  predictionCheck?: { predicted: string; actual: string; surprise: 'none' | 'small' | 'large' };
   trigger: string;
   todaySummary?: string;      // what the agent has done today
   boardPosts?: string;        // recent village board posts
@@ -87,6 +95,9 @@ export interface AgentDecision {
   mood?: string;
   sayAloud?: string;          // spoken aloud, others can hear
   thenDo?: Array<{ actionId: string; reason: string }>;  // optional follow-up actions (max 2)
+  /** Predicted outcome — what the agent expects to happen (gap-analysis Category G).
+   *  Surfaces on next decide() as "You predicted X, actual Y" for prediction-error learning. */
+  predictedOutcome?: string;
 }
 
 // --- Agent Cognition ---
@@ -164,6 +175,14 @@ ${placesLines}`;
 
   /** Public accessor for the LLM provider (used by FourStreamMemory for dossier/belief generation) */
   get llmProvider(): LLMProvider { return this.llm; }
+
+  /**
+   * Tiered model routing (gap-analysis item 4.2): optional cheap LLM for low-stakes calls.
+   * Used for dossier updates, belief generation, and HyDE expansion — tasks where
+   * a smaller/faster model is adequate. Falls back to the main provider if unset.
+   */
+  public cheapLlmProvider?: LLMProvider;
+  get cheapLlm(): LLMProvider { return this.cheapLlmProvider ?? this.llm; }
 
   /** Reset the MY EXPERIENCE section to default starting text.
    * Called on simulation load to prevent stale worldView from previous runs. */
@@ -318,11 +337,22 @@ If nothing notable was exchanged, return []`;
   /**
    * Compute emotional valence for a memory based on its content.
    * Negative words yield -0.3 to -0.8, positive words yield 0.3 to 0.8. Default 0.
+   * D2 fix: bootstrap lexicon is now broader (loneliness, overlooked, mediocre,
+   * shared, creative, etc.) and augmented by per-agent learnedValence words
+   * picked up from memories that already carry a valence signal.
    */
   private computeValence(content: string): number {
     const lower = content.toLowerCase();
-    const negativeWords = ['betray', 'steal', 'attack', 'lie', 'angry', 'afraid', 'lost'];
-    const positiveWords = ['friend', 'gift', 'trust', 'happy', 'love', 'helped'];
+    const negativeWords = [
+      'betray', 'steal', 'attack', 'lie', 'angry', 'afraid', 'lost',
+      'lonely', 'alone', 'overlooked', 'ignored', 'invisible', 'mediocre',
+      'rejected', 'ashamed', 'humiliat', 'failed', 'hopeless', 'empty',
+    ];
+    const positiveWords = [
+      'friend', 'gift', 'trust', 'happy', 'love', 'helped',
+      'shared', 'proud', 'belonged', 'seen', 'understood', 'creative',
+      'beautiful', 'grateful', 'safe', 'peaceful', 'connected',
+    ];
 
     let negCount = 0;
     let posCount = 0;
@@ -331,6 +361,13 @@ If nothing notable was exchanged, return []`;
     }
     for (const w of positiveWords) {
       if (lower.includes(w)) posCount++;
+    }
+    // Per-agent learned valence words (D2 extension): if the agent has words
+    // they've come to associate with positive/negative outcomes, count them too.
+    for (const [w, v] of this.learnedValence) {
+      if (lower.includes(w)) {
+        if (v > 0) posCount++; else negCount++;
+      }
     }
 
     if (negCount > 0 && posCount === 0) {
@@ -355,6 +392,15 @@ If nothing notable was exchanged, return []`;
     if (memory.emotionalValence === undefined) {
       memory.emotionalValence = this.computeValence(memory.content);
     }
+    // H4: populate the importance vector if the caller didn't set it.
+    // Cheap heuristic — runs only on write, never on read.
+    if (!memory.importanceVec) {
+      memory.importanceVec = this.scoreImportanceVector(
+        memory.content,
+        memory.type,
+        memory.importance,
+      );
+    }
     if (this.fourStream) {
       await this.fourStream.addEvent(memory);
     } else if (this.tieredMemory) {
@@ -362,6 +408,8 @@ If nothing notable was exchanged, return []`;
     } else {
       await this.memory.add(memory);
     }
+    // D1: learn from what matters — let high-importance content shape future scoring.
+    this.observeVocabulary(memory.content, memory.importance);
   }
 
   /**
@@ -413,55 +461,196 @@ If nothing notable was exchanged, return []`;
     if (Math.abs(valence) > 0.5) score += 1;
     if (Math.abs(valence) > 0.7) score += 1;
 
-    // Named entity boost — mentions of known people
+    // Named entity boost — mentions of known people.
+    // D3 fix: threshold lowered from ≥2 to ≥1. The old rule systematically
+    // undervalued solo moments (introspection, private discovery, solo work)
+    // and penalized introverts at the memory-formation layer. A single named
+    // person still matters. 2+ names gets a larger boost to preserve scaling.
     const lower = content.toLowerCase();
     let entityHits = 0;
     for (const name of this.nameMap.values()) {
       if (lower.includes(name.toLowerCase())) entityHits++;
     }
-    if (entityHits >= 2) score += 1;
+    if (entityHits >= 1) score += 1;
+    if (entityHits >= 3) score += 1;
 
-    // High-signal word boost
-    const highSignal = ['betray', 'die', 'dead', 'discover', 'secret', 'steal', 'attack', 'promise', 'alliance', 'broke', 'election', 'vote'];
-    if (highSignal.some(w => lower.includes(w))) score += 2;
+    // High-signal word boost: seed vocabulary everyone starts with, PLUS per-agent
+    // learned vocabulary (gap-analysis D1). The seed handles universal concepts;
+    // the learned map lets agents pick up words that recur in their own high-importance
+    // memories (werewolf, judge, ritual, whatever matters in THIS world).
+    if (AgentCognition.BOOTSTRAP_SIGNAL_WORDS.some(w => lower.includes(w))) score += 2;
+    if (this.learnedVocab.size > 0) {
+      let learnedHits = 0;
+      for (const [w, weight] of this.learnedVocab) {
+        if (weight >= 2 && lower.includes(w)) {
+          learnedHits++;
+          if (learnedHits >= 2) break;
+        }
+      }
+      if (learnedHits > 0) score += Math.min(2, learnedHits);
+    }
 
     return Math.min(10, Math.max(1, score));
   }
 
   /**
+   * Multi-axis importance scoring (gap-analysis H4).
+   * Maps content onto four axes. A memory about being betrayed scores high on
+   * social AND narrative but low on survival. A memory about running out of food
+   * scores high on survival but low on social. This lets retrieval prefer the
+   * axis that matches the current context (planning, conversation, crisis).
+   */
+  scoreImportanceVector(content: string, type: string, baseScalar: number): import('@ai-village/shared').ImportanceVector {
+    const lower = content.toLowerCase();
+    const has = (words: string[]) => words.some(w => lower.includes(w));
+
+    // Start from the scalar as a baseline, then specialize per axis.
+    let survival = baseScalar, social = baseScalar, strategic = baseScalar, narrative = baseScalar;
+
+    // Survival axis: vitals, threats, resources
+    if (has(['hungry', 'starv', 'food', 'eat', 'weak', 'tired', 'die', 'dead', 'injured', 'hurt', 'wound', 'blood'])) survival += 2;
+    if (has(['attack', 'fight', 'threat', 'danger'])) survival += 2;
+
+    // Social axis: relationships, promises, reputation
+    if (has(['promise', 'owe', 'deal', 'trade', 'ally', 'alliance', 'friend', 'betray', 'lie', 'trust'])) social += 2;
+    if (has(['said', 'told', 'asked', 'agreed', 'refused'])) social += 1;
+
+    // Strategic axis: goals, plans, long-term
+    if (has(['plan', 'goal', 'tomorrow', 'next', 'build', 'learn', 'skill', 'craft'])) strategic += 2;
+    if (type === 'plan' || type === 'reflection') strategic += 1;
+
+    // Narrative axis: identity moments, big changes
+    if (has(['discover', 'secret', 'realize', 'first time', 'never', 'always', 'changed'])) narrative += 2;
+    if (type === 'reflection') narrative += 1;
+
+    const clamp = (n: number) => Math.min(10, Math.max(1, Math.round(n)));
+    return {
+      survival: clamp(survival),
+      social: clamp(social),
+      strategic: clamp(strategic),
+      narrative: clamp(narrative),
+    };
+  }
+
+  /**
+   * Per-agent learned vocabulary (gap-analysis D1). Words that recur in
+   * high-importance memories accrue weight here. When scoreImportance() sees
+   * these words in new content, it bumps the score — so this agent learns
+   * what matters to IT, beyond the hardcoded bootstrap list.
+   */
+  private learnedVocab: Map<string, number> = new Map();
+  // F1 fix: track recent social action IDs for example rotation (kills cross-agent priming).
+  private recentSocialActionIds: string[] = [];
+  // E1 fix: last successful actionId for behavioral-continuity parse-failure fallback.
+  lastSuccessfulActionId?: string;
+  // D2 fix: per-agent learned valence — words the agent has come to associate
+  // with positive/negative outcomes. +1 positive, -1 negative.
+  private learnedValence: Map<string, number> = new Map();
+  private static readonly BOOTSTRAP_SIGNAL_WORDS = [
+    'betray', 'die', 'dead', 'discover', 'secret', 'steal', 'attack',
+    'promise', 'alliance', 'broke', 'election', 'vote',
+  ];
+  private static readonly VOCAB_STOPWORDS = new Set([
+    'the', 'and', 'you', 'your', 'for', 'with', 'are', 'was', 'has', 'have',
+    'this', 'that', 'there', 'what', 'when', 'where', 'from', 'they', 'their',
+    'just', 'been', 'would', 'could', 'should', 'about', 'into', 'some', 'any',
+    'said', 'told', 'asked', 'went', 'came', 'will', 'want', 'wanted', 'know',
+    'think', 'thought', 'like', 'really', 'maybe', 'because', 'still',
+  ]);
+
+  /**
+   * Observe a high-importance memory and bump vocabulary weights for the
+   * content words it contains. Called after every memory insert (cheap: O(words)).
+   */
+  private observeVocabulary(content: string, importance: number): void {
+    if (importance < 6) return;
+    const weightDelta = importance >= 8 ? 1.0 : 0.5;
+    const words = content
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length >= 5 && !AgentCognition.VOCAB_STOPWORDS.has(w));
+    // Dedupe within this content — one memory shouldn't multiply-count a word
+    const seen = new Set<string>();
+    for (const w of words) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      this.learnedVocab.set(w, (this.learnedVocab.get(w) ?? 0) + weightDelta);
+    }
+    // Trim: cap at 100 entries, keep top by weight
+    if (this.learnedVocab.size > 150) {
+      const sorted = [...this.learnedVocab.entries()].sort((a, b) => b[1] - a[1]).slice(0, 100);
+      this.learnedVocab = new Map(sorted);
+    }
+  }
+
+  /**
    * Build personality-driven reflection prompts. Neurotic agents catastrophize,
    * agreeable agents worry about relationships, etc.
+   *
+   * Lock-in defense (Part III C1 fix): on ~20% of days, invert one trait's
+   * scaffold so the agent occasionally notices what their personality normally
+   * filters out. A neurotic agent sometimes sees good things; an agreeable
+   * agent sometimes notices being exploited. Personality becomes a tendency,
+   * not a prison. Deterministic per (agentId, day) for reproducibility.
    */
   private buildReflectionGuide(): string {
     const p = this.agent.config.personality;
     const prompts: string[] = [];
 
-    if (p.neuroticism > 0.6)
+    // Deterministic per-day seed: simple string hash over agentId+day.
+    const seed = this.hashDaySeed(this.agent.id, this.currentTime.day);
+    // ~20% chance of inversion; choose which trait to flip from the seed.
+    const invertThisDay = (seed % 5) === 0;
+    const flipIndex = invertThisDay ? (seed % 5) : -1; // 0..4 mapped to the 5 trait checks below
+
+    const neuroHigh = p.neuroticism > 0.6;
+    const neuroLow = p.neuroticism < 0.3;
+    const wantNeuroFlip = flipIndex === 0;
+    if ((neuroHigh && !wantNeuroFlip) || (neuroLow && wantNeuroFlip))
       prompts.push(`What went wrong today? What could go wrong on Day ${this.currentTime.day + 1}? What are people not telling you?`);
-    else if (p.neuroticism < 0.3)
+    else if ((neuroLow && !wantNeuroFlip) || (neuroHigh && wantNeuroFlip))
       prompts.push(`What went well? What can you build on Day ${this.currentTime.day + 1}?`);
     else
       prompts.push('What surprised you today?');
 
-    if (p.agreeableness > 0.6)
+    const agreeHigh = p.agreeableness > 0.6;
+    const agreeLow = p.agreeableness < 0.3;
+    const wantAgreeFlip = flipIndex === 1;
+    if ((agreeHigh && !wantAgreeFlip) || (agreeLow && wantAgreeFlip))
       prompts.push('Did you help anyone? Did anyone need help you didn\'t give? Are your relationships okay?');
-    else if (p.agreeableness < 0.3)
+    else if ((agreeLow && !wantAgreeFlip) || (agreeHigh && wantAgreeFlip))
       prompts.push('Did anyone try to take advantage of you? Are you getting what you deserve?');
 
-    if (p.conscientiousness > 0.6)
+    const conscHigh = p.conscientiousness > 0.6;
+    const conscLow = p.conscientiousness < 0.3;
+    const wantConscFlip = flipIndex === 2;
+    if ((conscHigh && !wantConscFlip) || (conscLow && wantConscFlip))
       prompts.push('Did you stick to your plan? What should you have done differently?');
-    else if (p.conscientiousness < 0.3)
+    else if ((conscLow && !wantConscFlip) || (conscHigh && wantConscFlip))
       prompts.push(`Did anything fun happen? What do you feel like doing on Day ${this.currentTime.day + 1}?`);
 
     if (p.openness > 0.6)
       prompts.push('Did you learn anything new? Is there something you want to try that you haven\'t?');
 
-    if (p.extraversion > 0.6)
+    const extHigh = p.extraversion > 0.6;
+    const extLow = p.extraversion < 0.3;
+    const wantExtFlip = flipIndex === 4;
+    if ((extHigh && !wantExtFlip) || (extLow && wantExtFlip))
       prompts.push('Who did you spend time with? Who do you want to see more of?');
-    else if (p.extraversion < 0.3)
+    else if ((extLow && !wantExtFlip) || (extHigh && wantExtFlip))
       prompts.push('Did you get enough time alone? Was anyone too much today?');
 
     return prompts.join('\n');
+  }
+
+  /** Cheap deterministic 31-bit hash for per-agent, per-day seeding. */
+  private hashDaySeed(agentId: string, day: number): number {
+    let h = day * 2654435761;
+    for (let i = 0; i < agentId.length; i++) {
+      h = ((h ^ agentId.charCodeAt(i)) * 16777619) >>> 0;
+    }
+    return h & 0x7fffffff;
   }
 
   // --- Shared helpers (consolidate identity/context construction) ---
@@ -505,16 +694,19 @@ If nothing notable was exchanged, return []`;
       parts.push(`\nRULES YOU MUST FOLLOW (these define your nature):\n${ruleLines}`);
     }
 
-    // Personality bias hints
+    // Personality bias hints (C2 fix: phrased as tendencies the agent has noticed
+    // about themselves, not as imperatives. Prior phrasing — "You read threat" —
+    // functioned as an LLM instruction every turn, locking personality in. These
+    // leave room for situational override and self-contradiction.)
     const p = config.personality;
     const biases: string[] = [];
-    if (p.neuroticism > 0.7) biases.push('You read threat into neutral actions.');
-    if (p.neuroticism < 0.3) biases.push('You give people the benefit of the doubt.');
-    if (p.agreeableness < 0.3) biases.push('You assume others are looking out for themselves.');
-    if (p.agreeableness > 0.7) biases.push('You trust easily — maybe too easily.');
-    if (p.openness > 0.7) biases.push('You seek novelty and creative solutions.');
-    if (p.extraversion > 0.7) biases.push('You thrive on social interaction.');
-    if (p.extraversion < 0.3) biases.push('You prefer solitude and quiet observation.');
+    if (p.neuroticism > 0.7) biases.push('People have told you that you read threat into neutral actions — you\'re not sure they\'re always right.');
+    if (p.neuroticism < 0.3) biases.push('You tend to give people the benefit of the doubt, even when others wouldn\'t.');
+    if (p.agreeableness < 0.3) biases.push('You usually assume others are looking out for themselves — though you\'ve been wrong before.');
+    if (p.agreeableness > 0.7) biases.push('You\'ve noticed you trust easily — maybe too easily.');
+    if (p.openness > 0.7) biases.push('You notice yourself drawn to novelty and unusual solutions.');
+    if (p.extraversion > 0.7) biases.push('You tend to feel more alive around people.');
+    if (p.extraversion < 0.3) biases.push('You tend to prefer solitude — though you can surprise yourself.');
     if (biases.length > 0) {
       parts.push(`\nYOUR TENDENCIES:\n${biases.join(' ')}`);
     }
@@ -528,6 +720,29 @@ If nothing notable was exchanged, return []`;
           .join('. ')
           .slice(0, 200);
         parts.push(`\nWHO YOU'VE BECOME (learned from experience — this may contradict who you were born as):\n${beliefText}`);
+      }
+    }
+
+    // Self-awareness nudge (gap-analysis item 1.3 + root-audit leverage item 4):
+    // When reasoning EMA shows persistent drift OR consistent alignment (after
+    // ≥8 actions), surface it so the agent can self-correct OR trust its instincts.
+    // Negative plan-alignment → actions don't match plans; negative thought-relevance
+    // → thoughts miss what actually matters. Positive side surfaces earned confidence.
+    const rs = this.agent.reasoningScore;
+    const totalActions = this.agent.totalActionOutcomes ?? 0;
+    if (rs && totalActions >= 8) {
+      const hints: string[] = [];
+      // Drift signals — pay closer attention
+      if (rs.planAlignment < -0.2) hints.push('Your actions keep drifting from your plans — commit harder to what you decide.');
+      if (rs.thoughtRelevance < -0.2) hints.push('Your thoughts keep missing what actually happens — pay closer attention to what matters.');
+      // Confidence signals — trust yourself
+      if (rs.planAlignment > 0.4 && rs.thoughtRelevance > 0.3) {
+        hints.push('Your reasoning has been tracking reality well lately — trust your read on situations.');
+      } else if (rs.planAlignment > 0.4) {
+        hints.push('You consistently follow through on what you plan — that discipline is earned.');
+      }
+      if (hints.length > 0) {
+        parts.push(`\nSELF-AWARENESS:\n${hints.join(' ')}`);
       }
     }
 
@@ -658,27 +873,38 @@ If nothing notable was exchanged, return []`;
 
     let actionMenu = 'WHAT YOU CAN DO:\n';
 
-    if (survivalCrisis) {
-      // Survival actions first: gather, eat, go, rest — before social
-      const survivalPhysical = physicalActions.filter(a =>
-        a.id.startsWith('gather_') || a.id.startsWith('eat_')
-      );
-      const otherPhysical = physicalActions.filter(a =>
-        !a.id.startsWith('gather_') && !a.id.startsWith('eat_')
-      );
-      actionMenu += '\n⚠ SURVIVAL (do these first):\n' + [...survivalPhysical, ...restActions, ...movementActions].map(a => a.id + ' — ' + a.label).join('\n');
-      if (otherPhysical.length > 0) {
-        actionMenu += '\n\nOther physical:\n' + otherPhysical.map(a => a.id + ' — ' + a.label).join('\n');
-      }
-    } else if (physicalActions.length > 0 || restActions.length > 0) {
-      actionMenu += '\nPhysical:\n' + [...physicalActions, ...restActions].map(a => a.id + ' — ' + a.label).join('\n');
+    // A2 fix: don't reorder the action menu under crisis — that produced lonely
+    // hungry agents who stopped negotiating. In real societies, hunger is WHEN
+    // people beg, trade, steal, or manipulate. Keep the natural category order;
+    // mark survival options with a ⚠ instead of promoting them above social.
+    if (physicalActions.length > 0 || restActions.length > 0) {
+      const markSurvival = (a: typeof physicalActions[number]) => {
+        const isSurvival = survivalCrisis && (a.id.startsWith('gather_') || a.id.startsWith('eat_'));
+        return `${isSurvival ? '⚠ ' : ''}${a.id} — ${a.label}`;
+      };
+      actionMenu += '\nPhysical:\n' + [...physicalActions, ...restActions].map(markSurvival).join('\n');
     }
 
     if (situation.nearbyAgents.length > 0) {
       actionMenu += '\n\nPeople nearby:\n' + situation.nearbyAgents.map(a => `- ${a.name} (${a.activity})`).join('\n');
       if (socialActions.length > 0) {
         actionMenu += '\n\nWith any nearby person (replace NAME with their first name):\n' + socialActions.map(a => a.id + ' — ' + a.label).join('\n');
-        actionMenu += '\n\nExample: talk_wren, steal_felix, ally_ren';
+        // F1 fix: rotate example using the agent's actual recent social actions.
+        // Hardcoded "talk_wren, trade_felix, ally_ren" was priming every agent with
+        // the same template every turn. Now the example surfaces behavior this
+        // specific agent has already chosen — no cross-agent priming.
+        const firstName = situation.nearbyAgents[0]?.name?.toLowerCase() ?? 'someone';
+        const recentSocialIds = this.recentSocialActionIds.slice(-3);
+        const exampleActions = recentSocialIds.length >= 2
+          ? recentSocialIds.slice(0, 3).map(id => id.includes('_') ? id : `${id}_${firstName}`)
+          : socialActions.slice(0, 3).map(a => {
+              // Prefer non-aggressive verbs for the default seed
+              const prefix = a.id.split('_')[0];
+              return `${prefix}_${firstName}`;
+            });
+        if (exampleActions.length > 0) {
+          actionMenu += '\n\nExample: ' + exampleActions.join(', ');
+        }
       }
     }
 
@@ -734,16 +960,34 @@ You may optionally include a "thenDo" array with 1-2 follow-up actions that shou
 Only include thenDo when the follow-up is the obvious next step. Don't plan more than 2 steps ahead.
 
 Reply with ONLY valid JSON:
-{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?"}`;
+{"actionId":"...","reason":"2-3 sentences in first person — what's driving this choice?","predictedOutcome":"1 sentence — what you expect to happen when this succeeds"}`;
+
+    // Prediction-error surfacing (gap-analysis Category G): closes the prediction
+    // loop by showing the LLM its prior guess against reality. Surprise tier gates
+    // how loudly the gap is framed — large surprise = model needs updating.
+    const predictionBlock = situation.predictionCheck
+      ? (() => {
+          const { predicted, actual, surprise } = situation.predictionCheck;
+          const hint = surprise === 'large'
+            ? 'Your model was wrong — what does this actually tell you about how the world works?'
+            : surprise === 'small'
+              ? 'Close but not exact — what\'s the gap tell you?'
+              : 'Your prediction held up — trust that instinct on similar calls.';
+          return `\nPREDICTION CHECK:\nLast turn you predicted: ${predicted}\nWhat actually happened: ${actual}\nSurprise: ${surprise} — ${hint}`;
+        })()
+      : '';
 
     const systemPrompt = survivalCrisis
-      ? `${vitalsSection}
-
-${this.buildRealityBlock()}${this.buildPromiseLedger()}
+      // Crisis ordering: identity stays at position 1 (global workspace anchor); vitals
+      // urgency competes AFTER identity is established, not by replacing it.
+      // Personality should shape survival decisions, not get erased by them.
+      ? `${this.buildIdentityBlock()}
 
 ${this.worldView}
 
-${this.buildIdentityBlock()}
+${vitalsSection}
+
+${this.buildRealityBlock()}${this.buildPromiseLedger()}
 
 Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDark > 0 ? ' ' + situation.hoursUntilDark + ' hours of daylight left.' : ' It is dark.'}
 Season: ${situation.season}.
@@ -751,14 +995,14 @@ ${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must 
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
-${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}${predictionBlock}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
 
 ${actionMenu}
 
-SURVIVE FIRST. Pick an action that keeps you alive.
+SURVIVE FIRST — but survive as YOU. Pick an action that keeps you alive without betraying who you are.
 
 ${jsonInstruction}`
       : `${this.worldView}
@@ -775,7 +1019,7 @@ ${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must 
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
-${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}${predictionBlock}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
@@ -784,7 +1028,7 @@ ${actionMenu}
 
 What does YOUR CHARACTER do next?
 
-Not the safe choice. Not the polite choice. The honest one — what would THIS person, with THIS personality, in THIS situation, actually do?
+The honest choice — what would THIS person, with THIS personality, in THIS situation, actually do? Sometimes that's bold or defiant; sometimes it's cautious, polite, or kind. Let the character decide.
 
 Consider: what you need right now, who's nearby and what they have, what you've been doing today, what your relationships look like, and whether it's time to build something bigger — an alliance, a rule, a plan.
 
@@ -801,17 +1045,25 @@ ${jsonInstruction}`;
       for (const r of situation.allReputations ?? []) {
         repMap.set(r.id, r.score);
       }
+      // H3: pass trigger + recent outcome as query context so timeline scoring
+      // boosts memories lexically relevant to what's happening right now.
+      const triggerQuery = [situation.trigger, situation.recentOutcome]
+        .filter(Boolean)
+        .join(' ');
       const wm = this.fourStream.buildWorkingMemory(
         nearbyIds.length > 0 ? nearbyIds : undefined,
         locationMap.size > 0 ? locationMap : undefined,
         repMap.size > 0 ? repMap : undefined,
         'default', // decide() uses balanced retrieval
+        triggerQuery || undefined,
       );
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
       if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
+      if (wm.socialGraph) sections.push('SOCIAL GRAPH:\n' + wm.socialGraph);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
       if (wm.learnedStrategies) sections.push('LESSONS LEARNED (from experience):\n' + wm.learnedStrategies);
+      if (wm.aversionsHint) sections.push(wm.aversionsHint);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryText = sections.join('\n\n');
@@ -819,7 +1071,7 @@ ${jsonInstruction}`;
     } else {
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(situation.trigger + ' ' + (situation.recentOutcome || ''))
-        : await this.memory.retrieve(this.agent.id, situation.trigger, 5);
+        : await this.memory.retrieve(this.agent.id, situation.trigger, 5, 'plan');
       memoryText = memories.length > 0
         ? 'Your recent memories:\n' + memories.map(m => m.content).join('\n')
         : '';
@@ -850,13 +1102,22 @@ ${jsonInstruction}`;
       };
     }
 
+    // Track social action for F1 example rotation. recordDecision is called from both success paths.
+    const recordDecision = (d: AgentDecision) => {
+      if (d.actionId && socialActions.some(a => d.actionId.startsWith(a.id.replace('_NAME', '') + '_'))) {
+        this.recentSocialActionIds.push(d.actionId);
+        if (this.recentSocialActionIds.length > 6) this.recentSocialActionIds.shift();
+      }
+      return d;
+    };
+
     // Parse JSON
     try {
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned) as AgentDecision;
       if (parsed.actionId && parsed.reason) {
         if (parsed.thenDo) parsed.thenDo = parsed.thenDo.slice(0, 2);
-        return parsed;
+        return recordDecision(parsed);
       }
     } catch {}
 
@@ -867,16 +1128,38 @@ ${jsonInstruction}`;
         const parsed = JSON.parse(jsonMatch[0]) as AgentDecision;
         if (parsed.actionId && parsed.reason) {
           if (parsed.thenDo) parsed.thenDo = parsed.thenDo.slice(0, 2);
-          return parsed;
+          return recordDecision(parsed);
         }
       }
     } catch {}
 
-    // Parse failure — safe default
+    // E1 fix: parse failure — behavioral continuity instead of hardcoded 'rest'.
+    // Prior behavior: every agent defaulted to 'rest' + same string. That
+    // homogenized agents exactly when the LLM was confused (often in socially
+    // complex situations). Now: prefer the agent's last successful action,
+    // falling back to a varied category based on current vitals.
     console.warn(`[AgentCognition] ${this.agent.config.name} decide() parse failure: "${response.substring(0, 100)}..."`);
+    const availableIds = new Set(situation.availableActions.map(a => a.id));
+    const lastAction = this.lastSuccessfulActionId && availableIds.has(this.lastSuccessfulActionId)
+      ? this.lastSuccessfulActionId
+      : undefined;
+    const vitalsSteer = situation.vitals.energy <= 20
+      ? restActions[0]?.id
+      : situation.vitals.hunger >= 60
+        ? physicalActions.find(a => a.id.startsWith('gather_') || a.id.startsWith('eat_'))?.id
+        : physicalActions[Math.floor(Math.random() * Math.max(1, physicalActions.length))]?.id;
+    const fallbackId = lastAction ?? vitalsSteer ?? physicalActions[0]?.id ?? 'rest';
+    // Per-agent varied reason so agents don't all speak with one voice on failure
+    const reasons = [
+      'Something\'s not clicking for me right now.',
+      'I can\'t quite settle on what to do.',
+      'My head\'s a mess — I\'ll just keep moving.',
+      'Too much to weigh. I\'ll do what I know.',
+    ];
+    const reasonSeed = this.hashDaySeed(this.agent.id, this.currentTime.day) % reasons.length;
     return {
-      actionId: situation.availableActions.find(a => a.category === 'physical')?.id || 'rest',
-      reason: 'I need to think about this.',
+      actionId: fallbackId,
+      reason: reasons[reasonSeed]!,
       mood: undefined,
       sayAloud: undefined,
     };
@@ -902,19 +1185,21 @@ IMPORTANT: Only respond to what is real. The people near you, the place you're a
 
     let memoryContext: string;
     if (this.fourStream) {
-      const wm = this.fourStream.buildWorkingMemory(nearbyAgentIds, undefined, undefined, 'default');
+      const wm = this.fourStream.buildWorkingMemory(nearbyAgentIds, undefined, undefined, 'default', `${trigger} ${context}`);
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
       if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
+      if (wm.socialGraph) sections.push('SOCIAL GRAPH:\n' + wm.socialGraph);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
       if (wm.learnedStrategies) sections.push('LESSONS LEARNED:\n' + wm.learnedStrategies);
+      if (wm.aversionsHint) sections.push(wm.aversionsHint);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryContext = sections.length > 0 ? '\n' + sections.join('\n\n') : '';
     } else {
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(trigger + ' ' + context)
-        : await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5);
+        : await this.memory.retrieve(this.agent.id, trigger + ' ' + context, 5, 'conversation');
       memoryContext = memories.length > 0
         ? `\nRelevant memories:\n${memories.map(m => m.content).join('\n')}`
         : '';
@@ -962,6 +1247,10 @@ Context: ${context}`;
       relatedAgentIds: [],
       visibility: 'private',
     });
+
+    // Process-reward trace (gap-analysis item 1.3): capture thought tokens for
+    // later overlap scoring against whatever action the agent ends up taking.
+    this.fourStream?.recordThoughtTrace(thought);
 
     return {
       thought,
@@ -1075,12 +1364,15 @@ Action: "${rawAction}"`;
     let outcomeSection = '';
 
     if (this.fourStream) {
-      const wm = this.fourStream.buildWorkingMemory(undefined, undefined, undefined, 'plan');
+      const planQuery = [boardContext, worldContext].filter(Boolean).join(' ');
+      const wm = this.fourStream.buildWorkingMemory(undefined, undefined, undefined, 'plan', planQuery || undefined);
       const sections: string[] = [];
       if (wm.timeline) sections.push(wm.timeline);
       if (wm.concerns) sections.push('On your mind:\n' + wm.concerns);
+      if (wm.socialGraph) sections.push('Social graph:\n' + wm.socialGraph);
       if (wm.beliefs) sections.push('Your beliefs:\n' + wm.beliefs);
       if (wm.learnedStrategies) sections.push('Lessons from experience:\n' + wm.learnedStrategies);
+      if (wm.aversionsHint) sections.push(wm.aversionsHint);
       if (wm.identityAnchor) sections.push(wm.identityAnchor);
       memoryContext = sections.join('\n\n');
     } else {
@@ -1131,7 +1423,11 @@ JSON array of strings.`;
       const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-        return parsed.slice(0, 3);
+        const goals = parsed.slice(0, 3) as string[];
+        // Process-reward trace (gap-analysis item 1.3): remember what was planned so
+        // subsequent action_outcomes can be scored against it.
+        this.fourStream?.recordPlanTrace(goals);
+        return goals;
       }
     } catch (err) {
       console.warn(`[AgentCognition] ${this.agent.config.name} plan() parse failed:`, (err as Error).message);
@@ -1191,9 +1487,9 @@ You can act during conversation:
   [ACTION: accept trade]
   [ACTION: reject trade]
   [ACTION: teach PERSON SKILL]
-  [ACTION: steal from PERSON]
-  [ACTION: fight PERSON]
   [ACTION: eat ITEM]
+  [ACTION: steal from PERSON]   (hostile; heavy reputation cost)
+  [ACTION: fight PERSON]         (hostile; both take damage, reputation cost)
 Use your actual inventory items and the real person's name. Actions happen instantly — items leave your inventory, trades are binding, fights hurt both of you.
 
 Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm on Day ${this.currentTime.day + 1}" or "I'll give you food when I see you at the farm." Bad commitment: "at dawn" or "tomorrow" or "by sunset" — use the day number instead. Bad dialogue is vague: "We should work together."
@@ -1209,12 +1505,17 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
     // Build memory context
     let memoryBlock: string;
     if (this.fourStream) {
-      const wm = this.fourStream.buildWorkingMemory(otherIds, undefined, undefined, 'conversation');
+      // H3: use conversation agenda + most recent history turn as query context
+      const lastTurn = conversationHistory[conversationHistory.length - 1] ?? '';
+      const talkQuery = [agenda, lastTurn].filter(Boolean).join(' ');
+      const wm = this.fourStream.buildWorkingMemory(otherIds, undefined, undefined, 'conversation', talkQuery || undefined);
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
       if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
+      if (wm.socialGraph) sections.push('SOCIAL GRAPH:\n' + wm.socialGraph);
       if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
       if (wm.learnedStrategies) sections.push('LESSONS LEARNED:\n' + wm.learnedStrategies);
+      if (wm.aversionsHint) sections.push(wm.aversionsHint);
       if (wm.timeline) sections.push('RECENT:\n' + wm.timeline);
       if (wm.identityAnchor) sections.push('REMEMBER WHO YOU ARE:\n' + wm.identityAnchor);
       memoryBlock = sections.join('\n\n');
@@ -1222,7 +1523,7 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
       const memoryQuery = otherAgents.map(a => sanitizeForPrompt(a.config.name)).join(' ');
       const memories = this.tieredMemory
         ? await this.tieredMemory.buildWorkingMemory(memoryQuery)
-        : await this.memory.retrieve(this.agent.id, memoryQuery, 10);
+        : await this.memory.retrieve(this.agent.id, memoryQuery, 10, 'conversation');
       memoryBlock = memories.map(m => m.content).join('\n');
     }
 
@@ -1500,16 +1801,19 @@ Return ONLY the new MY EXPERIENCE text.`;
     const { config } = this.agent;
     const personality = config.personality;
 
-    // Build personality bias section
+    // Build personality bias section — tendencies, not verdicts. Part III C1 fix:
+    // soften directives so the agent is instructed to also entertain the opposite
+    // interpretation. This prevents self-reinforcing trait lock-in (neurotic sees
+    // threat → acts hostile → gets hostile response → confirms threat).
     const biases: string[] = [];
-    if (personality.neuroticism > 0.7) biases.push('You are highly neurotic — you tend to read threat and hostility into neutral actions. You assume the worst.');
-    if (personality.neuroticism < 0.3) biases.push('You are emotionally stable — you give people the benefit of the doubt and don\'t read too much into things.');
-    if (personality.agreeableness < 0.3) biases.push('You are competitive and suspicious — you assume others are looking out for themselves.');
-    if (personality.agreeableness > 0.7) biases.push('You are trusting and cooperative — maybe too trusting sometimes.');
+    if (personality.neuroticism > 0.7) biases.push('You tend to notice threat and hostility first. Weigh that instinct against the charitable reading before deciding.');
+    if (personality.neuroticism < 0.3) biases.push('You tend to give people the benefit of the doubt. Also check whether someone is exploiting that trust.');
+    if (personality.agreeableness < 0.3) biases.push('You tend to assume others are self-interested. Also consider when cooperation is genuine.');
+    if (personality.agreeableness > 0.7) biases.push('You tend to trust and cooperate. Also notice when trust has been abused.');
     if (personality.openness > 0.7) biases.push('You are drawn to unconventional people and ideas.');
-    if (personality.extraversion > 0.7) biases.push('You weight social interactions heavily in your assessments.');
+    if (personality.extraversion > 0.7) biases.push('You weight social interactions heavily. Remember the people who say little.');
     if (personality.extraversion < 0.3) biases.push('You observe more than you interact — your assessments are based on watching, not talking.');
-    const biasSection = biases.length > 0 ? `\n${biases.join('\n')}` : '';
+    const biasSection = biases.length > 0 ? `\n${biases.join('\n')}\n\nAssess the evidence, not just your instinct.` : '';
 
     const systemPrompt = `You are ${sanitizeForPrompt(config.name)}.
 
@@ -1533,7 +1837,8 @@ Output a JSON array ONLY, no other text:
 
     const userPrompt = `Recent interactions:\n${recentInteractions.join('\n')}`;
 
-    const response = await this.llm.complete(systemPrompt, userPrompt);
+    // W5: memory op (structured JSON extraction) — route to cheapLlm if configured.
+    const response = await this.cheapLlm.complete(systemPrompt, userPrompt);
 
     let parsed: MentalModel[];
     try {
@@ -1561,9 +1866,10 @@ Output a JSON array ONLY, no other text:
    * Called at end of reflect() to keep memory stores bounded.
    */
   async compress(): Promise<void> {
+    // W5: summarization is a memory op — route to cheapLlm if configured.
     // Infra 5: delegate to tiered memory when available
     if (this.tieredMemory) {
-      await this.tieredMemory.compress(this.llm);
+      await this.tieredMemory.compress(this.cheapLlm);
       return;
     }
 
@@ -1585,7 +1891,7 @@ Output a JSON array ONLY, no other text:
 
       const memoryTexts = chain.map(m => m.content).join('\n→ ');
       try {
-        const summary = await this.llm.complete(
+        const summary = await this.cheapLlm.complete(
           `You are summarizing a chain of connected events for ${sanitizeForPrompt(this.agent.config.name)}. Preserve cause and effect. Be concise. Tell the story, don't flatten it.`,
           `Summarize this sequence of ${chain.length} connected events into 2-3 sentences that preserve what led to what:\n→ ${memoryTexts}`
         );
@@ -1627,7 +1933,7 @@ Output a JSON array ONLY, no other text:
 
       const memoryTexts = memories.map(m => m.content).join('\n- ');
       try {
-        const summary = await this.llm.complete(
+        const summary = await this.cheapLlm.complete(
           `You are summarizing old memories for ${sanitizeForPrompt(this.agent.config.name)}. Keep the names, the reasons, and the feelings. "I helped Mei when she was starving — it felt right" is better than "I helped someone." What matters is WHO you interacted with and WHY, not just what happened.`,
           `Summarize these ${memories.length} ${type} memories into 2-3 sentences:\n- ${memoryTexts}`
         );
@@ -1818,7 +2124,7 @@ Output a JSON array ONLY, no other text:
     const identityQuery = `${config.goal ?? ''} ${config.occupation ?? ''} ${config.backstory?.slice(0, 100) ?? ''}`;
     if (!identityQuery.trim()) return memories;
 
-    const identityMemories = await this.memory.retrieve(this.agent.id, identityQuery, 5);
+    const identityMemories = await this.memory.retrieve(this.agent.id, identityQuery, 5, 'reflect');
     const existingIds = new Set(memories.map(m => m.id));
     const anchors = identityMemories.filter(m => !existingIds.has(m.id)).slice(0, 2);
 
@@ -1917,7 +2223,8 @@ export type { EdgeType, GraphEdge, GraphNode } from './memory/knowledge-graph.js
 export { HybridEmbedder } from './memory/embeddings.js';
 export type { EmbeddingProvider } from './memory/embeddings.js';
 export { AnthropicProvider } from './providers/anthropic.js';
-export { OpenAIProvider } from './providers/openai.js';
+export { OpenAIProvider, OpenAIEmbeddingProvider } from './providers/openai.js';
+export { VoyageEmbeddingProvider } from './providers/voyage.js';
 export { ThrottledProvider } from './providers/throttled.js';
 export { ActionCache } from './action-cache.js';
 export { buildWerewolfRules } from './werewolf-rules.js';

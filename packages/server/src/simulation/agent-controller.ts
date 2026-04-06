@@ -1,4 +1,4 @@
-import type { Agent, BoardPost, DriveState, GameTime, Institution, MapConfig, Position, ThinkOutput, VitalState } from '@ai-village/shared';
+import type { Agent, BoardPost, DriveState, GameTime, Institution, MapConfig, Position, RewardVector, ThinkOutput, VitalState } from '@ai-village/shared';
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
@@ -44,6 +44,9 @@ export class AgentController {
   pathIndex: number = 0;
   private moveTick: number = 0;
   private lastHungerHour: number = -1; // guard against double hunger tick
+  // Event-driven hunger/energy settlement: tracks last time vitals were settled
+  // in game-time totalMinutes, so action resolution can pro-rate passive drift.
+  private lastVitalSettleMinutes: number = -1;
   activityTimer: number = 0;
   idleTimer: number = 0;
   private planningInProgress: boolean = false;
@@ -70,6 +73,10 @@ export class AgentController {
   private decidingInProgress: boolean = false;
   lastTrigger: string = 'You just arrived. Look around and decide what to do.';
   private lastOutcome: string | undefined;
+  /** Prediction from prior decide() — surfaced on next outcome for prediction-error learning (gap-analysis Category G) */
+  private lastPrediction: string | undefined;
+  /** actionId paired with lastPrediction, so we only attach the prediction to the matching outcome */
+  private lastPredictionActionId: string | undefined;
   // Four Stream Memory: importance accumulator for belief generation
   private importanceAccum: number = 0;
   // Sequential actions: store why agent is moving so arrival trigger includes intent
@@ -83,6 +90,10 @@ export class AgentController {
 
   readonly wakeHour: number;
   readonly sleepHour: number;
+  // W5 (gap-analysis 4.1): staggered reflection. All agents sleep at the same
+  // hour → 50 nightly compressions collide. Per-agent minute jitter spreads
+  // compute spike across the full sleep hour (60 game-minutes ≈ 10min real).
+  readonly sleepMinute: number;
   readonly homeArea: string;
 
   private mapConfig: MapConfig;
@@ -106,6 +117,13 @@ export class AgentController {
     this.cognition = cognition;
     this.wakeHour = wakeHour;
     this.sleepHour = sleepHour;
+    // Deterministic hash of agent ID → minute offset [0, 59]. Stable across ticks.
+    let h = 0;
+    for (let i = 0; i < agent.id.length; i++) {
+      h = ((h << 5) - h) + agent.id.charCodeAt(i);
+      h |= 0;
+    }
+    this.sleepMinute = Math.abs(h) % 60;
     this.homeArea = homeArea;
     // Default to village config with all systems enabled
     this.mapConfig = mapConfig ?? {
@@ -122,6 +140,9 @@ export class AgentController {
     if (!this.agent.vitals) {
       this.agent.vitals = { health: 100, hunger: 0, energy: 100 };
     }
+    // Seed event-driven settlement clock to current game-time so the first
+    // settle call computes zero elapsed — avoids a big initial hunger jump.
+    this.lastVitalSettleMinutes = this.world.time.totalMinutes;
     if (this.agent.alive === undefined) {
       this.agent.alive = true;
     }
@@ -192,6 +213,112 @@ export class AgentController {
 
   private handleApiSuccess(): void {
     this.consecutiveApiFailures = 0;
+  }
+
+  /**
+   * Compute a 5-axis reward rubric from an action outcome.
+   * Converts success/fail + resource deltas into a structured RewardVector.
+   * Gap-analysis items 1, 2: replaces binary signal so experiential learning
+   * can track WHICH axis an action delivered on (res gain vs. health vs. social).
+   *
+   * Values loosely bounded to [-1, +1]; agent weights scalarize it into personality.
+   */
+  private computeOutcomeRubric(actor: Agent, outcome: any): RewardVector {
+    // Diminishing-returns scaler (gap-analysis P3 reward hacking): agents that
+    // spam the same action in a tight window get their POSITIVE rewards scaled
+    // down — defeats eat/gather/rest grinding. Applied across hp + goalProgress
+    // axes as well as resources (was already on resources).
+    const history0 = actor.strategyHistory ?? [];
+    const tightType = outcome.type || 'unknown';
+    const tightRepeats = history0.slice(-3).filter(s => s.actionType === tightType).length;
+    const diminishing = Math.max(0.3, 1 - tightRepeats * 0.25);
+
+    // hp axis: hunger + health deltas. Hunger is 0-100 where 0=starving, 100=full.
+    // A +10 hungerChange is a meaningful positive tick; a -10 is meaningful negative.
+    const hungerDelta = (outcome.hungerChange ?? 0) / 20; // scale: 20 → full axis
+    const healthDelta = (outcome.healthChange ?? 0) / 20;
+    const energyDelta = -(outcome.energySpent ?? 0) / 30; // energy spent is a cost
+    const rawHp = hungerDelta + healthDelta + energyDelta * 0.3;
+    // Only diminish the POSITIVE side: starving agents must still feel the negative
+    // of not eating, and eating should still heal — just less per repeat.
+    const hp = Math.max(-1, Math.min(1, rawHp > 0 ? rawHp * diminishing : rawHp));
+
+    // resources axis: items gained count + skill XP. Currency + inventory.
+    // Diminishing returns (gap-analysis item 2.3): if the same action type has
+    // just been done in the last 3 outcomes, scale down the resource payoff.
+    // This defeats reward hacking where an agent grinds one action for the
+    // dominant-axis reward. Applies BEFORE novelty penalty in exploration axis.
+    const itemsGainedCount = Array.isArray(outcome.itemsGained)
+      ? outcome.itemsGained.reduce((s: number, g: any) => s + (g?.qty ?? 0), 0)
+      : 0;
+    const skillXp = outcome.skillXpGained?.xp ?? 0;
+    const history = actor.strategyHistory ?? [];
+    const actionType = outcome.type || 'unknown';
+    const rawResources = (itemsGainedCount * 0.25) + (skillXp / 40) + (outcome.success ? 0 : -0.2);
+    // Use the shared diminishing scaler computed above (same tight-3-repeats rule).
+    const resources = Math.max(-1, Math.min(1,
+      rawResources > 0 ? rawResources * diminishing : rawResources
+    ));
+
+    // social axis: trust-weighted relationship deltas. computeOutcomeRubric has no
+    // direct signal for this — conversation/gift outcomes set it explicitly at their
+    // callsites (e.g. gift path below). Baseline 0 here.
+    const social = 0;
+
+    // normDeviation axis: village-norm violation cost (gap-analysis item 1.2).
+    // Scales with witness count + enforcementRate + severity. Per-agent normWeight
+    // (0 = stoic loner, 1 = social climber) gates how much this axis bites.
+    const witnessCount = this.world.getNearbyAgents(this.agent.position, 5)
+      .filter(a => a.id !== this.agent.id && a.alive !== false).length;
+    const rawViolationCost = this.world.computeViolationCost(actionType, witnessCount);
+    const normWeight = actor.normWeight ?? 0.5;
+    const normDeviation = rawViolationCost * (0.5 + normWeight); // 0.5..1.5 scaling
+
+    // villageImpact axis (root-audit leverage item 2): structural effect on the
+    // commons (trust-graph connectivity, wealth circulation). Orthogonal to the
+    // personal social axis — this measures commons-level impact regardless of
+    // whether the agent personally benefited.
+    const villageImpact = this.world.computeVillageImpact(actionType, !!outcome.success);
+
+    // goalProgress axis: hard to measure per-action without explicit goal tracking.
+    // Heuristic: success + resource gain is directional progress, failure is setback.
+    // Also diminishing — grinding the same action doesn't compound goal progress.
+    const rawGoal = outcome.success
+      ? Math.min(0.3, itemsGainedCount * 0.1)
+      : -0.1;
+    const goalProgress = rawGoal > 0 ? rawGoal * diminishing : rawGoal;
+
+    // exploration axis: novelty of action type. New action type = positive signal.
+    // Suppresses rut behavior — gathering wheat for the 30th time gives no novelty.
+    const recentTypes = history.slice(-20).map(s => s.actionType);
+    const sameTypeCount = recentTypes.filter(t => t === actionType).length;
+    // Fresh action: +0.3; repeated 10x: ~0; repeated 20x: -0.2
+    const exploration = Math.max(-0.2, 0.3 - sameTypeCount * 0.03);
+
+    return { hp, resources, social, goalProgress, exploration, normDeviation, villageImpact };
+  }
+
+  /**
+   * Heuristic surprise score for prediction-error surfacing (gap-analysis Category G).
+   * Token-Jaccard overlap between the agent's prior predictedOutcome and the actual
+   * outcome description. High overlap = prediction was accurate (none/small surprise);
+   * low overlap = the world went a different way than the agent expected (large surprise).
+   * Cheap lexical proxy — no LLM call. The LLM itself reasons about the framed gap.
+   */
+  private computePredictionSurprise(predicted: string, actual: string): 'none' | 'small' | 'large' {
+    const STOP = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'and', 'or', 'but', 'you', 'your', 'will', 'have', 'that', 'this', 'with', 'from', 'them', 'they', 'their', 'into', 'when', 'what', 'some', 'been']);
+    const tok = (s: string): Set<string> => {
+      const raw = s.toLowerCase().match(/[a-z]{4,}/g) ?? [];
+      return new Set(raw.filter(t => !STOP.has(t)));
+    };
+    const A = tok(predicted), B = tok(actual);
+    if (A.size === 0 || B.size === 0) return 'small';
+    let inter = 0;
+    for (const t of A) if (B.has(t)) inter++;
+    const jaccard = inter / (A.size + B.size - inter);
+    if (jaccard >= 0.3) return 'none';
+    if (jaccard >= 0.1) return 'small';
+    return 'large';
   }
 
   /** Truncate verbose intention text to a clean short activity description */
@@ -299,6 +426,14 @@ export class AgentController {
       this.recalculateDrives();
       this.checkLedgerExpiry();
       this.processCommitmentExpiry();
+      // Root-audit leverage item 3: pressure-triggered compression.
+      // If timeline has grown past watermark mid-day, fire early compaction
+      // rather than waiting for sleep. Cooldown-gated to prevent thrashing.
+      if (this.cognition.fourStream?.shouldCompressFromPressure()) {
+        console.log(`[PressureCompact] ${this.agent.config.name} firing mid-day compression`);
+        void this.cognition.fourStream.nightlyCompression(this.cognition.cheapLlm, this.world.time.day)
+          .catch((err: unknown) => { console.warn('[PressureCompact] failed:', (err as Error).message); });
+      }
     }
 
     if (this.conversationCooldown > 0) this.conversationCooldown--;
@@ -454,7 +589,7 @@ export class AgentController {
         !this.postConversationPending) {
       this.importanceAccum = 0;
       this.lastBeliefTick = this.world.time.totalMinutes;
-      void this.cognition.fourStream.generateBeliefs(this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] generateBeliefs failed:', (err as Error).message); });
+      void this.cognition.fourStream.generateBeliefs(this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] generateBeliefs failed:', (err as Error).message); });
     }
 
     // Log transition memories when state changes (zero LLM cost)
@@ -802,7 +937,7 @@ export class AgentController {
           }
         }
 
-        await this.cognition.fourStream.nightlyCompression(this.cognition.llmProvider);
+        await this.cognition.fourStream.nightlyCompression(this.cognition.cheapLlm, this.world.time.day);
       }
     } catch (err) {
       console.error(`[Agent] ${this.agent.config.name} failed to reflect:`, err);
@@ -813,6 +948,44 @@ export class AgentController {
     }
   }
 
+  /**
+   * Event-driven hunger settlement: applies pro-rated hunger drift for every
+   * game-minute elapsed since the last settlement. Called both from tickVitals
+   * (baseline) and from applyOutcomeToWorld (so agents see live hunger deltas
+   * the moment an action resolves). Returns the elapsed minutes applied.
+   *
+   * Rates (per game-minute):
+   *   awake                 +1/60  (= 1.0/hour legacy rate)
+   *   sleeping, no property +0.3/60 (= 0.3/hour legacy rate)
+   *   sleeping, owns home    0     (comfy, safe)
+   */
+  settleVitalsToNow(): number {
+    if (!this.mapConfig.systems?.hunger) return 0;
+    const v = this.agent.vitals;
+    if (!v) return 0;
+    const nowMinutes = this.world.time.totalMinutes;
+    if (this.lastVitalSettleMinutes < 0) {
+      this.lastVitalSettleMinutes = nowMinutes;
+      return 0;
+    }
+    const elapsed = nowMinutes - this.lastVitalSettleMinutes;
+    if (elapsed <= 0) return 0;
+
+    let ratePerMinute: number;
+    if (this.state === 'sleeping') {
+      const sleepArea = this.world.getAreaAt(this.agent.position);
+      const ownsProperty = sleepArea && this.world.getPropertyOwner(sleepArea.id) === this.agent.id;
+      ratePerMinute = ownsProperty ? 0 : 0.3 / 60;
+    } else {
+      ratePerMinute = 1.0 / 60;
+    }
+    if (ratePerMinute > 0) {
+      v.hunger = Math.min(100, v.hunger + ratePerMinute * elapsed);
+    }
+    this.lastVitalSettleMinutes = nowMinutes;
+    return elapsed;
+  }
+
   private tickVitals(): void {
     // Skip vitals (hunger/starvation) when disabled by map config (e.g. werewolf)
     if (!this.mapConfig.systems?.hunger) return;
@@ -820,23 +993,18 @@ export class AgentController {
     const v = this.agent.vitals;
     if (!v) return;
 
+    // Always advance the settlement clock — this replaces the old hourly
+    // hunger drip with continuous pro-rated drift. Per-action callers can
+    // also invoke settleVitalsToNow() directly so the agent sees live hunger.
+    this.settleVitalsToNow();
+
     // --- Hourly effects (guard: engine ticks 2x per game minute,
     // so minute===0 is true for 2 consecutive ticks — only apply once per hour)
     const currentHour = this.world.time.day * 24 + this.world.time.hour;
     if (this.world.time.minute === 0 && currentHour !== this.lastHungerHour) {
       this.lastHungerHour = currentHour;
 
-      // Hunger rate: 1.0/hour awake, 0.3/hour sleeping (0 if sleeping in owned property)
-      if (this.state === 'sleeping') {
-        const sleepArea = this.world.getAreaAt(this.agent.position);
-        const ownsProperty = sleepArea && this.world.getPropertyOwner(sleepArea.id) === this.agent.id;
-        if (!ownsProperty) {
-          v.hunger = Math.min(100, v.hunger + 0.3);
-        }
-        // Property owners sleep comfortably — no hunger loss overnight
-      } else {
-        v.hunger = Math.min(100, v.hunger + 1.0);
-      }
+      // Hunger now drips continuously via settleVitalsToNow() above.
 
       // Cold damage + building effects
       const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
@@ -1183,8 +1351,9 @@ export class AgentController {
   private shouldSleep(time: GameTime): boolean {
     // Werewolf: PhaseManager controls sleep/wake, not time
     if (this.mapConfig.systems?.werewolf) return false;
-    // Trigger once at exact sleep hour — sleepTriggered flag prevents re-firing
-    return time.hour === this.sleepHour && time.minute === 0;
+    // W5: fire at per-agent minute offset within the sleep hour. Spreads the
+    // nightly reflect/compress spike across 60 game-minutes instead of 1.
+    return time.hour === this.sleepHour && time.minute === this.sleepMinute;
   }
 
   /** Begin the sleep sequence: store narrative memory, then reflect, then walk to bed */
@@ -1294,8 +1463,25 @@ export class AgentController {
           type: 'broken_oath',
           day,
           significance: 8,
+          actorId: this.agent.id,
+          actionType: 'broken_oath',
+          witnessIds: [c.targetId],
         });
       }
+
+      // --- Village-level defection tracking (gap-analysis item 10) ---
+      // Broken promises = personal gain (avoided cost), village harm (trust erosion).
+      this.world.addVillageMemory({
+        content: `${this.agent.config.name} broke a ${c.weight === 5 ? 'oath' : 'promise'} to ${c.targetName}`,
+        type: 'defection',
+        day,
+        significance: c.weight === 5 ? 8 : c.weight === 3 ? 5 : 3,
+        actorId: this.agent.id,
+        actionType: c.weight === 5 ? 'broken_oath' : 'broken_promise',
+        witnessIds: [c.targetId],
+        personalCost: 0.1 * c.weight, // saved effort
+        villageBenefit: -0.15 * c.weight, // erosion
+      });
 
       // Archive broken commitment
       if (!this.agent.archivedCommitments) this.agent.archivedCommitments = [];
@@ -2483,6 +2669,10 @@ State your vote and explain your reasoning.`;
       this.world.addSkillXP(actor.id, outcome.skillXpGained.skill, outcome.skillXpGained.xp);
     }
 
+    // Settle baseline hunger drift up to now before applying the action's
+    // explicit vital deltas, so agents observe live vitals immediately.
+    this.settleVitalsToNow();
+
     // Vitals
     if (actor.vitals) {
       if (outcome.energySpent !== 0) {
@@ -2496,16 +2686,31 @@ State your vote and explain your reasoning.`;
       }
     }
 
-    // Store outcome as memory — action_outcome so it enters the four-stream timeline
+    // Store outcome as memory — action_outcome so it enters the four-stream timeline.
+    // Emit rubric vector for experiential learning (gap-analysis items 1, 2, 4).
     const outcomeImportance = outcome.success ? 4 : 6;
+    const rubric = this.computeOutcomeRubric(actor, outcome);
+    // Prediction-error enrichment (gap-analysis Category G): if the agent's prior
+    // predictedOutcome matches this action, persist the predicted-vs-actual gap
+    // into the memory content so it shows up in timeline recalls and reflections.
+    let memoryContent = outcome.description;
+    if (this.lastPrediction && this.lastPredictionActionId && outcome.type) {
+      const predActionPrefix = this.lastPredictionActionId.split('_')[0];
+      if (outcome.type.startsWith(predActionPrefix) || this.lastPredictionActionId.startsWith(outcome.type)) {
+        memoryContent = `${outcome.description} [predicted: ${this.lastPrediction}]`;
+      }
+    }
     void this.cognition.addMemory({
       id: crypto.randomUUID(),
       agentId: actor.id,
       type: 'action_outcome',
-      content: outcome.description,
+      content: memoryContent,
       importance: outcomeImportance,
       timestamp: Date.now(),
       relatedAgentIds: [],
+      actionSuccess: outcome.success,
+      actionRubric: rubric,
+      actionType: outcome.type || 'unknown',
     }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
     // Four Stream: accumulate importance for belief generation
     this.importanceAccum += outcomeImportance;
@@ -2718,9 +2923,57 @@ State your vote and explain your reasoning.`;
       // Adjust trust: target trusts giver more
       this.adjustTrust(target, this.agent, 10);
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, this.lastOutcome || outcome.description, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       this.adjustReputation(this.agent.id, +3, 'Generosity');
+
+      // --- Shared-credit back-prop (gap-analysis P3): write a memory to the
+      //     RECIPIENT so they actually notice the help and credit the giver.
+      //     Without this, helped agents only know "I got food" — not WHO helped
+      //     them, which breaks cooperative reputation learning.
+      const recipientCognition = this.agentCognitions?.get(target.id);
+      if (recipientCognition) {
+        const isFood = item.type === 'food';
+        const socialReward = isFood && (target.vitals?.hunger ?? 0) >= 50 ? 0.6 : 0.3;
+        void recipientCognition.addMemory({
+          id: crypto.randomUUID(),
+          agentId: target.id,
+          type: 'action_outcome',
+          content: `${this.agent.config.name} gave me ${item.name}${isFood && (target.vitals?.hunger ?? 0) >= 50 ? ' when I was starving' : ''}.`,
+          importance: isFood && (target.vitals?.hunger ?? 0) >= 50 ? 7 : 5,
+          timestamp: Date.now(),
+          relatedAgentIds: [this.agent.id],
+          actionType: 'received_gift',
+          actionSuccess: true,
+          actionRubric: {
+            hp: isFood ? 0.3 : 0,
+            resources: 0.2,
+            social: socialReward,
+            goalProgress: 0,
+            exploration: 0,
+            normDeviation: 0,
+            villageImpact: 0, // recipient isn't the actor; giver gets the commons credit
+          },
+        }).catch((err: unknown) => { console.warn('[Controller] recipient addMemory failed:', (err as Error).message); });
+      }
+
+      // --- Village-level cooperation tracking (gap-analysis item 10) ---
+      // Giving = personal cost (lost item), village benefit (trust + recipient's gain).
+      // Scaled by item value: gifting a tool is more prosocial than gifting scraps.
+      const itemValue = item.value ?? 5;
+      const personalCost = -Math.min(0.3, itemValue / 50);
+      const villageBenefit = Math.min(0.5, itemValue / 30);
+      this.world.addVillageMemory({
+        content: `${this.agent.config.name} gave ${item.name} to ${target.config.name}`,
+        type: 'prosocial',
+        day: this.world.time.day,
+        significance: Math.min(8, 3 + Math.floor(itemValue / 10)),
+        actorId: this.agent.id,
+        actionType: 'give',
+        witnessIds: [target.id],
+        personalCost,
+        villageBenefit,
+      });
 
       // --- Commitment fulfillment: check if this give fulfills an active promise ---
       const givenName = item.name.toLowerCase().replace(/\s+/g, '_');
@@ -2836,7 +3089,7 @@ State your vote and explain your reasoning.`;
       this.lastTrigger = outcome.description;
       // Dossier update
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       // PUBLIC: trade post if successful
       if (outcome.success) {
@@ -2904,7 +3157,7 @@ State your vote and explain your reasoning.`;
 
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name,
-          `I threatened ${target.config.name}: ${threatText}`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+          `I threatened ${target.config.name}: ${threatText}`, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
 
       const targetCtrl = this.agentControllers?.get(target.id);
@@ -2973,7 +3226,7 @@ State your vote and explain your reasoning.`;
       this.adjustTrust(target, this.agent, -15);
       this.adjustTrust(this.agent, target, -15);
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I confronted ${target.config.name}: ${confrontText}`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, `I confronted ${target.config.name}: ${confrontText}`, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       // Force target to react
       const targetCtrl = this.agentControllers?.get(target.id);
@@ -3038,7 +3291,7 @@ State your vote and explain your reasoning.`;
       this.lastOutcome = outcome.description;
       this.lastTrigger = outcome.description;
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
       // PUBLIC: news post + all agents get memory
       const stealPost: BoardPost = {
@@ -3105,6 +3358,23 @@ State your vote and explain your reasoning.`;
           break;
         }
       }
+
+      // --- Village-level defection tracking: theft (gap-analysis item 1.2) ---
+      // Every living agent witnesses via all-agents memory broadcast above.
+      const theftWitnesses = Array.from(this.world.agents.values())
+        .filter(a => a.id !== this.agent.id && a.id !== target.id && a.alive !== false)
+        .map(a => a.id);
+      this.world.addVillageMemory({
+        content: `${this.agent.config.name} stole from ${target.config.name}.`,
+        type: 'defection',
+        day: this.world.time.day,
+        significance: 7,
+        actorId: this.agent.id,
+        actionType: 'theft',
+        witnessIds: theftWitnesses,
+        personalCost: 0.3,         // gained items
+        villageBenefit: -0.5,      // trust erosion, fear, victim harm
+      });
 
       this.state = 'performing'; this.activityTimer = 3;
       this.world.updateAgentState(this.agent.id, 'active', `stealing`);
@@ -3205,7 +3475,7 @@ State your vote and explain your reasoning.`;
         }
       }
       if (this.cognition.fourStream) {
-        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+        void this.cognition.fourStream.updateDossier(target.id, target.config.name, outcome.description, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
 
       // Emit fight event for engine-level handling
@@ -3290,6 +3560,19 @@ State your vote and explain your reasoning.`;
         }
       }
 
+      // --- Village-level defection tracking: violence (gap-analysis item 1.2) ---
+      this.world.addVillageMemory({
+        content: `${this.agent.config.name} attacked ${target.config.name}.`,
+        type: 'defection',
+        day: this.world.time.day,
+        significance: 8,
+        actorId: this.agent.id,
+        actionType: 'violence',
+        witnessIds: witnesses.map(w => w.id),
+        personalCost: -0.2,        // took damage
+        villageBenefit: -0.8,      // victim harm, fear, precedent
+      });
+
       this.broadcaster.agentAction(this.agent.id, 'Attacked ' + target.config.name + '! — "' + shortReason + '"', '⚔️');
       this.lastOutcome = outcome.description + (looted.length > 0 ? ` Took ${looted.join(', ')}.` : '');
       this.lastTrigger = outcome.success
@@ -3359,7 +3642,7 @@ State your vote and explain your reasoning.`;
         this.adjustTrust(this.agent, target, 15);
         this.adjustTrust(target, this.agent, 15);
         if (this.cognition.fourStream) {
-          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `${target.config.name} joined ${myGroup.name}.`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `${target.config.name} joined ${myGroup.name}.`, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
         }
 
         const newsPost: BoardPost = {
@@ -3448,7 +3731,7 @@ State your vote and explain your reasoning.`;
         this.adjustTrust(this.agent, target, 20);
         this.adjustTrust(target, this.agent, 20);
         if (this.cognition.fourStream) {
-          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `We founded ${groupName} together.`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+          void this.cognition.fourStream.updateDossier(target.id, target.config.name, `We founded ${groupName} together.`, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
         }
 
         const newsPost: BoardPost = {
@@ -3546,7 +3829,7 @@ State your vote and explain your reasoning.`;
 
       if (this.cognition.fourStream) {
         void this.cognition.fourStream.updateDossier(target.id, target.config.name,
-          `I left ${group.name}.`, this.cognition.llmProvider).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
+          `I left ${group.name}.`, this.cognition.cheapLlm).catch((err: unknown) => { console.warn('[Controller] updateDossier failed:', (err as Error).message); });
       }
 
       const betrayPost: BoardPost = {
@@ -3567,6 +3850,11 @@ State your vote and explain your reasoning.`;
         type: 'betrayal',
         day: this.world.time.day,
         significance: 7,
+        actorId: this.agent.id,
+        actionType: 'betrayal',
+        witnessIds: group.members.filter(m => m.agentId !== this.agent.id).map(m => m.agentId),
+        personalCost: 0.1,
+        villageBenefit: -0.4,
       });
 
       this.lastOutcome = `You left ${group.name}.`;
@@ -4207,8 +4495,21 @@ Write ONLY the rule in the format above. Stay in character.`;
     this.decidingInProgress = true;
 
     try {
-      const situation = this.buildSituation(this.lastTrigger, this.lastOutcome);
+      // Prediction-error learning (gap-analysis Category G): surface prior prediction
+      // alongside actual outcome as a dedicated prompt block. Heuristic surprise
+      // score = token-Jaccard distance between predicted and actual text.
+      const outcomeForPrompt = this.lastOutcome;
+      const situation = this.buildSituation(this.lastTrigger, outcomeForPrompt);
+      if (this.lastPrediction && this.lastOutcome) {
+        situation.predictionCheck = {
+          predicted: this.lastPrediction,
+          actual: this.lastOutcome,
+          surprise: this.computePredictionSurprise(this.lastPrediction, this.lastOutcome),
+        };
+      }
       this.lastOutcome = undefined;
+      this.lastPrediction = undefined;
+      this.lastPredictionActionId = undefined;
 
       // Check if any obligations should be surfaced as the trigger
       const obligationPrompt = this.checkObligations(situation);
@@ -4221,6 +4522,14 @@ Write ONLY the rule in the format above. Stay in character.`;
 
       const decision = await this.cognition.decide(situation);
       this.handleApiSuccess();
+      // E1: remember the last actionId that successfully parsed so future parse
+      // failures fall back to behavioral continuity instead of hardcoded 'rest'.
+      this.cognition.lastSuccessfulActionId = decision.actionId;
+      // Store prediction for prediction-error surfacing on next cycle (gap-analysis Category G)
+      if (decision.predictedOutcome && decision.predictedOutcome.trim()) {
+        this.lastPrediction = decision.predictedOutcome.trim();
+        this.lastPredictionActionId = decision.actionId;
+      }
       console.log(`[Decision] ${this.agent.config.name} → ${decision.actionId} | ${decision.reason.slice(0, 120)}`);
 
       // Queue follow-up actions if present (filter out entries missing actionId)

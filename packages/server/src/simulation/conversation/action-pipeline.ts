@@ -822,6 +822,46 @@ export class ActionPipeline {
             console.warn(`[Pipeline] addMemory failed for proposer ${trade.fromAgentId}:`, (err as Error).message);
           });
         }
+
+        // Difference-reward cooperation credit (gap-analysis item 2.1).
+        // Each party gets social credit PROPORTIONAL to what they contributed
+        // to the OTHER party. Item-quantity is a simple proxy for contributed value.
+        const offeringQty = trade.offering.reduce((s, i) => s + i.qty, 0);
+        const requestingQty = trade.requesting.reduce((s, i) => s + i.qty, 0);
+        if (offeringQty > 0 || requestingQty > 0) {
+          const contributions = new Map<string, number>([
+            [trade.fromAgentId, offeringQty],  // proposer gave offering to acceptor
+            [actorId, requestingQty],          // acceptor gave requesting to proposer
+          ]);
+          const rewards = this.world.computeDifferenceRewards(contributions);
+          // Scale raw qty into [-1, +1] village-benefit range (cap at 0.3 per trade)
+          const scale = (q: number) => Math.min(0.3, q / 10);
+          const proposerReward = scale(rewards.get(trade.fromAgentId) ?? 0);
+          const acceptorReward = scale(rewards.get(actorId) ?? 0);
+          const day = this.world.time.day;
+          // Village memory entry for proposer (their contribution → acceptor)
+          if (proposerReward > 0) {
+            this.world.addVillageMemory({
+              type: 'prosocial', day, significance: 4,
+              content: `${fromAgent?.config.name ?? 'Someone'} traded ${offeringQty} items to ${actorName}`,
+              actorId: trade.fromAgentId, actionType: 'trade',
+              witnessIds: [actorId],
+              personalCost: -scale(offeringQty) * 0.3, // small cost for giving items
+              villageBenefit: proposerReward,
+            });
+          }
+          // Village memory entry for acceptor (their contribution → proposer)
+          if (acceptorReward > 0) {
+            this.world.addVillageMemory({
+              type: 'prosocial', day, significance: 4,
+              content: `${actorName} traded ${requestingQty} items to ${fromAgent?.config.name ?? 'someone'}`,
+              actorId, actionType: 'trade',
+              witnessIds: [trade.fromAgentId],
+              personalCost: -scale(requestingQty) * 0.3,
+              villageBenefit: acceptorReward,
+            });
+          }
+        }
       } else if (outcome.type === 'trade_reject' && outcome.tradeProposal) {
         this.world.pendingTrades.delete(outcome.tradeProposal.id);
       }

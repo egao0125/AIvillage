@@ -1,13 +1,16 @@
 import type pg from 'pg';
 import type { Memory } from '@ai-village/shared';
 import { TFIDFEmbedder } from './embeddings.js';
+import type { EmbeddingProvider } from './embeddings.js';
 import { diversifyResults } from './diversity.js';
+import type { HyDEProvider, RetrievalContext } from './in-memory.js';
+import { RETRIEVAL_PROFILES } from './in-memory.js';
 
 type Pool = pg.Pool;
 
 interface MemoryStore {
   add(memory: Memory): Promise<void>;
-  retrieve(agentId: string, query: string, limit?: number): Promise<Memory[]>;
+  retrieve(agentId: string, query: string, limit?: number, context?: RetrievalContext): Promise<Memory[]>;
   getRecent(agentId: string, limit?: number): Promise<Memory[]>;
   getByImportance(agentId: string, minImportance: number): Promise<Memory[]>;
   getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
@@ -19,7 +22,45 @@ export class RdsMemoryStore implements MemoryStore {
   private embedders: Map<string, TFIDFEmbedder> = new Map();
   private bootstrapped: Set<string> = new Set();
 
+  /** Optional HyDE provider — expands queries with hypothetical answers (item 2A) */
+  public hydeProvider?: HyDEProvider;
+  /** Optional neural embedding provider (OpenAI text-embedding-3-small etc.) */
+  public embeddingProvider?: EmbeddingProvider;
+  private hydeCache: Map<string, { expanded: string; timestamp: number }> = new Map();
+  private neuralQueryCache: Map<string, { vec: number[]; ts: number }> = new Map();
+  private static readonly HYDE_CACHE_TTL = 300_000; // 5 minutes
+
   constructor(private pool: Pool) {}
+
+  /**
+   * HyDE: expand query with a hypothetical memory answer for better TF-IDF recall.
+   * Mirrors InMemoryStore.hydeExpand — see that implementation for design rationale.
+   */
+  private async hydeExpand(query: string): Promise<string> {
+    if (!this.hydeProvider) return query;
+    const cacheKey = query.toLowerCase().trim();
+    const cached = this.hydeCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && (now - cached.timestamp) < RdsMemoryStore.HYDE_CACHE_TTL) {
+      return cached.expanded;
+    }
+    try {
+      const hypothetical = await this.hydeProvider.complete(
+        'You are a memory recall assistant. Given a query, write a short (2-3 sentence) hypothetical memory entry that would answer it. Use specific details, names, and actions. Do not include meta-commentary.',
+        `Query: "${query}"\n\nHypothetical memory:`,
+      );
+      const expanded = `${query} ${hypothetical.trim()}`;
+      this.hydeCache.set(cacheKey, { expanded, timestamp: now });
+      if (this.hydeCache.size > 100) {
+        for (const [k, v] of this.hydeCache) {
+          if (now - v.timestamp > RdsMemoryStore.HYDE_CACHE_TTL) this.hydeCache.delete(k);
+        }
+      }
+      return expanded;
+    } catch {
+      return query;
+    }
+  }
 
   private getEmbedder(agentId: string): TFIDFEmbedder {
     if (!this.embedders.has(agentId)) {
@@ -49,10 +90,17 @@ export class RdsMemoryStore implements MemoryStore {
   }
 
   async add(memory: Memory): Promise<void> {
-    // Build embedding (not persisted — recomputed on load)
+    // Build TF-IDF embedding (not persisted — recomputed on load)
     const embedder = this.getEmbedder(memory.agentId);
     embedder.addDocument(memory.content);
     memory.embedding = embedder.embed(memory.content);
+
+    // Neural embedding — fire-and-forget. TF-IDF is the floor.
+    if (this.embeddingProvider && !memory.neuralEmbedding) {
+      this.embeddingProvider.embed(memory.content).then(vec => {
+        memory.neuralEmbedding = vec;
+      }).catch(() => { /* TF-IDF fallback */ });
+    }
 
     try {
       await this.pool.query(
@@ -87,7 +135,12 @@ export class RdsMemoryStore implements MemoryStore {
     }
   }
 
-  async retrieve(agentId: string, query: string, limit = 10): Promise<Memory[]> {
+  async retrieve(
+    agentId: string,
+    query: string,
+    limit = 10,
+    context: RetrievalContext = 'balanced',
+  ): Promise<Memory[]> {
     // Cap fetchLimit to prevent runaway queries on large memory tables (OOM / pool exhaustion).
     // limit*5 gives enough candidates for TF-IDF re-ranking; 1000 is a hard safety ceiling.
     const fetchLimit = Math.min(limit * 5, 1_000);
@@ -104,17 +157,40 @@ export class RdsMemoryStore implements MemoryStore {
 
     if (result.rows.length === 0) return [];
 
+    // HyDE expansion: generate hypothetical answer to improve semantic matching (item 2A)
+    const expandedQuery = await this.hydeExpand(query);
+
     // Bootstrap embedder lazily
     const embedder = await this.bootstrapEmbedder(agentId);
-    const queryEmbedding = embedder.embed(query);
+    const queryEmbedding = embedder.embed(expandedQuery);
 
-    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+    const queryWords = expandedQuery.toLowerCase().split(/\s+/).filter(w => w.length > 0);
     const now = Date.now();
+
+    // Neural query embedding — one API call per retrieval, cached 5 min.
+    let queryNeural: number[] | null = null;
+    if (this.embeddingProvider) {
+      const cacheKey = expandedQuery.toLowerCase().trim();
+      const cached = this.neuralQueryCache.get(cacheKey);
+      if (cached && (now - cached.ts) < RdsMemoryStore.HYDE_CACHE_TTL) {
+        queryNeural = cached.vec;
+      } else {
+        try {
+          queryNeural = await this.embeddingProvider.embed(expandedQuery);
+          this.neuralQueryCache.set(cacheKey, { vec: queryNeural, ts: now });
+          if (this.neuralQueryCache.size > 200) {
+            for (const [k, v] of this.neuralQueryCache) {
+              if (now - v.ts > RdsMemoryStore.HYDE_CACHE_TTL) this.neuralQueryCache.delete(k);
+            }
+          }
+        } catch { /* TF-IDF fallback */ }
+      }
+    }
 
     const scored = result.rows.map(row => {
       const memory = this.rowToMemory(row);
 
-      // Compute embedding on the fly (not persisted)
+      // Compute TF-IDF embedding on the fly (not persisted)
       const memEmbedding = embedder.embed(memory.content);
 
       // Keyword matching score (0-1)
@@ -122,9 +198,15 @@ export class RdsMemoryStore implements MemoryStore {
       const matchCount = queryWords.filter(word => contentLower.includes(word)).length;
       const keywordScore = queryWords.length > 0 ? matchCount / queryWords.length : 0;
 
-      // Semantic similarity score (0-1)
+      // Semantic similarity score (0-1) — hybrid: 0.6 × neural + 0.4 × TF-IDF
       let semanticScore = 0;
-      if (memEmbedding.length > 0 && queryEmbedding.length > 0) {
+      const hasTfidf = memEmbedding.length > 0 && queryEmbedding.length > 0;
+      const hasNeural = queryNeural && memory.neuralEmbedding && memory.neuralEmbedding.length > 0;
+      if (hasTfidf && hasNeural) {
+        const tfidfSim = Math.max(0, TFIDFEmbedder.cosineSimilarity(queryEmbedding, memEmbedding));
+        const neuralSim = Math.max(0, TFIDFEmbedder.cosineSimilarity(queryNeural!, memory.neuralEmbedding!));
+        semanticScore = 0.6 * neuralSim + 0.4 * tfidfSim;
+      } else if (hasTfidf) {
         semanticScore = Math.max(0, TFIDFEmbedder.cosineSimilarity(queryEmbedding, memEmbedding));
       }
 
@@ -136,10 +218,23 @@ export class RdsMemoryStore implements MemoryStore {
       // Importance score (0-1) — normalize from 1-10 to 0-1
       const importanceScore = (memory.importance - 1) / 9;
 
-      // Combined score — importance-weighted so significant memories surface over noise
-      const baseScore = queryEmbedding.length > 0
-        ? 0.15 * keywordScore + 0.30 * semanticScore + 0.20 * recencyScore + 0.35 * importanceScore
-        : 0.25 * keywordScore + 0.25 * recencyScore + 0.50 * importanceScore;
+      // Combined score using profile weights (gap-analysis item 2B).
+      // Without any embedding, re-distribute the semantic weight across the remaining signals.
+      const w = RETRIEVAL_PROFILES[context];
+      const hasAnyEmbedding = hasTfidf || hasNeural;
+      let baseScore: number;
+      if (hasAnyEmbedding) {
+        baseScore = w.keyword * keywordScore
+          + w.semantic * semanticScore
+          + w.recency * recencyScore
+          + w.importance * importanceScore;
+      } else {
+        const total = w.keyword + w.recency + w.importance;
+        const scale = total > 0 ? 1 / total : 0;
+        baseScore = (w.keyword * scale) * keywordScore
+          + (w.recency * scale) * recencyScore
+          + (w.importance * scale) * importanceScore;
+      }
 
       // Core identity memories get a retrieval boost
       const coreBonus = memory.isCore ? 0.2 : 0;

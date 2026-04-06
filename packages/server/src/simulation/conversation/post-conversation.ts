@@ -286,7 +286,7 @@ export class PostConversationProcessor {
         for (const otherId of otherIds) {
           const otherName = this.world.getAgent(otherId)?.config.name || 'someone';
           void cognition.fourStream.updateDossier(
-            otherId, otherName, result.summary, cognition.llmProvider
+            otherId, otherName, result.summary, cognition.cheapLlm
           ).catch((err: unknown) => {
             console.warn('[PostConversation] updateDossier failed:', (err as Error).message);
           });

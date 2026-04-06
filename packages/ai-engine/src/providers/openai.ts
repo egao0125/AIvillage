@@ -1,4 +1,43 @@
 import OpenAI from 'openai';
+import type { EmbeddingProvider } from '../memory/embeddings.js';
+
+/**
+ * OpenAI Embedding Provider — uses text-embedding-3-small by default.
+ * Shared server-level resource (not per-agent). Cost: ~$0.02 / 1M tokens.
+ * Implements the EmbeddingProvider interface from embeddings.ts.
+ */
+export class OpenAIEmbeddingProvider implements EmbeddingProvider {
+  private client: OpenAI;
+  dimensions: number;
+
+  constructor(apiKey: string, private model = 'text-embedding-3-small', dims = 1536) {
+    this.client = new OpenAI({ apiKey });
+    this.dimensions = dims;
+  }
+
+  async embed(text: string): Promise<number[]> {
+    const response = await this.client.embeddings.create({
+      model: this.model,
+      input: text.slice(0, 8000), // safety truncate
+      dimensions: this.dimensions,
+    });
+    return response.data[0].embedding;
+  }
+
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+    // OpenAI supports up to 2048 inputs per batch
+    const truncated = texts.map(t => t.slice(0, 8000));
+    const response = await this.client.embeddings.create({
+      model: this.model,
+      input: truncated,
+      dimensions: this.dimensions,
+    });
+    return response.data
+      .sort((a, b) => a.index - b.index)
+      .map(d => d.embedding);
+  }
+}
 
 export class OpenAIProvider {
   private client: OpenAI;

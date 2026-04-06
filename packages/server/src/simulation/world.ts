@@ -1,4 +1,4 @@
-import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, VillageMemoryEntry, Weather, WorldObject, WorldSnapshot } from '@ai-village/shared';
+import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, VillageMemoryEntry, VillageNorm, Weather, WorldObject, WorldSnapshot } from '@ai-village/shared';
 import type { TradeProposal } from '@ai-village/ai-engine';
 import { RESOURCES, SKILLS, BUILDINGS } from '@ai-village/ai-engine';
 import { getAreas, getAreaAt as mapGetAreaAt } from '../map/map-provider.js';
@@ -34,6 +34,11 @@ export class World {
 
   // --- Village collective memory ---
   villageMemory: VillageMemoryEntry[] = [];
+
+  // --- Emergent norms (gap-analysis item 1.2) ---
+  // Aggregated from villageMemory ledger; refreshed nightly. Drives violation cost
+  // in reward calculation and soft bias in decision prompts.
+  villageNorms: Map<string, VillageNorm> = new Map();
 
   constructor() {
     this.time = {
@@ -223,6 +228,304 @@ export class World {
       .join('\n');
   }
 
+  /**
+   * Village health snapshot (gap-analysis P3): a compact metrics block for
+   * monitoring simulation health at a glance. Surfaces population survival,
+   * cooperation rate, and norm stability over a sliding window.
+   * Called from debug endpoints / nightly logs, NOT every tick.
+   */
+  getVillageHealth(windowDays: number = 3): {
+    population: { total: number; alive: number; dead: number };
+    avgHunger: number;
+    avgHealth: number;
+    avgEnergy: number;
+    cooperationScore: number;   // prosocial acts / (prosocial + antisocial), 0..1, null-safe
+    prosocialCount: number;
+    antisocialCount: number;
+    activeCommitments: number;
+    activeNorms: number;
+    trustComponents: number;         // number of disjoint trust-clusters (1 = fully connected village)
+    largestComponentShare: number;   // largest cluster size / alive, 0..1 (low = fragmented)
+    beliefDiversity: number;         // mean pairwise Jaccard distance across agent belief keyword sets, 0..1 (low = monoculture)
+    wealthGini: number;              // 0 = perfect equality, 1 = one agent owns everything
+  } {
+    const allAgents = Array.from(this.agents.values());
+    const living = allAgents.filter(a => a.alive !== false);
+    const total = allAgents.length;
+    const alive = living.length;
+    const dead = total - alive;
+
+    const avg = (xs: number[]) => xs.length ? xs.reduce((s, n) => s + n, 0) / xs.length : 0;
+    const avgHunger = Math.round(avg(living.map(a => a.vitals?.hunger ?? 0)));
+    const avgHealth = Math.round(avg(living.map(a => a.vitals?.health ?? 0)));
+    const avgEnergy = Math.round(avg(living.map(a => a.vitals?.energy ?? 0)));
+
+    const windowStart = this.time.day - windowDays;
+    const recent = this.villageMemory.filter(e => e.day >= windowStart);
+    const prosocialCount = recent.filter(e =>
+      e.type === 'prosocial' || (e.villageBenefit ?? 0) > 0
+    ).length;
+    const antisocialCount = recent.filter(e =>
+      e.type === 'defection' || e.type === 'betrayal' || e.type === 'broken_oath' || (e.villageBenefit ?? 0) < 0
+    ).length;
+    const totalActs = prosocialCount + antisocialCount;
+    const cooperationScore = totalActs === 0 ? 0 : prosocialCount / totalActs;
+
+    const activeCommitments = living.reduce(
+      (s, a) => s + (a.commitments?.filter(c => !c.fulfilled && !c.broken).length ?? 0),
+      0,
+    );
+
+    // --- Trust network connectivity (union-find over dossiers with trust >= 20) ---
+    // Fragmentation signal: too many small cliques = village has split into factions
+    // that don't cooperate. One big component = cohesive village.
+    const TRUST_EDGE_THRESHOLD = 20;
+    const idx = new Map<string, number>();
+    living.forEach((a, i) => idx.set(a.id, i));
+    const parent = living.map((_, i) => i);
+    const find = (x: number): number => {
+      while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+      return x;
+    };
+    const union = (a: number, b: number): void => {
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent[ra] = rb;
+    };
+    for (const a of living) {
+      const i = idx.get(a.id)!;
+      for (const d of a.dossiers ?? []) {
+        if ((d.trust ?? 0) < TRUST_EDGE_THRESHOLD) continue;
+        const j = idx.get(d.targetId);
+        if (j !== undefined) union(i, j);
+      }
+    }
+    const componentSizes = new Map<number, number>();
+    for (let i = 0; i < living.length; i++) {
+      const r = find(i);
+      componentSizes.set(r, (componentSizes.get(r) ?? 0) + 1);
+    }
+    const trustComponents = componentSizes.size;
+    const largestComponent = componentSizes.size === 0
+      ? 0
+      : Math.max(...componentSizes.values());
+    const largestComponentShare = alive === 0 ? 0 : largestComponent / alive;
+
+    // --- Belief diversity (mean pairwise Jaccard distance across keyword sets) ---
+    // Monoculture alarm: if every agent holds the same beliefs, the village has
+    // lost information diversity and can't self-correct via disagreement.
+    const TOP_N_BELIEFS = 5;
+    const STOPWORDS = new Set([
+      'the', 'a', 'an', 'is', 'are', 'was', 'were', 'and', 'or', 'but', 'to', 'of',
+      'in', 'on', 'at', 'for', 'with', 'by', 'from', 'as', 'that', 'this', 'it',
+      'i', 'me', 'my', 'you', 'your', 'we', 'us', 'our', 'they', 'them', 'their',
+      'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+      'should', 'would', 'could', 'can', 'may', 'might', 'must', 'not', 'no',
+    ]);
+    const keywordize = (text: string): Set<string> => {
+      const tokens = text.toLowerCase().match(/[a-z]{4,}/g) ?? [];
+      return new Set(tokens.filter(t => !STOPWORDS.has(t)));
+    };
+    const beliefSets: Set<string>[] = [];
+    for (const a of living) {
+      const top = (a.beliefs ?? [])
+        .slice(-TOP_N_BELIEFS)
+        .map(b => b.content)
+        .join(' ');
+      if (top) beliefSets.push(keywordize(top));
+    }
+    let beliefDiversity = 0;
+    if (beliefSets.length >= 2) {
+      let pairSum = 0;
+      let pairCount = 0;
+      for (let i = 0; i < beliefSets.length; i++) {
+        for (let j = i + 1; j < beliefSets.length; j++) {
+          const A = beliefSets[i];
+          const B = beliefSets[j];
+          if (A.size === 0 && B.size === 0) continue;
+          let inter = 0;
+          for (const t of A) if (B.has(t)) inter++;
+          const union = A.size + B.size - inter;
+          const jaccard = union === 0 ? 0 : inter / union;
+          pairSum += 1 - jaccard;  // distance, not similarity
+          pairCount++;
+        }
+      }
+      beliefDiversity = pairCount === 0 ? 0 : pairSum / pairCount;
+    }
+
+    // --- Gini coefficient over wealth (currency + inventory value) ---
+    // Inequality signal: catches hoarding, engine-captured economy, starvation gradients.
+    const wealth = living.map(a =>
+      (a.currency ?? 0) + (a.inventory?.reduce((s, it) => s + (it.value ?? 0), 0) ?? 0)
+    );
+    let wealthGini = 0;
+    if (wealth.length >= 2) {
+      const totalWealth = wealth.reduce((s, w) => s + w, 0);
+      if (totalWealth > 0) {
+        let absDiffSum = 0;
+        for (let i = 0; i < wealth.length; i++) {
+          for (let j = 0; j < wealth.length; j++) {
+            absDiffSum += Math.abs(wealth[i] - wealth[j]);
+          }
+        }
+        wealthGini = absDiffSum / (2 * wealth.length * totalWealth);
+      }
+    }
+
+    return {
+      population: { total, alive, dead },
+      avgHunger, avgHealth, avgEnergy,
+      cooperationScore: Math.round(cooperationScore * 100) / 100,
+      prosocialCount, antisocialCount,
+      activeCommitments,
+      activeNorms: this.villageNorms.size,
+      trustComponents,
+      largestComponentShare: Math.round(largestComponentShare * 100) / 100,
+      beliefDiversity: Math.round(beliefDiversity * 100) / 100,
+      wealthGini: Math.round(wealthGini * 100) / 100,
+    };
+  }
+
+  // --- Emergent norms aggregation (gap-analysis item 1.2) ---
+  // Walks villageMemory for the last N days, groups by actionType, and writes
+  // the result to `this.villageNorms`. Cheap: pure aggregation, no LLM calls.
+  //
+  // enforcementRate: fraction of entries that net-harmed the village
+  //   (type === 'defection'|'broken_oath'|'betrayal' AND villageBenefit < 0).
+  // severity: mean normalized |villageBenefit - personalCost|, clamped [0,1].
+  // acceptanceRate: 1 - enforcementRate. Low acceptance = strong taboo.
+  aggregateNorms(currentDay: number, windowDays: number = 7): void {
+    const windowStart = currentDay - windowDays;
+    const recent = this.villageMemory.filter(
+      e => e.day >= windowStart && e.actionType
+    );
+    if (recent.length === 0) {
+      this.villageNorms.clear();
+      return;
+    }
+
+    // Group by actionType
+    const groups = new Map<string, typeof recent>();
+    for (const entry of recent) {
+      const key = entry.actionType!;
+      const bucket = groups.get(key) ?? [];
+      bucket.push(entry);
+      groups.set(key, bucket);
+    }
+
+    const NEGATIVE_TYPES = new Set(['defection', 'broken_oath', 'betrayal']);
+    const next = new Map<string, VillageNorm>();
+    const now = Date.now();
+
+    for (const [actionType, entries] of groups) {
+      const observationCount = entries.length;
+      let enforcementActions = 0;
+      let severitySum = 0;
+      let severityCount = 0;
+
+      for (const e of entries) {
+        // Enforcement signal: negative-type entry that net-harmed the village.
+        const netHarm = NEGATIVE_TYPES.has(e.type) && (e.villageBenefit ?? 0) < 0;
+        if (netHarm) enforcementActions++;
+
+        // Severity: magnitude of the village impact + personal windfall gap.
+        if (typeof e.villageBenefit === 'number' && typeof e.personalCost === 'number') {
+          const sev = Math.min(1, Math.abs(e.villageBenefit - e.personalCost));
+          severitySum += sev;
+          severityCount++;
+        }
+      }
+
+      const enforcementRate = enforcementActions / observationCount;
+      const severity = severityCount > 0 ? severitySum / severityCount : 0.3;
+      next.set(actionType, {
+        actionType,
+        observationCount,
+        enforcementActions,
+        acceptanceRate: 1 - enforcementRate,
+        enforcementRate,
+        severity,
+        windowDays,
+        lastUpdated: now,
+      });
+    }
+
+    this.villageNorms = next;
+  }
+
+  getNorm(actionType: string): VillageNorm | undefined {
+    return this.villageNorms.get(actionType);
+  }
+
+  // Cost scalar in [-1, 0]. Returns 0 when there is no norm against the action.
+  // Scales with witness count (social exposure) + enforcementRate + severity.
+  computeViolationCost(actionType: string, witnessCount: number = 0): number {
+    const norm = this.villageNorms.get(actionType);
+    if (!norm) return 0;
+    // Only negative norms (high enforcement) create cost. Prosocial norms (low
+    // enforcement) do not punish; they're handled via positive reinforcement.
+    if (norm.enforcementRate < 0.2) return 0;
+    const exposure = Math.min(1, 0.25 + witnessCount * 0.15); // 1 witness → 0.4, 5+ → 1.0
+    const raw = norm.enforcementRate * norm.severity * exposure;
+    return -Math.min(1, raw);
+  }
+
+  // Structural impact on the village commons. Orthogonal to violation cost:
+  // violationCost penalizes breaking a norm, villageImpact measures the net
+  // effect on trust-graph connectivity + wealth circulation regardless of norm.
+  // Returns scalar in [-1, +1]. 0 means action is neutral for the commons.
+  // Succeed-only for directional (prosocial) actions; antisocial actions count
+  // even on attempt (the social damage lands whether or not the action "succeeds").
+  computeVillageImpact(actionType: string, success: boolean): number {
+    // Prosocial: form/strengthen trust-graph edges, circulate wealth.
+    // Only counted on success — a failed gift attempt doesn't build trust.
+    const prosocial: Record<string, number> = {
+      give: 0.40, gift: 0.40, help: 0.35, comfort: 0.30, ally: 0.35,
+      share_info: 0.20, join_group: 0.25, found_group: 0.35,
+      post_rule_proposal: 0.15, vote_rule: 0.10, trade: 0.15, trade_offer: 0.15,
+    };
+    // Antisocial: cut trust-graph edges / damage commons. Counted on attempt —
+    // the social damage of an attempted theft lands even if it failed.
+    const antisocial: Record<string, number> = {
+      steal: -0.40, fight: -0.50, attack: -0.55, threaten: -0.30,
+      confront: -0.20, betray: -0.50, leave_group: -0.15,
+    };
+    if (antisocial[actionType] !== undefined) return antisocial[actionType];
+    if (prosocial[actionType] !== undefined) return success ? prosocial[actionType] : 0;
+    return 0;
+  }
+
+  /**
+   * Difference rewards (Wolpert/Tumer COMA — gap-analysis item 2.1).
+   * Given per-agent contributions to a shared outcome, return each agent's
+   * marginal credit: D_i = contribution_i / Σ contributions × totalOutcome.
+   *
+   * For linear-additive outcomes this reduces to D_i = contribution_i (in the
+   * same units as totalOutcome). Prevents free-riding — zero-contribution
+   * agents get zero credit.
+   *
+   * @param contributions Map of agentId → their individual contribution (same units)
+   * @param totalOutcome  The summed outcome to distribute (optional; defaults to sum of contributions)
+   */
+  computeDifferenceRewards(
+    contributions: Map<string, number>,
+    totalOutcome?: number,
+  ): Map<string, number> {
+    const rewards = new Map<string, number>();
+    let total = 0;
+    for (const c of contributions.values()) total += Math.max(0, c);
+    if (total <= 0) {
+      for (const id of contributions.keys()) rewards.set(id, 0);
+      return rewards;
+    }
+    const outcome = totalOutcome ?? total;
+    for (const [agentId, contribution] of contributions) {
+      const share = Math.max(0, contribution) / total;
+      rewards.set(agentId, share * outcome);
+    }
+    return rewards;
+  }
+
   getActiveBoard(): BoardPost[] {
     return this.board.filter(p => !p.revoked);
   }
@@ -279,6 +582,7 @@ export class World {
       technologies: this.technologies,
       worldObjects: Array.from(this.worldObjects.values()),
       villageMemory: this.villageMemory,
+      villageNorms: Array.from(this.villageNorms.values()),
     };
   }
 

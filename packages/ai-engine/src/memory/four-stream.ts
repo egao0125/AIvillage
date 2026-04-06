@@ -1,4 +1,5 @@
-import type { Memory, Agent, AgentConfig, RelationshipDossier, ActiveConcern } from '@ai-village/shared';
+import type { Memory, Agent, AgentConfig, RelationshipDossier, ActiveConcern, LearnedStrategy, LearnedAversion, RewardVector, ProcessRubric } from '@ai-village/shared';
+import { computeScalarReward, strategyUtility } from '@ai-village/shared';
 import type { MemoryStore, LLMProvider } from '../index.js';
 import { KnowledgeGraph } from './knowledge-graph.js';
 import type { EdgeType } from './knowledge-graph.js';
@@ -35,12 +36,40 @@ export class FourStreamMemory {
   private beliefs: Memory[] = [];
 
   // Stream 5: Learned Strategies — experiential lessons from action outcomes
-  // Importance 9, never auto-pruned. Persist across days.
-  private learnedStrategies: Memory[] = [];
-  private static readonly MAX_STRATEGIES = 10;
+  // Utility-tracked: ranked by successRate × avgRewardDelta × recency. Evicted by lowest utility,
+  // not newest-wins. This fixes the "can't learn an 11th rule" ceiling in Stanford-style agents.
+  private learnedStrategies: LearnedStrategy[] = [];
+  private static readonly MAX_STRATEGIES = 16;
+
+  // UCB exploration counter (gap-analysis item 1.1): total action outcomes recorded
+  // for this agent. Drives the exploration term in strategyUtility.
+  private totalActionOutcomes = 0;
+
+  // Root-audit leverage item 3: pressure-triggered compression timestamp.
+  // Lets us skip the silent timeline.shift() in favor of running real compression
+  // when memory mass crosses a watermark, even mid-day. Prevents agents from
+  // losing important events to the 50-item ring buffer during long crises.
+  private lastCompressionAt: number = 0;
+
+  // Stream 6: Learned Aversions (gap-analysis item 1.2) — procedural memory
+  // from first-person experience. Soft bias on decisions, not hard veto.
+  // confidence: [-1, +1]. Negative = aversion, positive = preference.
+  private learnedAversions: LearnedAversion[] = [];
+  private static readonly MAX_AVERSIONS = 12;
+
+  // Reasoning-step trace (gap-analysis item 1.3): captures the most recent
+  // planning / perception output so we can score alignment at action-outcome time.
+  private lastPlanGoalTokens: Set<string> = new Set();
+  private lastThoughtTokens: Set<string> = new Set();
+  private planRecordedAt = 0;
+  private thoughtRecordedAt = 0;
 
   // Knowledge Graph — relationship/fact graph layer (Zep/Graphiti-inspired)
   public knowledgeGraph: KnowledgeGraph = new KnowledgeGraph();
+
+  // Bi-temporal context (gap-analysis item 3.1): current game day, updated by engine.
+  // Used to timestamp validFrom/validUntil on beliefs and KG edges.
+  private currentDay = 0;
 
   // Identity — immutable core
   private identity: Memory[] = [];
@@ -50,6 +79,15 @@ export class FourStreamMemory {
     private backingStore: MemoryStore,
     private agent: Agent,
   ) {}
+
+  /** Update the game-day clock (bi-temporal context, item 3.1) */
+  setCurrentDay(day: number): void {
+    this.currentDay = day;
+  }
+
+  getCurrentDay(): number {
+    return this.currentDay;
+  }
 
   // --- INITIALIZATION ---
 
@@ -94,23 +132,159 @@ export class FourStreamMemory {
       this.concerns = [...this.agent.activeConcerns];
     }
     if (this.agent.learnedStrategies) {
-      this.learnedStrategies = this.agent.learnedStrategies.map((s, i) => ({
-        id: `strategy-${i}`,
-        agentId: this.agentId,
-        type: 'reflection' as const,
-        content: s.content,
-        importance: 9,
-        timestamp: s.timestamp,
-        relatedAgentIds: [],
-        isCore: true,
-      }));
+      // Backfill legacy shape {content, timestamp} into full LearnedStrategy form.
+      this.learnedStrategies = this.agent.learnedStrategies.map((s: LearnedStrategy | { content: string; timestamp: number }) => {
+        const asLS = s as LearnedStrategy;
+        if (typeof asLS.timesUsed === 'number') return asLS; // already new shape
+        // Legacy migration: seed with neutral utility so it doesn't get evicted immediately.
+        const legacy = s as { content: string; timestamp: number };
+        return {
+          content: legacy.content,
+          createdDay: 0,
+          lastAccessedDay: 0,
+          timesUsed: 0,
+          timesSuccessful: 0,
+          avgRewardDelta: 0,
+        };
+      });
+    }
+    // UCB counter restoration (gap-analysis item 1.1). Defaults to 0 for new/legacy agents.
+    this.totalActionOutcomes = this.agent.totalActionOutcomes ?? 0;
+    // Learned aversions restoration (gap-analysis item 1.2).
+    if (this.agent.learnedAversions) {
+      this.learnedAversions = this.agent.learnedAversions.map(a => ({ ...a }));
     }
   }
 
   // --- STREAM 1: TIMELINE ---
 
+  /**
+   * Extract 2-5 content keywords for emergent clustering (gap-analysis item 9).
+   * Cheap, deterministic, no LLM. Replaces hard-coded theme bins.
+   * Strategy: lowercase split, drop stopwords, keep distinctive tokens.
+   */
+  private extractKeywords(content: string, relatedAgentIds?: string[]): string[] {
+    const STOP = new Set([
+      'about', 'after', 'again', 'asked', 'before', 'being', 'could', 'doing',
+      'every', 'going', 'having', 'their', 'there', 'these', 'think', 'thought',
+      'today', 'would', 'should', 'because', 'while', 'through', 'other', 'which',
+      'someone', 'something', 'nothing', 'anyone', 'everyone',
+    ]);
+    const tokens = content
+      .toLowerCase()
+      .split(/\W+/)
+      .filter(t => t.length > 3 && !STOP.has(t));
+    // Deduplicate preserving order, take up to 5
+    const seen = new Set<string>();
+    const keywords: string[] = [];
+    for (const t of tokens) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      keywords.push(t);
+      if (keywords.length >= 5) break;
+    }
+    // Also include related agent IDs short-form as keyword anchors
+    if (relatedAgentIds?.length && keywords.length < 5) {
+      for (const id of relatedAgentIds.slice(0, 5 - keywords.length)) {
+        keywords.push(`agent:${id.slice(0, 8)}`);
+      }
+    }
+    return keywords;
+  }
+
+  /**
+   * Tokenize a string for process-reward overlap scoring (gap-analysis item 1.3).
+   * Same stopword/length filter as extractKeywords but returns a Set for O(1) lookup.
+   */
+  private tokenizeForOverlap(text: string): Set<string> {
+    const STOP = new Set([
+      'about', 'after', 'again', 'before', 'being', 'could', 'doing',
+      'every', 'going', 'having', 'their', 'there', 'these', 'today',
+      'would', 'should', 'because', 'while', 'through', 'other', 'which',
+      'someone', 'something', 'nothing', 'anyone', 'everyone',
+    ]);
+    const out = new Set<string>();
+    for (const t of text.toLowerCase().split(/\W+/)) {
+      if (t.length > 3 && !STOP.has(t)) out.add(t);
+    }
+    return out;
+  }
+
+  /**
+   * Capture the latest plan output for process-reward scoring (gap-analysis item 1.3).
+   * Called from cognition.plan() right after the LLM returns. Keeps a token-set of
+   * all goals so we can score "did what the agent actually did match what it planned?"
+   */
+  recordPlanTrace(goals: string[]): void {
+    this.lastPlanGoalTokens = this.tokenizeForOverlap(goals.join(' '));
+    this.planRecordedAt = Date.now();
+  }
+
+  /**
+   * Capture the latest thought output for process-reward scoring (gap-analysis item 1.3).
+   * Called from cognition.think() right after the LLM returns.
+   */
+  recordThoughtTrace(thought: string): void {
+    this.lastThoughtTokens = this.tokenizeForOverlap(thought);
+    this.thoughtRecordedAt = Date.now();
+  }
+
+  /**
+   * Score a just-completed action against the most recent plan + thought traces.
+   * Cheap heuristic (token overlap) — no LLM calls. Traces older than 10 minutes
+   * are treated as stale (scores neutral).
+   * Gap-analysis item 1.3: process rewards on reasoning steps.
+   */
+  private computeProcessRubric(outcomeMemory: Memory): ProcessRubric {
+    const now = Date.now();
+    const STALE_MS = 10 * 60 * 1000;
+
+    // Build outcome token set: content + actionType
+    const outcomeText = [outcomeMemory.content, outcomeMemory.actionType ?? ''].join(' ');
+    const outcomeTokens = this.tokenizeForOverlap(outcomeText);
+
+    // Plan alignment: ratio of outcome tokens also in plan-goal tokens.
+    let planAlignment = 0;
+    if (now - this.planRecordedAt < STALE_MS && this.lastPlanGoalTokens.size > 0 && outcomeTokens.size > 0) {
+      let overlap = 0;
+      for (const t of outcomeTokens) if (this.lastPlanGoalTokens.has(t)) overlap++;
+      const ratio = overlap / outcomeTokens.size;
+      // Map [0, 1] ratio to [-0.5, +1] — 0 overlap with existing plan = mild penalty (drift).
+      planAlignment = ratio > 0 ? Math.min(1, ratio * 2) : -0.5;
+    }
+
+    // Thought relevance: ratio of outcome tokens also present in last thought.
+    let thoughtRelevance = 0;
+    if (now - this.thoughtRecordedAt < STALE_MS && this.lastThoughtTokens.size > 0 && outcomeTokens.size > 0) {
+      let overlap = 0;
+      for (const t of outcomeTokens) if (this.lastThoughtTokens.has(t)) overlap++;
+      const ratio = overlap / outcomeTokens.size;
+      thoughtRelevance = ratio > 0 ? Math.min(1, ratio * 2) : 0; // no penalty — thought can be broader than action
+    }
+
+    return { planAlignment, thoughtRelevance };
+  }
+
+  /**
+   * Update the agent's running EMA of reasoning quality (gap-analysis item 1.3).
+   * α = 0.1 — slow adaptation so a single noisy outcome doesn't swing the signal.
+   */
+  private updateReasoningScoreEMA(rubric: ProcessRubric): void {
+    const alpha = 0.1;
+    const prev = this.agent.reasoningScore ?? { planAlignment: 0, thoughtRelevance: 0 };
+    this.agent.reasoningScore = {
+      planAlignment: prev.planAlignment * (1 - alpha) + rubric.planAlignment * alpha,
+      thoughtRelevance: prev.thoughtRelevance * (1 - alpha) + rubric.thoughtRelevance * alpha,
+    };
+  }
+
   /** Add an event to the narrative timeline */
   async addEvent(memory: Memory): Promise<void> {
+    // Gap-analysis item 9: tag with keywords at ingest for emergent clustering.
+    if (!memory.keywords) {
+      memory.keywords = this.extractKeywords(memory.content, memory.relatedAgentIds);
+    }
+
     // Store in backing store for persistence
     await this.backingStore.add(memory);
 
@@ -135,6 +309,58 @@ export class FourStreamMemory {
         this.timeline.shift();
       }
     }
+
+    // UCB counter (gap-analysis item 1.1): count every action the agent actually took.
+    // Not filtered by isDuplicate — we want total action pulls, including repeats.
+    if (memory.type === 'action_outcome') {
+      this.totalActionOutcomes++;
+      // Process rubric (gap-analysis item 1.3): score the reasoning chain that led
+      // here against the actual outcome tokens. Attach to memory + EMA onto agent.
+      if (!memory.processRubric) {
+        memory.processRubric = this.computeProcessRubric(memory);
+        this.updateReasoningScoreEMA(memory.processRubric);
+      }
+      // Learned aversion update (gap-analysis item 1.2): first-person reinforcement.
+      // Scalar-reduce the rubric; positive → preference, negative → aversion.
+      // Social axis carries the village norm violation cost, so it dominates here.
+      if (memory.actionType && memory.actionType !== 'unknown' && memory.actionRubric) {
+        const weights = this.agent.rewardWeights;
+        const scalar = computeScalarReward(memory.actionRubric, weights);
+        // Saturate into [-1,+1] then dampen so single events don't dominate.
+        const delta = Math.max(-1, Math.min(1, scalar)) * 0.6;
+        // Basis: 'punished' when net-negative from social axis specifically
+        // (the norm slapped back), otherwise 'rewarded' for gains, 'victim' if hp loss dominant.
+        const social = memory.actionRubric.social ?? 0;
+        const hp = memory.actionRubric.hp ?? 0;
+        let basis: LearnedAversion['basis'];
+        if (social < -0.1) basis = 'punished';
+        else if (hp < -0.2) basis = 'victim';
+        else basis = scalar >= 0 ? 'rewarded' : 'punished';
+        this.updateLearnedAversion(memory.actionType, delta, basis);
+      }
+    }
+  }
+
+  /**
+   * Cluster timeline events by keyword co-occurrence (gap-analysis item 9).
+   * Replaces hard-coded {social, economic, survival, political} themes.
+   * Categories emerge from content — "grain" appearing in 5/6 events surfaces
+   * a grain-centric causal narrative instead of fragmenting into 3 bins.
+   */
+  getKeywordClusters(minClusterSize: number = 2): { keyword: string; memories: Memory[] }[] {
+    const keywordMap = new Map<string, Memory[]>();
+    for (const m of this.timeline) {
+      if (!m.keywords) continue;
+      for (const k of m.keywords) {
+        const bucket = keywordMap.get(k) ?? [];
+        bucket.push(m);
+        keywordMap.set(k, bucket);
+      }
+    }
+    return Array.from(keywordMap.entries())
+      .filter(([, mems]) => mems.length >= minClusterSize)
+      .map(([keyword, memories]) => ({ keyword, memories }))
+      .sort((a, b) => b.memories.length - a.memories.length);
   }
 
   /** Get the last N events for working memory */
@@ -300,23 +526,24 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
   /** Sync knowledge graph edges from a dossier update */
   private updateGraphFromDossier(dossier: RelationshipDossier): void {
     const now = Date.now();
+    const day = this.currentDay;
     // Ensure nodes exist
     this.knowledgeGraph.addNode({ id: this.agentId, type: 'agent', name: this.agent.config.name });
     this.knowledgeGraph.addNode({ id: dossier.targetId, type: 'agent', name: dossier.targetName });
 
-    // Trust/distrust edges
+    // Trust/distrust edges — bi-temporal: soft-delete on flip preserves history
     if (dossier.trust > 20) {
       this.knowledgeGraph.addEdge({
         from: this.agentId, to: dossier.targetId, type: 'trusts',
-        weight: dossier.trust, timestamp: now, day: 0,
+        weight: dossier.trust, timestamp: now, day, validFrom: day,
       });
-      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'distrusts');
+      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'distrusts', day);
     } else if (dossier.trust < -20) {
       this.knowledgeGraph.addEdge({
         from: this.agentId, to: dossier.targetId, type: 'distrusts',
-        weight: Math.abs(dossier.trust), timestamp: now, day: 0,
+        weight: Math.abs(dossier.trust), timestamp: now, day, validFrom: day,
       });
-      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'trusts');
+      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'trusts', day);
     }
 
     // Commitment edges
@@ -325,10 +552,10 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
         from: this.agentId, to: dossier.targetId, type: 'owes',
         weight: dossier.activeCommitments.length * 20,
         content: dossier.activeCommitments[0],
-        timestamp: now, day: 0,
+        timestamp: now, day, validFrom: day,
       });
     } else {
-      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'owes');
+      this.knowledgeGraph.removeEdge(this.agentId, dossier.targetId, 'owes', day);
     }
   }
 
@@ -341,6 +568,57 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
       from, to, type, weight,
       content, timestamp: Date.now(), day,
     });
+  }
+
+  /**
+   * Observation-based dossier update (witness, no LLM call).
+   * Called when this agent witnesses `actorId` doing something prosocial/defective.
+   * Applies a trust delta at reduced confidence (~0.3x) and appends a witness note
+   * to the dossier summary. Does NOT trigger knowledge-graph updates or concerns.
+   */
+  updateDossierFromObservation(
+    actorId: string,
+    actorName: string,
+    observation: string,
+    villageBenefit: number, // [-1, 1]
+    day: number = 0,
+  ): void {
+    if (actorId === this.agentId) return; // don't update dossier on self
+
+    // Witness confidence = 0.3x of first-person weight.
+    // First-person social actions typically move trust by ~villageBenefit × 30.
+    // So witness delta is villageBenefit × 30 × 0.3 = villageBenefit × 9, capped ±9.
+    const trustDelta = Math.max(-9, Math.min(9, villageBenefit * 9));
+    if (Math.abs(trustDelta) < 0.5) return; // ignore negligible updates
+
+    const existing = this.dossiers.get(actorId);
+    const now = Date.now();
+    const noteTrimmed = observation.length > 80 ? observation.slice(0, 77) + '...' : observation;
+    const witnessNote = `[witnessed day ${day}] ${noteTrimmed}`;
+
+    if (existing) {
+      existing.trust = Math.max(-100, Math.min(100, existing.trust + trustDelta));
+      // Append witness note to summary (bounded: keep last 2 witness notes inline)
+      const lines = existing.summary.split('\n').filter(l => l.trim());
+      const nonWitnessLines = lines.filter(l => !l.startsWith('[witnessed'));
+      const witnessLines = lines.filter(l => l.startsWith('[witnessed')).slice(-1); // keep latest 1
+      existing.summary = [...nonWitnessLines, ...witnessLines, witnessNote].join('\n');
+      existing.lastUpdated = now;
+    } else {
+      // Create minimal dossier from observation alone (no self-interaction history yet)
+      this.dossiers.set(actorId, {
+        agentId: this.agentId,
+        targetId: actorId,
+        targetName: actorName,
+        summary: `I don't know ${actorName} personally.\n${witnessNote}`,
+        trust: trustDelta,
+        activeCommitments: [],
+        lastInteraction: 0, // never directly interacted
+        lastUpdated: now,
+      });
+      this.evictOldestDossierIfNeeded();
+    }
+    this.syncDossiersToAgent();
   }
 
   /** Adjust trust for a specific person (from social actions) */
@@ -441,54 +719,197 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
   // --- STREAM 4: BELIEFS ---
 
   addBelief(belief: Memory): void {
-    // Deduplicate by exact content — prevents belief spam from repeated LLM calls
-    const existing = this.beliefs.find(b =>
-      b.content.toLowerCase() === belief.content.toLowerCase()
+    // Deduplicate by exact content — prevents belief spam from repeated LLM calls.
+    // Only dedupe against ACTIVE beliefs; historical beliefs are preserved as lineage.
+    const existingByContent = this.beliefs.find(b =>
+      b.content.toLowerCase() === belief.content.toLowerCase() && b.validUntil === undefined
     );
-    if (existing) return;
+    if (existingByContent) return;
+
+    // Structured contradiction detection (gap-analysis item 4.3):
+    // If this belief has (subject, predicate), auto-invalidate any active belief
+    // with the same (subject, predicate) but a different value.
+    if (belief.subject && belief.predicate) {
+      for (const b of this.beliefs) {
+        if (
+          b.validUntil === undefined &&
+          b.subject === belief.subject &&
+          b.predicate === belief.predicate &&
+          b.value !== belief.value
+        ) {
+          b.validUntil = this.currentDay;
+          b.supersededBy = belief.id;
+        }
+      }
+    }
+
+    // Bi-temporal (gap-analysis item 3.1): default validFrom to the current game day.
+    // Caller may override for beliefs about past events.
+    if (belief.validFrom === undefined) {
+      belief.validFrom = this.currentDay;
+    }
 
     this.beliefs.push(belief);
     void this.backingStore.add(belief).catch((err: unknown) => {
       console.warn(`[FourStream] Failed to persist belief ${belief.id} for agent ${this.agent.id}:`, (err as Error).message);
     });
     if (this.beliefs.length > 20) {
-      this.beliefs.sort((a, b) => b.importance - a.importance);
+      // Prefer to evict historical (invalidated) beliefs first, then low-importance.
+      this.beliefs.sort((a, b) => {
+        const ah = a.validUntil !== undefined ? 1 : 0;
+        const bh = b.validUntil !== undefined ? 1 : 0;
+        if (ah !== bh) return ah - bh;
+        return b.importance - a.importance;
+      });
       this.beliefs = this.beliefs.slice(0, 20);
     }
   }
 
-  getBeliefsAbout(targetIds: string[]): Memory[] {
+  /**
+   * Mark a belief as no longer true in the world (bi-temporal invalidation).
+   * Used when new evidence contradicts an existing belief. Preserves the belief
+   * as "historical" lineage so agents can reason about how their understanding changed.
+   */
+  invalidateBelief(beliefId: string, day: number, supersededById?: string): void {
+    const b = this.beliefs.find(b => b.id === beliefId);
+    if (b && b.validUntil === undefined) {
+      b.validUntil = day;
+      if (supersededById) b.supersededBy = supersededById;
+    }
+  }
+
+  getBeliefsAbout(targetIds: string[], includeHistorical: boolean = false): Memory[] {
     return this.beliefs.filter(b =>
-      b.relatedAgentIds?.some(id => targetIds.includes(id))
+      (b.relatedAgentIds?.some(id => targetIds.includes(id)) || (b.subject !== undefined && targetIds.includes(b.subject))) &&
+      (includeHistorical || b.validUntil === undefined)
     );
   }
 
-  getTopBeliefs(n: number = 3): Memory[] {
-    return [...this.beliefs]
+  /**
+   * Structured belief query (gap-analysis item 4.3).
+   * Find active beliefs matching subject (and optionally predicate).
+   */
+  getStructuredBeliefs(subject: string, predicate?: string, includeHistorical: boolean = false): Memory[] {
+    return this.beliefs.filter(b =>
+      b.subject === subject &&
+      (!predicate || b.predicate === predicate) &&
+      (includeHistorical || b.validUntil === undefined)
+    );
+  }
+
+  getTopBeliefs(n: number = 3, includeHistorical: boolean = false): Memory[] {
+    return this.beliefs
+      .filter(b => includeHistorical || b.validUntil === undefined)
       .sort((a, b) => b.importance - a.importance)
       .slice(0, n);
   }
 
-  getBeliefs(): Memory[] {
-    return [...this.beliefs];
+  getBeliefs(includeHistorical: boolean = false): Memory[] {
+    return includeHistorical
+      ? [...this.beliefs]
+      : this.beliefs.filter(b => b.validUntil === undefined);
   }
 
   syncBeliefsToAgent(): void {
     this.agent.beliefs = this.beliefs.map(b => ({
       content: b.content,
       timestamp: b.timestamp,
+      validFrom: b.validFrom,
+      validUntil: b.validUntil,
     }));
   }
 
   private syncStrategiesToAgent(): void {
-    this.agent.learnedStrategies = this.learnedStrategies.map(s => ({
-      content: s.content,
-      timestamp: s.timestamp,
-    }));
+    // LearnedStrategy shape matches Agent field directly — persist with full utility metadata.
+    this.agent.learnedStrategies = this.learnedStrategies.map(s => ({ ...s }));
+    // UCB counter persists with strategies (gap-analysis item 1.1).
+    this.agent.totalActionOutcomes = this.totalActionOutcomes;
   }
 
-  getLearnedStrategies(): Memory[] {
+  getLearnedStrategies(): LearnedStrategy[] {
     return [...this.learnedStrategies];
+  }
+
+  // --- Stream 6: LEARNED AVERSIONS (gap-analysis item 1.2) ---
+  //
+  // Per-agent procedural memory. First-person updates only — no broadcast,
+  // no shared state. confidence ∈ [-1, +1] with EMA-like update.
+  //
+  // basis precedence: 'punished' / 'victim' carry more weight than 'witnessed'
+  // because direct experience is more informative than observation.
+
+  updateLearnedAversion(
+    actionType: string,
+    delta: number,
+    basis: LearnedAversion['basis']
+  ): void {
+    if (!actionType || actionType === 'unknown') return;
+    // Basis scaling: direct experience hits harder than observation.
+    const BASIS_WEIGHT: Record<LearnedAversion['basis'], number> = {
+      victim: 1.0,
+      punished: 1.0,
+      rewarded: 0.8,
+      witnessed: 0.4,
+    };
+    const scaledDelta = delta * BASIS_WEIGHT[basis];
+    const existing = this.learnedAversions.find(a => a.actionType === actionType);
+    if (existing) {
+      // EMA with α that decays as evidence accumulates (softer updates later).
+      const alpha = Math.max(0.1, 0.4 / (1 + existing.evidenceCount * 0.1));
+      existing.confidence = Math.max(-1, Math.min(1,
+        existing.confidence * (1 - alpha) + scaledDelta * alpha
+      ));
+      existing.evidenceCount++;
+      existing.lastUpdated = Date.now();
+      // Promote basis toward strongest observed (victim/punished dominate).
+      if (BASIS_WEIGHT[basis] > BASIS_WEIGHT[existing.basis]) {
+        existing.basis = basis;
+      }
+    } else {
+      this.learnedAversions.push({
+        actionType,
+        confidence: Math.max(-1, Math.min(1, scaledDelta * 0.5)),
+        basis,
+        evidenceCount: 1,
+        lastUpdated: Date.now(),
+      });
+    }
+    // Cap storage — evict lowest-magnitude entries when full.
+    if (this.learnedAversions.length > FourStreamMemory.MAX_AVERSIONS) {
+      this.learnedAversions.sort((a, b) => Math.abs(b.confidence) - Math.abs(a.confidence));
+      this.learnedAversions = this.learnedAversions.slice(0, FourStreamMemory.MAX_AVERSIONS);
+    }
+  }
+
+  getAversion(actionType: string): LearnedAversion | undefined {
+    return this.learnedAversions.find(a => a.actionType === actionType);
+  }
+
+  private syncAversionsToAgent(): void {
+    this.agent.learnedAversions = this.learnedAversions.map(a => ({ ...a }));
+  }
+
+  /**
+   * Build a short prompt hint describing strongly-held aversions/preferences.
+   * Weighted by Agent.normWeight: stoic loners (0) get nothing, conformists
+   * (1) get the full hint. Returns empty string if no strong signals.
+   */
+  buildAversionsHint(): string {
+    const weight = this.agent.normWeight ?? 0.5;
+    if (weight < 0.1 || this.learnedAversions.length === 0) return '';
+    // Only surface entries with meaningful confidence + evidence.
+    const strong = this.learnedAversions.filter(
+      a => Math.abs(a.confidence) > 0.25 && a.evidenceCount >= 2
+    );
+    if (strong.length === 0) return '';
+    strong.sort((a, b) => Math.abs(b.confidence) - Math.abs(a.confidence));
+    const items = strong.slice(0, 5).map(a => {
+      const verb = a.confidence < 0 ? 'avoid' : 'prefer';
+      const mag = Math.abs(a.confidence).toFixed(2);
+      return `${verb} ${a.actionType} (${mag}, ${a.basis})`;
+    });
+    const prefix = weight > 0.7 ? 'Strong habits' : 'Lean toward';
+    return `${prefix}: ${items.join(', ')}.`;
   }
 
   /** Sync all in-memory streams back to the Agent object for snapshot/persistence */
@@ -497,6 +918,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     this.syncConcernsToAgent();
     this.syncBeliefsToAgent();
     this.syncStrategiesToAgent();
+    this.syncAversionsToAgent();
   }
 
   // --- RETRIEVAL SCORING (Memoria's recency-aware weighting) ---
@@ -512,46 +934,181 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     importanceWeight: number;   // how much importance matters (0-1)
     recencyDecay: number;       // decay rate per hour (0.99 = slow decay, 0.95 = fast decay)
     concernDecay: number;       // concern decay rate
+    rewardBiasWeight: number;   // how much past-rubric scalar shapes retrieval (0..0.3)
     budgets: { concerns: number; dossiers: number; beliefs: number; timeline: number; strategies: number };
   }> = {
     plan: {
       importanceWeight: 0.8,
       recencyDecay: 0.995,     // Slow decay — old important events still relevant for planning
       concernDecay: 0.998,
+      rewardBiasWeight: 0.25,  // planning benefits most from what's worked before
       budgets: { concerns: 300, dossiers: 250, beliefs: 250, timeline: 200, strategies: 200 },
     },
     conversation: {
       importanceWeight: 0.4,
       recencyDecay: 0.97,      // Fast decay — recent events dominate conversation
       concernDecay: 0.99,
-      budgets: { concerns: 200, dossiers: 400, beliefs: 150, timeline: 300, strategies: 100 },
+      rewardBiasWeight: 0.10,  // chatter cares less about outcome scoring
+      // Rebalanced: dossiers no longer 2.67× beliefs. Agents in conversation
+      // should still call on principles, not just relationship data. (Part III A3)
+      budgets: { concerns: 200, dossiers: 300, beliefs: 250, timeline: 300, strategies: 100 },
     },
     reflect: {
       importanceWeight: 0.6,
       recencyDecay: 0.99,      // Balanced
       concernDecay: 0.995,
-      budgets: { concerns: 250, dossiers: 350, beliefs: 300, timeline: 250, strategies: 150 },
+      rewardBiasWeight: 0.20,  // reflection needs both wins and losses in view
+      budgets: { concerns: 250, dossiers: 300, beliefs: 300, timeline: 250, strategies: 150 },
     },
     default: {
       importanceWeight: 0.6,
       recencyDecay: 0.99,
       concernDecay: 0.995,
-      budgets: { concerns: 250, dossiers: 350, beliefs: 200, timeline: 250, strategies: 150 },
+      rewardBiasWeight: 0.15,
+      // Rebalanced: dossiers no longer 1.75× beliefs. 1:1 ratio (Part III A3).
+      budgets: { concerns: 250, dossiers: 300, beliefs: 300, timeline: 250, strategies: 150 },
     },
   };
+
+  /**
+   * H4: resolve which importance axis to use for a given retrieval profile.
+   * Plan retrievals lean strategic; conversation leans social; reflect balances
+   * narrative + strategic. Falls back to the scalar when vector is absent.
+   */
+  static selectImportanceAxis(m: Memory, profile: string): number {
+    if (!m.importanceVec) return m.importance;
+    const v = m.importanceVec;
+    switch (profile) {
+      case 'plan':
+        return 0.6 * v.strategic + 0.2 * v.survival + 0.2 * v.narrative;
+      case 'conversation':
+        return 0.6 * v.social + 0.2 * v.narrative + 0.2 * v.strategic;
+      case 'reflect':
+        return 0.4 * v.narrative + 0.3 * v.strategic + 0.2 * v.social + 0.1 * v.survival;
+      default:
+        // Balanced: average across axes with a slight narrative tilt
+        return 0.25 * (v.survival + v.social + v.strategic + v.narrative) + 0.1 * v.narrative;
+    }
+  }
+
+  /**
+   * Adaptive cutoff (gap-analysis H1/H2): walk the sorted scores and cut when
+   * the score drops below `ratio × topScore`. Returns the count of items to keep.
+   * Guarantees at least `minKeep` items so agents always have context even when
+   * scores are low/uniform. Max = scores.length (no artificial upper cap).
+   *
+   * Example: scores [0.9, 0.85, 0.4, 0.38], ratio=0.5, minKeep=2 → cut=2 (0.4 < 0.45).
+   */
+  static adaptiveCutoff(scores: number[], minKeep: number, ratio: number): number {
+    if (scores.length <= minKeep) return scores.length;
+    const top = scores[0];
+    if (top <= 0) return Math.min(minKeep, scores.length);
+    const threshold = top * ratio;
+    let cut = minKeep;
+    for (let i = minKeep; i < scores.length; i++) {
+      if (scores[i] >= threshold) cut = i + 1;
+      else break;
+    }
+    return cut;
+  }
 
   /**
    * Score memory for retrieval priority.
    * Based on Memoria (2025): recency-aware weighting with exponential decay.
    * Adaptive: importance vs recency balance shifts based on retrieval context.
+   * Gap-analysis item 5: factor in access recency — frequently-retrieved memories score higher.
+   * Gap-analysis H3: context-sensitive scoring — memories that match the current
+   * trigger or involve nearby agents get a relevance bonus [0, 0.25].
    */
-  private scoreMemory(m: Memory, now: number, profile?: string): number {
+  private scoreMemory(
+    m: Memory,
+    now: number,
+    profile?: string,
+    queryContext?: { triggerWords?: Set<string>; nearbyIds?: Set<string> },
+  ): number {
     const p = FourStreamMemory.RETRIEVAL_PROFILES[profile ?? 'default'];
     const hoursOld = Math.max(0, (now - m.timestamp) / 3_600_000);
     const decay = Math.pow(p.recencyDecay, hoursOld);
-    const importanceScore = m.importance / 10;
-    // Blend: importance-weighted vs recency-weighted based on profile
-    return (importanceScore * p.importanceWeight + decay * (1 - p.importanceWeight));
+    // H4: when the memory has a multi-axis importance vector, pick the axis
+    // aligned with the retrieval profile. Falls back to the scalar when absent.
+    const axisImportance = FourStreamMemory.selectImportanceAxis(m, profile ?? 'default');
+    const importanceScore = axisImportance / 10;
+    // Access-recency bonus: memory read in last 24h gets a score boost.
+    // H5 fix: raised cap from 0.15 → 0.30 and added access-count ramp so
+    // frequently-used memories actually dominate retrieval. Habit formation
+    // requires high-use memories to become stickier, not just slightly preferred.
+    const accessCountBoost = Math.min(0.15, (m.accessCount ?? 0) * 0.02);
+    const accessBonus = m.lastAccessedAt
+      ? Math.min(0.30, 0.15 * Math.exp(-(now - m.lastAccessedAt) / (24 * 3_600_000)) + accessCountBoost)
+      : 0;
+    // Context bonus (H3): lexical overlap with trigger + nearby-agent involvement.
+    let contextBonus = 0;
+    if (queryContext) {
+      if (queryContext.triggerWords && queryContext.triggerWords.size > 0) {
+        const contentLower = m.content.toLowerCase();
+        let hits = 0;
+        for (const w of queryContext.triggerWords) {
+          if (contentLower.includes(w)) hits++;
+        }
+        // Normalize: each hit worth up to +0.05, cap at +0.15
+        contextBonus += Math.min(0.15, hits * 0.05);
+      }
+      if (queryContext.nearbyIds && queryContext.nearbyIds.size > 0) {
+        // Memories involving present agents are more actionable
+        const related = m.relatedAgentIds ?? [];
+        if (related.some(id => queryContext.nearbyIds!.has(id))) {
+          contextBonus += 0.10;
+        }
+      }
+    }
+    // Reward-bias (root-audit leverage item 1): for action_outcome memories,
+    // the stored rubric is a scalar-reducible reward signal. Memories that
+    // produced strong positive outcomes float to the top for this agent;
+    // strong failures sink. This closes the loop rubric → retrieval without
+    // any training infra — it's a per-agent bandit over experience.
+    let rewardBias = 0;
+    if (m.actionRubric && p.rewardBiasWeight > 0) {
+      const scalar = computeScalarReward(m.actionRubric, this.agent.rewardWeights);
+      // clamp to [-1, +1] so rubric outliers can't dominate the score
+      const clamped = Math.max(-1, Math.min(1, scalar));
+      rewardBias = clamped * p.rewardBiasWeight;
+    }
+    return (importanceScore * p.importanceWeight + decay * (1 - p.importanceWeight)) + accessBonus + contextBonus + rewardBias;
+  }
+
+  /**
+   * Mark a memory as accessed. Bumps importance (with cap) and updates lastAccessedAt.
+   * Call this when a memory is actually surfaced into working memory or a prompt.
+   * Gap-analysis item 5: "importance ≥ 8 never pruned" becomes earned, not granted.
+   */
+  private markAccessed(m: Memory, now: number): void {
+    m.lastAccessedAt = now;
+    m.accessCount = (m.accessCount ?? 0) + 1;
+    // Boost importance by +0.1, capped at 10. Accumulates slowly so a genuinely
+    // useful memory drifts upward over many retrievals, not one-shot.
+    m.importance = Math.min(10, m.importance + 0.1);
+  }
+
+  /**
+   * Daily importance decay: memories not accessed in the last 24h lose 0.05 importance.
+   * Core memories (isCore) are exempt — identity never decays.
+   * Gap-analysis item 5: without decay, one-shot imp-8 beliefs live forever even if invalidated.
+   */
+  private decayUnusedMemories(now: number): void {
+    const dayMs = 24 * 3_600_000;
+    const targets: Memory[] = [...this.timeline, ...this.beliefs, ...this.identity];
+    let decayed = 0;
+    for (const m of targets) {
+      if (m.isCore) continue;
+      const lastAccess = m.lastAccessedAt ?? m.timestamp;
+      if (now - lastAccess > dayMs) {
+        m.importance = Math.max(1, m.importance - 0.05);
+        decayed++;
+      }
+    }
+    if (decayed > 0) {
+      console.log(`[Decay] ${this.agent.config.name}: decayed importance on ${decayed} unused memories`);
+    }
   }
 
   /**
@@ -583,6 +1140,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     agentLocations?: Map<string, string>,
     reputations?: Map<string, number>,
     retrievalContext?: 'plan' | 'conversation' | 'reflect' | 'default',
+    triggerQuery?: string,
   ): {
     concerns: string;
     dossiers: string;
@@ -590,11 +1148,33 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     timeline: string;
     identityAnchor: string;
     learnedStrategies: string;
+    aversionsHint: string;
+    socialGraph: string;
   } {
     const now = Date.now();
     const nearbySet = new Set(nearbyAgentIds ?? []);
     const profile = retrievalContext ?? 'default';
     const budgets = FourStreamMemory.RETRIEVAL_PROFILES[profile].budgets;
+
+    // H3 context-sensitive scoring: tokenize trigger into meaningful query words.
+    // Drop stopwords + tokens <3 chars. Only computed once per retrieval.
+    let queryContext: { triggerWords?: Set<string>; nearbyIds?: Set<string> } | undefined;
+    if (triggerQuery || nearbyAgentIds?.length) {
+      const STOPWORDS = new Set([
+        'the', 'and', 'you', 'your', 'for', 'with', 'are', 'was', 'has', 'have',
+        'this', 'that', 'there', 'what', 'when', 'where', 'from', 'they', 'their',
+        'just', 'been', 'would', 'could', 'should', 'about', 'into', 'some', 'any',
+      ]);
+      const words = (triggerQuery ?? '')
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .filter(w => w.length >= 3 && !STOPWORDS.has(w));
+      queryContext = {
+        triggerWords: words.length > 0 ? new Set(words) : undefined,
+        nearbyIds: nearbyAgentIds && nearbyAgentIds.length > 0 ? nearbySet : undefined,
+      };
+    }
 
     // Prune stale concerns before building memory
     this.concerns = this.concerns.filter(c => {
@@ -614,12 +1194,16 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     const scoredConcerns = this.getAllConcerns()
       .map(c => ({ c, s: this.scoreConcern(c, now, profile) }))
       .sort((a, b) => b.s - a.s);
+    // H1/H2 adaptive sizing: drop concerns that score < 40% of the top concern,
+    // but always keep at least the top 3 so agents always see *something*.
+    const cAdaptive = FourStreamMemory.adaptiveCutoff(scoredConcerns.map(x => x.s), 3, 0.4);
+    const scoredConcernsTrimmed = scoredConcerns.slice(0, cAdaptive);
 
     let cBudget = budgets.concerns;
     const cLines: string[] = [];
-    for (const { c } of scoredConcerns) {
+    for (const { c } of scoredConcernsTrimmed) {
       const p = PREFIX[c.category] ?? '';
-      const t = c.content.length > 60 ? c.content.slice(0, 57) + '...' : c.content;
+      const t = c.content.length > 100 ? c.content.slice(0, 97) + '...' : c.content;
       const line = `- ${p}${t}`;
       if (cBudget - line.length < 0 && cLines.length >= 3) break;
       cLines.push(line);
@@ -675,20 +1259,25 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     const dossiers = dLines.join('\n');
 
     // --- BELIEFS (budget from profile) ---
+    // B2 fix: equalize belief count across profiles — agents' learned identity
+    // shouldn't be throttled at decision-time (was: plan=5, everyone-else=3).
+    // B1 fix: widen per-belief char cap to 90 so learned identity isn't
+    // compressed 16× harder than birth identity (soul=800 chars).
     const pBeliefs = nearbyAgentIds ? this.getBeliefsAbout(nearbyAgentIds) : [];
-    const topB = this.getTopBeliefs(profile === 'plan' ? 5 : 3);
+    const topB = this.getTopBeliefs(profile === 'plan' ? 5 : 4);
     const allB = [...pBeliefs];
     for (const b of topB) {
       if (!allB.some(x => x.id === b.id)) allB.push(b);
     }
     let bBudget = budgets.beliefs;
     const bLines: string[] = [];
-    for (const b of allB.slice(0, 5)) {
-      const t = b.content.length > 50 ? b.content.slice(0, 47) + '...' : b.content;
+    for (const b of allB.slice(0, 6)) {
+      const t = b.content.length > 90 ? b.content.slice(0, 87) + '...' : b.content;
       const line = `- ${t}`;
-      if (bBudget - line.length < 0 && bLines.length >= 3) break;
+      if (bBudget - line.length < 0 && bLines.length >= 4) break;
       bLines.push(line);
       bBudget -= line.length;
+      this.markAccessed(b, now); // gap-analysis item 5: reward reuse
     }
     const beliefs = bLines.join('\n');
 
@@ -696,27 +1285,43 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     // Sorted by importance × decay, not chronology
     const pool = this.getRecentTimeline(20);
     const scoredT = pool
-      .map(m => ({ m, s: this.scoreMemory(m, now, profile) }))
+      .map(m => ({ m, s: this.scoreMemory(m, now, profile, queryContext) }))
       .sort((a, b) => b.s - a.s);
+    // H1/H2 adaptive sizing: include items whose score is within 50% of the top,
+    // keeping at least 4 so agents always have some recent context.
+    const tAdaptive = FourStreamMemory.adaptiveCutoff(scoredT.map(x => x.s), 4, 0.5);
+    const scoredTTrimmed = scoredT.slice(0, tAdaptive);
 
     let tBudget = budgets.timeline;
     const tLines: string[] = [];
-    for (const { m } of scoredT) {
-      const t = m.content.length > 55 ? m.content.slice(0, 52) + '...' : m.content;
+    for (const { m } of scoredTTrimmed) {
+      const t = m.content.length > 85 ? m.content.slice(0, 82) + '...' : m.content;
       const line = `- ${t}`;
       if (tBudget - line.length < 0 && tLines.length >= 4) break;
       tLines.push(line);
       tBudget -= line.length;
+      this.markAccessed(m, now); // gap-analysis item 5: reward reuse
     }
     const timeline = tLines.length > 0
       ? tLines.join('\n')
       : 'Nothing notable yet.';
 
     // --- LEARNED STRATEGIES (budget from profile) ---
+    // Rank by utility (successRate × rewardDelta × recency) — not just "latest 3".
+    // A proven strategy from day 2 beats yesterday's unverified hunch.
+    const currentDay = this.agent.joinedDay ?? 0; // best-effort day; refined in analyzeStrategyOutcomes
+    // UCB-aware selection: under-tried strategies get an exploration bonus so the
+    // book doesn't calcify around early wins (gap-analysis item 1.1).
+    const rankedStrategies = [...this.learnedStrategies]
+      .map(s => ({ s, u: strategyUtility(s, currentDay, this.totalActionOutcomes) }))
+      .sort((a, b) => b.u - a.u)
+      .slice(0, 3)
+      .map(x => x.s);
+
     let sBudget = budgets.strategies;
     const sLines: string[] = [];
-    for (const s of this.learnedStrategies.slice(-3)) {
-      const t = s.content.length > 60 ? s.content.slice(0, 57) + '...' : s.content;
+    for (const s of rankedStrategies) {
+      const t = s.content.length > 100 ? s.content.slice(0, 97) + '...' : s.content;
       const line = `- ${t}`;
       if (sBudget - line.length < 0 && sLines.length >= 2) break;
       sLines.push(line);
@@ -735,7 +1340,18 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     if (cfg.contradictions) parts.push(cfg.contradictions);
     const identityAnchor = parts.join(' ');
 
-    return { concerns, dossiers, beliefs, timeline, identityAnchor, learnedStrategies };
+    // --- AVERSIONS HINT (gap-analysis item 1.2) — soft personality bias from experience ---
+    const aversionsHint = this.buildAversionsHint();
+
+    // --- SOCIAL GRAPH (gap-analysis item 3A) — transitive relationships from KG ---
+    // Surfaces allies/enemies/betrayals derived from the knowledge graph, which
+    // captures relationship topology that flat dossiers can't express.
+    const nameMap = new Map<string, string>();
+    nameMap.set(this.agentId, this.agent.config.name);
+    for (const d of this.dossiers.values()) nameMap.set(d.targetId, d.targetName);
+    const socialGraph = this.knowledgeGraph.buildSocialSummary(this.agentId, nameMap, 180);
+
+    return { concerns, dossiers, beliefs, timeline, identityAnchor, learnedStrategies, aversionsHint, socialGraph };
   }
 
   // --- REFLECTION (belief generation) ---
@@ -758,6 +1374,22 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
       ? 'People involved:\n' + mentionedDossiers.map(d => `${escapeXml(d.targetName)}: ${escapeXml(d.summary.slice(0, 100))}`).join('\n')
       : '';
 
+    // Pattern extraction (gap-analysis item 1B): surface top keyword clusters so the
+    // LLM sees emergent themes in today's activity rather than chronological noise.
+    // "grain appeared in 5/6 events" → one grain-centric belief, not 3 fragmented ones.
+    const clusters = this.getKeywordClusters(2).slice(0, 4);
+    const clusterContext = clusters.length > 0
+      ? '<patterns_detected>\n' + clusters
+          .map(c => `${escapeXml(c.keyword)} (${c.memories.length}x): ${escapeXml(c.memories.slice(-2).map(m => m.content.slice(0, 60)).join(' | '))}`)
+          .join('\n') + '\n</patterns_detected>'
+      : '';
+
+    // Name → id map so we can resolve LLM-emitted names to stable subject keys (item 4.3)
+    const nameToId = new Map<string, string>();
+    for (const d of mentionedDossiers) {
+      nameToId.set(d.targetName.toLowerCase(), d.targetId);
+    }
+
     // OWASP LLM01: wrap agent-generated content in XML tags, with XML escaping.
     const prompt = `Based on recent experiences:
 <recent_events>
@@ -766,11 +1398,22 @@ ${escapeXml(recentText)}
 
 ${peopleContext ? '<people_context>\n' + peopleContext + '\n</people_context>' : ''}
 
+${clusterContext}
+
 What do you now BELIEVE? Not facts — beliefs and conclusions.
 About the people around you, about your own situation, about what you should do differently.
 
-2-3 beliefs, honest and personal. JSON array of strings.
-Example: ["Egao only helps when it benefits him", "I should go to the farm earlier before the wheat runs out"]`;
+2-3 beliefs, honest and personal. Return JSON array. Each belief is an object:
+{
+  "content": "natural-language belief (required)",
+  "subject": "person name OR short topic (null if purely self-directed)",
+  "predicate": "snake_case trait like trustworthiness, intent, reciprocity, reliability (null if not about a specific trait)",
+  "value": "short claim like low, hostile, conditional, high (null if predicate is null)"
+}
+Example: [
+  {"content": "Egao only helps when it benefits him", "subject": "Egao", "predicate": "reciprocity", "value": "conditional"},
+  {"content": "I should go to the farm earlier before the wheat runs out", "subject": null, "predicate": null, "value": null}
+]`;
 
     try {
       const response = await llm.complete(
@@ -781,17 +1424,40 @@ Example: ["Egao only helps when it benefits him", "I should go to the farm earli
       const insights = JSON.parse(cleaned);
 
       if (Array.isArray(insights)) {
-        for (const insight of insights.slice(0, 3)) {
-          if (typeof insight !== 'string' || insight.length < 10) continue;
+        for (const raw of insights.slice(0, 3)) {
+          // Support both legacy string format and new structured object format
+          let content: string | undefined;
+          let subject: string | undefined;
+          let predicate: string | undefined;
+          let value: string | undefined;
+          if (typeof raw === 'string') {
+            content = raw;
+          } else if (raw && typeof raw === 'object' && typeof raw.content === 'string') {
+            content = raw.content;
+            // Resolve subject name → agent ID when possible (falls back to raw name)
+            if (typeof raw.subject === 'string' && raw.subject.length > 0) {
+              subject = nameToId.get(raw.subject.toLowerCase()) ?? raw.subject;
+            }
+            if (typeof raw.predicate === 'string' && raw.predicate.length > 0) {
+              predicate = raw.predicate;
+            }
+            if (typeof raw.value === 'string' && raw.value.length > 0) {
+              value = raw.value;
+            }
+          }
+          if (!content || content.length < 10) continue;
           this.addBelief({
             id: crypto.randomUUID(),
             agentId: this.agentId,
             type: 'reflection',
-            content: insight,
+            content,
             importance: 8,
             timestamp: Date.now(),
             relatedAgentIds: [...mentionedIds],
             visibility: 'private',
+            subject,
+            predicate,
+            value,
           });
         }
         console.log(`[Beliefs] ${this.agent.config.name}: ${insights.length} new beliefs`);
@@ -808,22 +1474,72 @@ Example: ["Egao only helps when it benefits him", "I should go to the farm earli
    * Called during nightly compression. Produces "learned_strategy" memories
    * with importance 9 that persist across days and are never auto-pruned.
    */
-  async analyzeStrategyOutcomes(llm: LLMProvider): Promise<void> {
+  async analyzeStrategyOutcomes(llm: LLMProvider, currentDay: number = 0): Promise<void> {
     // Collect action_outcome memories from timeline
     const outcomes = this.timeline.filter(m => m.type === 'action_outcome');
     if (outcomes.length < 3) return; // Need enough data to find patterns
 
-    const successes = outcomes.filter(m => /success|gathered|crafted|built|discovered|earned|healed/i.test(m.content));
-    const failures = outcomes.filter(m => /failed|lost|broke|rejected|hurt|starved/i.test(m.content));
+    // Rubric-based success classification: if actionRubric exists, use scalar reward (0 = threshold).
+    // Falls back to actionSuccess bool, then legacy regex for pre-rubric memories.
+    const weights = this.agent.rewardWeights;
+    const classify = (m: Memory): { success: boolean; reward: number } => {
+      if (m.actionRubric) {
+        const reward = computeScalarReward(m.actionRubric, weights);
+        return { success: reward > 0, reward };
+      }
+      if (typeof m.actionSuccess === 'boolean') {
+        return { success: m.actionSuccess, reward: m.actionSuccess ? 0.5 : -0.5 };
+      }
+      // Legacy regex fallback
+      const isSuccess = /success|gathered|crafted|built|discovered|earned|healed/i.test(m.content);
+      const isFailure = /failed|lost|broke|rejected|hurt|starved/i.test(m.content);
+      if (isSuccess) return { success: true, reward: 0.5 };
+      if (isFailure) return { success: false, reward: -0.5 };
+      return { success: false, reward: 0 };
+    };
+
+    const classified = outcomes.map(m => ({ m, ...classify(m) }));
+    const successes = classified.filter(c => c.success);
+    const failures = classified.filter(c => !c.success && c.reward < 0);
 
     if (successes.length + failures.length < 3) return;
 
-    const outcomeText = outcomes.map(m => {
-      const isSuccess = successes.includes(m);
-      return `[${isSuccess ? 'SUCCESS' : 'FAILURE'}] ${m.content}`;
+    // --- Update utility stats on EXISTING strategies based on today's outcomes ---
+    // Heuristic match: strategy applies if its content shares ≥2 meaningful tokens with outcome content.
+    for (const strategy of this.learnedStrategies) {
+      const strategyTokens = new Set(
+        strategy.content.toLowerCase().split(/\W+/).filter(t => t.length > 4)
+      );
+      let matched = 0;
+      let successfulMatches = 0;
+      let rewardSum = 0;
+      for (const c of classified) {
+        const outcomeTokens = c.m.content.toLowerCase().split(/\W+/).filter(t => t.length > 4);
+        const overlap = outcomeTokens.filter(t => strategyTokens.has(t)).length;
+        if (overlap >= 2) {
+          matched++;
+          if (c.success) successfulMatches++;
+          rewardSum += c.reward;
+        }
+      }
+      if (matched > 0) {
+        strategy.lastAccessedDay = currentDay;
+        const prevTotal = strategy.timesUsed;
+        const prevReward = strategy.avgRewardDelta * prevTotal;
+        strategy.timesUsed += matched;
+        strategy.timesSuccessful += successfulMatches;
+        strategy.avgRewardDelta = (prevReward + rewardSum) / strategy.timesUsed;
+      }
+    }
+
+    const outcomeText = classified.map(c => {
+      const r = c.reward.toFixed(2);
+      return `[${c.success ? 'SUCCESS' : 'FAILURE'} reward=${r}] ${c.m.content}`;
     }).join('\n');
 
-    const existingLessons = this.learnedStrategies.map(s => s.content).join('\n');
+    const existingLessons = this.learnedStrategies
+      .map(s => s.content)
+      .join('\n');
 
     const prompt = `Based on today's action results:
 <action_outcomes>
@@ -859,6 +1575,17 @@ JSON array of strings. Only genuinely new insights. Empty array [] if nothing ne
           );
           if (isDuplicate) continue;
 
+          const newStrategy: LearnedStrategy = {
+            content: lesson,
+            createdDay: currentDay,
+            lastAccessedDay: currentDay,
+            timesUsed: 0,
+            timesSuccessful: 0,
+            avgRewardDelta: 0,
+          };
+          this.learnedStrategies.push(newStrategy);
+
+          // Also persist as Memory for retrieval/search compatibility.
           const strategyMemory: Memory = {
             id: crypto.randomUUID(),
             agentId: this.agentId,
@@ -870,28 +1597,253 @@ JSON array of strings. Only genuinely new insights. Empty array [] if nothing ne
             relatedAgentIds: [],
             visibility: 'private',
           };
-          this.learnedStrategies.push(strategyMemory);
           void this.backingStore.add(strategyMemory).catch((err: unknown) => {
             console.warn(`[FourStream] Failed to persist strategy for agent ${this.agent.id}:`, (err as Error).message);
           });
         }
-        // Cap strategies — keep most recent, they reflect latest learning
+
+        // Utility-ranked eviction — evict LOWEST utility, not newest. This lets an agent
+        // genuinely learn rule #17 by retiring whichever existing rule has stopped earning reward.
         if (this.learnedStrategies.length > FourStreamMemory.MAX_STRATEGIES) {
-          this.learnedStrategies = this.learnedStrategies.slice(-FourStreamMemory.MAX_STRATEGIES);
+          // UCB-aware eviction (gap-analysis item 1.1): under-tried strategies keep
+          // some protection via the exploration bonus, so we don't evict rule #11
+          // before it's had a chance to prove itself.
+          this.learnedStrategies.sort((a, b) =>
+            strategyUtility(b, currentDay, this.totalActionOutcomes) -
+            strategyUtility(a, currentDay, this.totalActionOutcomes)
+          );
+          this.learnedStrategies = this.learnedStrategies.slice(0, FourStreamMemory.MAX_STRATEGIES);
         }
         this.syncStrategiesToAgent();
-        console.log(`[Strategy] ${this.agent.config.name}: ${this.learnedStrategies.length} total learned strategies`);
+        console.log(`[Strategy] ${this.agent.config.name}: ${this.learnedStrategies.length} learned strategies (top utility: ${this.learnedStrategies[0] ? strategyUtility(this.learnedStrategies[0], currentDay, this.totalActionOutcomes).toFixed(2) : 'n/a'})`);
       }
     } catch (err) {
       console.error(`[Strategy] ${this.agent.config.name} strategy analysis failed:`, err);
     }
   }
 
+  /**
+   * Failure-mining step (negative sample augmentation, item 8 from gap analysis).
+   * Runs BEFORE general strategy extraction in nightly compression.
+   * Research basis: BCPG-NSA shows explicit failure mining is worth 1.5-3× sample efficiency.
+   * Separate from `analyzeStrategyOutcomes` because lumping wins + losses dilutes the lesson.
+   */
+  async analyzeFailures(llm: LLMProvider, currentDay: number = 0): Promise<void> {
+    const outcomes = this.timeline.filter(m => m.type === 'action_outcome');
+    if (outcomes.length < 2) return;
+
+    const weights = this.agent.rewardWeights;
+    const failed = outcomes.filter(m => {
+      if (m.actionRubric) return computeScalarReward(m.actionRubric, weights) < -0.1;
+      if (typeof m.actionSuccess === 'boolean') return !m.actionSuccess;
+      return /failed|lost|broke|rejected|hurt|starved/i.test(m.content);
+    });
+
+    if (failed.length < 2) return; // Need at least 2 failures to find a pattern
+
+    const failureText = failed.map(m => {
+      if (m.actionRubric) {
+        const r = computeScalarReward(m.actionRubric, weights).toFixed(2);
+        return `[reward=${r}] ${m.content}`;
+      }
+      return `- ${m.content}`;
+    }).join('\n');
+
+    const existingLessons = this.learnedStrategies.map(s => s.content).join('\n');
+
+    const prompt = `You had ${failed.length} failures today. Examine them specifically:
+<failures>
+${escapeXml(failureText)}
+</failures>
+
+${existingLessons ? '<existing_lessons>\n' + escapeXml(existingLessons) + '\n</existing_lessons>\n\nDo not repeat existing lessons.' : ''}
+
+What went wrong? Identify 1 concrete lesson to AVOID future failures.
+Focus on what NOT to do, or what conditions made the failure inevitable.
+
+JSON array with at most 1 string. Empty array [] if failures were random/unavoidable.`;
+
+    try {
+      const response = await llm.complete(
+        this.identity.map(m => m.content).join('\n'),
+        prompt,
+      );
+      const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+      const lessons = JSON.parse(cleaned);
+      if (!Array.isArray(lessons) || lessons.length === 0) return;
+
+      const lesson = lessons[0];
+      if (typeof lesson !== 'string' || lesson.length < 10) return;
+
+      const isDuplicate = this.learnedStrategies.some(s =>
+        s.content.toLowerCase() === lesson.toLowerCase()
+      );
+      if (isDuplicate) return;
+
+      // Seed with negative reward delta — this lesson was extracted from failure.
+      const newStrategy: LearnedStrategy = {
+        content: lesson,
+        createdDay: currentDay,
+        lastAccessedDay: currentDay,
+        timesUsed: failed.length,
+        timesSuccessful: 0,
+        avgRewardDelta: -0.5,
+      };
+      this.learnedStrategies.push(newStrategy);
+
+      const strategyMemory: Memory = {
+        id: crypto.randomUUID(),
+        agentId: this.agentId,
+        type: 'reflection',
+        content: lesson,
+        importance: 9,
+        isCore: true,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+        visibility: 'private',
+      };
+      void this.backingStore.add(strategyMemory).catch((err: unknown) => {
+        console.warn(`[FourStream] Failed to persist failure lesson for agent ${this.agent.id}:`, (err as Error).message);
+      });
+
+      console.log(`[Failures] ${this.agent.config.name} learned: "${lesson.slice(0, 60)}..."`);
+    } catch (err) {
+      console.error(`[Failures] ${this.agent.config.name} failure analysis failed:`, err);
+    }
+  }
+
   // --- COMPRESSION (nightly) ---
 
-  async nightlyCompression(llm: LLMProvider): Promise<void> {
-    // 0. Experiential learning — extract strategy lessons before compressing timeline
-    await this.analyzeStrategyOutcomes(llm);
+  /**
+   * Novelty score for today (gap-analysis item 6).
+   * Higher = more unique events, warranting expensive LLM compression.
+   * Lower = repetitive day, skip the heavy nightly LLM pass.
+   */
+  private computeNoveltyScore(): number {
+    const dayMs = 24 * 3_600_000;
+    const now = Date.now();
+    const todayEvents = this.timeline.filter(m => (now - m.timestamp) < dayMs);
+    if (todayEvents.length === 0) return 0;
+
+    // Unique keyword count / total = novelty ratio
+    const allKeywords = new Set<string>();
+    let tokenTotal = 0;
+    for (const m of todayEvents) {
+      if (m.keywords) {
+        for (const k of m.keywords) allKeywords.add(k);
+        tokenTotal += m.keywords.length;
+      } else {
+        // Fallback: content tokens
+        const toks = m.content.toLowerCase().split(/\W+/).filter(t => t.length > 4);
+        for (const t of toks) allKeywords.add(t);
+        tokenTotal += toks.length;
+      }
+    }
+    const uniqueRatio = tokenTotal > 0 ? allKeywords.size / tokenTotal : 0;
+    // Weight by event count: 3 novel events < 10 novel events
+    const volumeFactor = Math.min(1, todayEvents.length / 15);
+    return uniqueRatio * volumeFactor;
+  }
+
+  /**
+   * Timeline eviction (gap-analysis Q1 fix): replaces blind `slice(-20)` with
+   * importance × causal-membership × concern-reference scoring.
+   *
+   * Protects:
+   *   - Events that caused something (ledTo.length > 0) — chain starts
+   *   - Events referenced by open concerns (overlap on relatedAgentIds)
+   *   - Causal antecedents of surviving events (causedBy chain-walk)
+   *   - High-importance memories (earned ≥ 8)
+   */
+  private evictTimeline(events: Memory[], maxSize: number): Memory[] {
+    if (events.length <= maxSize) return events;
+
+    // Build set of agent IDs referenced by open (unresolved) concerns.
+    // Events that touch these agents are more likely to matter tomorrow.
+    const openConcernAgents = new Set<string>();
+    for (const c of this.concerns) {
+      if (c.resolved) continue;
+      for (const aid of c.relatedAgentIds) openConcernAgents.add(aid);
+    }
+
+    const scoreOf = (m: Memory): number => {
+      let score = m.importance;
+      if (m.ledTo && m.ledTo.length > 0) score += 3; // causal chain start
+      if (m.causedBy) score += 1;                    // downstream effect
+      if (m.importance >= 8) score += 2;             // earned high importance
+      // Concern reference: any overlap with open concerns' related agents
+      if (m.relatedAgentIds?.some(a => openConcernAgents.has(a))) score += 2;
+      return score;
+    };
+
+    // First pass: top-maxSize by score.
+    const byId = new Map<string, Memory>();
+    for (const m of events) byId.set(m.id, m);
+    const ranked = [...events].sort((a, b) => scoreOf(b) - scoreOf(a));
+    const kept = new Set<string>(ranked.slice(0, maxSize).map(m => m.id));
+
+    // Chain-walk: for each kept event, also keep its causedBy antecedent
+    // (chains stay intact so credit-assignment can still traverse them).
+    const walkBudget = Math.ceil(maxSize * 0.25);
+    let walked = 0;
+    for (const id of [...kept]) {
+      if (walked >= walkBudget) break;
+      const m = byId.get(id);
+      if (!m?.causedBy) continue;
+      if (kept.has(m.causedBy)) continue;
+      if (byId.has(m.causedBy)) {
+        kept.add(m.causedBy);
+        walked++;
+      }
+    }
+
+    // Return kept events in chronological order (consumers expect this).
+    return events
+      .filter(m => kept.has(m.id))
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  /**
+   * Pressure-triggered compression check (root-audit leverage item 3).
+   * Returns true when the timeline has grown past the soft watermark AND enough
+   * real time has passed since the last compression to prevent thrashing.
+   * Agent-controller polls this on its hourly hook and fires nightlyCompression
+   * early when memory mass is building mid-day.
+   */
+  shouldCompressFromPressure(): boolean {
+    const HIGH_WATERMARK = 40;           // 80% of TIMELINE_MAX (50)
+    const COOLDOWN_MS = 30 * 60 * 1000;  // 30 real minutes between pressure compacts
+    if (this.timeline.length < HIGH_WATERMARK) return false;
+    const sinceLast = Date.now() - this.lastCompressionAt;
+    return sinceLast > COOLDOWN_MS;
+  }
+
+  async nightlyCompression(llm: LLMProvider, currentDay: number = 0): Promise<void> {
+    // Stamp for pressure-cooldown (root-audit leverage item 3).
+    this.lastCompressionAt = Date.now();
+    // Pressure check (gap-analysis item 6): skip expensive LLM steps on boring days.
+    // Still run cheap maintenance (decay, prune). Nightly becomes a lower bound, not the trigger.
+    const timelineLen = this.timeline.length;
+    const novelty = this.computeNoveltyScore();
+    const skipLLM = timelineLen < 8 && novelty < 0.35;
+    if (skipLLM) {
+      console.log(`[Compression] ${this.agent.config.name}: skipping LLM steps (tl=${timelineLen}, novelty=${novelty.toFixed(2)})`);
+      this.decayUnusedMemories(Date.now());
+      this.reprioritizeConcerns(Date.now());
+      this.pruneExpired(Date.now());
+      return;
+    }
+
+    // 0a. Failure mining — negative sample augmentation (gap-analysis item 8).
+    //     Runs FIRST so failures don't get diluted by the general pattern-extraction prompt.
+    await this.analyzeFailures(llm, currentDay);
+
+    // 0b. Experiential learning — extract strategy lessons before compressing timeline.
+    //     Uses rubric-weighted rewards when actionRubric is present (gap-analysis items 1,2,4).
+    await this.analyzeStrategyOutcomes(llm, currentDay);
+
+    // 0c. Causal credit walk — tag earlier events that caused today's bad outcomes (item 3).
+    await this.analyzeCausalChains(llm);
 
     // 1. Generate beliefs (reflective synthesis)
     await this.generateBeliefs(llm);
@@ -918,9 +1870,11 @@ JSON array of strings. Only genuinely new insights. Empty array [] if nothing ne
         compressed.push(latest);
       }
     }
-    this.timeline = compressed
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-20);
+
+    // Timeline eviction (gap-analysis item 3, Q1 fix): replace blind slice(-20) with
+    // importance × causal-membership scoring. Causal chain members and events
+    // referenced by open concerns/commitments are protected from eviction.
+    this.timeline = this.evictTimeline(compressed, 20);
 
     // 3. Memoria DECAY: old low-importance beliefs removed
     const now = Date.now();
@@ -955,8 +1909,24 @@ JSON array of strings. Only genuinely new insights. Empty array [] if nothing ne
     // 7. Identity evolution — surface contradictions between beliefs and actions
     await this.analyzeIdentityEvolution(llm);
 
+    // 7b. Contradiction resolution — merge conflicting beliefs about same entity (item 7).
+    await this.resolveContradictions(llm);
+
+    // 7c. Importance decay — memories not accessed in 24h lose 0.05 importance (item 5).
+    this.decayUnusedMemories(now);
+
     // 8. Standard pruning
     this.pruneExpired(now);
+
+    // 9. Reasoning-quality log (gap-analysis item 1.3): surface the running EMA so
+    // operators can watch an agent's planning/perception skill drift over time.
+    const rs = this.agent.reasoningScore;
+    if (rs) {
+      console.log(
+        `[Reasoning] ${this.agent.config.name}: plan-alignment=${rs.planAlignment.toFixed(2)} ` +
+        `thought-relevance=${rs.thoughtRelevance.toFixed(2)} (actions=${this.totalActionOutcomes})`
+      );
+    }
   }
 
   /**
@@ -1110,6 +2080,165 @@ If yes, state the contradiction in one honest sentence. If no contradiction, rep
     }
   }
 
+  /**
+   * Retroactive causal credit assignment (gap-analysis item 3).
+   * Walk backward from strongly-negative outcomes to identify 1-3 causal events.
+   * Tags causal events via Memory.causedBy / ledTo — surviving the timeline cap via links.
+   *
+   * Solves: "chopped wood at 09:00 → starved at 18:00" — the 09:00 event gets evicted
+   * before agent connects it to the 18:00 consequence. Credit walk preserves the link.
+   */
+  private async analyzeCausalChains(llm: LLMProvider): Promise<void> {
+    // Find strong consequences: very-negative rubric, high-importance failure outcomes, or vitals hits.
+    const weights = this.agent.rewardWeights;
+    const consequences = this.timeline.filter(m => {
+      if (m.type !== 'action_outcome' && m.type !== 'observation') return false;
+      if (m.causedBy) return false; // already tagged
+      if (m.actionRubric) {
+        return computeScalarReward(m.actionRubric, weights) < -0.3;
+      }
+      // Fallback: importance-7+ outcomes that look like failures
+      return m.importance >= 7 && /starved|hurt|injured|lost|broke|betrayed|failed badly/i.test(m.content);
+    });
+
+    if (consequences.length === 0) return;
+
+    // Only process up to 2 per nightly to limit LLM calls
+    for (const consequence of consequences.slice(0, 2)) {
+      // Candidate causes: timeline events BEFORE this consequence (temporal priors)
+      const candidates = this.timeline.filter(m =>
+        m.id !== consequence.id &&
+        m.timestamp < consequence.timestamp &&
+        (consequence.timestamp - m.timestamp) < 3 * 24 * 3_600_000 // within 3 days
+      ).slice(-15); // up to 15 recent candidates
+
+      if (candidates.length < 2) continue;
+
+      const candidateText = candidates.map((m, i) => `${i}. ${m.content}`).join('\n');
+
+      const prompt = `Something went wrong:
+<consequence>
+${escapeXml(consequence.content)}
+</consequence>
+
+Earlier events that could have contributed:
+<candidates>
+${escapeXml(candidateText)}
+</candidates>
+
+Which 1-3 earlier events most plausibly CAUSED the consequence?
+Reply with JSON array of candidate indices (numbers). Empty array [] if no clear cause.
+Example: [0, 3]`;
+
+      try {
+        const response = await llm.complete(
+          this.identity.map(m => m.content).join('\n'),
+          prompt,
+        );
+        const cleaned = response.replace(/```json?\n?/g, '').replace(/```/g, '').trim();
+        const indices = JSON.parse(cleaned);
+        if (!Array.isArray(indices)) continue;
+
+        for (const idx of indices.slice(0, 3)) {
+          if (typeof idx !== 'number' || idx < 0 || idx >= candidates.length) continue;
+          const cause = candidates[idx];
+          // Bidirectional link via existing Memory fields
+          consequence.causedBy = cause.id;
+          cause.ledTo = cause.ledTo ?? [];
+          if (!cause.ledTo.includes(consequence.id)) cause.ledTo.push(consequence.id);
+          // Boost cause importance — it mattered more than it looked at the time
+          cause.importance = Math.min(10, cause.importance + 1);
+        }
+        console.log(`[Causal] ${this.agent.config.name}: linked ${indices.length} causes to "${consequence.content.slice(0, 40)}..."`);
+      } catch {
+        // Non-critical — skip on failure
+      }
+    }
+  }
+
+  /**
+   * Contradiction resolution (gap-analysis item 7).
+   * Scans belief pairs for conflicts about the same entity. Emits resolution belief,
+   * demotes superseded belief. The Identity Evolution step DETECTS drift but does not RESOLVE it.
+   */
+  private async resolveContradictions(llm: LLMProvider): Promise<void> {
+    if (this.beliefs.length < 2) return;
+
+    // Heuristic: find belief pairs that mention the same entity (agent names, tokens)
+    // and contain opposing sentiment keywords.
+    const positive = /trust|kind|generous|honest|ally|friend|reliable|helpful/i;
+    const negative = /betray|distrust|selfish|liar|enemy|cruel|hostile|dangerous/i;
+
+    type Pair = { a: Memory; b: Memory; overlap: string[] };
+    const candidatePairs: Pair[] = [];
+
+    const tokens = (m: Memory) =>
+      m.content.toLowerCase().split(/\W+/).filter(t => t.length > 4);
+
+    for (let i = 0; i < this.beliefs.length; i++) {
+      for (let j = i + 1; j < this.beliefs.length; j++) {
+        const a = this.beliefs[i], b = this.beliefs[j];
+        const aPos = positive.test(a.content), aNeg = negative.test(a.content);
+        const bPos = positive.test(b.content), bNeg = negative.test(b.content);
+        if (!((aPos && bNeg) || (aNeg && bPos))) continue;
+        const tA = new Set(tokens(a));
+        const overlap = tokens(b).filter(t => tA.has(t));
+        if (overlap.length >= 2) {
+          candidatePairs.push({ a, b, overlap });
+        }
+      }
+    }
+
+    if (candidatePairs.length === 0) return;
+
+    // Resolve at most 2 contradictions per nightly
+    for (const pair of candidatePairs.slice(0, 2)) {
+      const olderFirst = pair.a.timestamp < pair.b.timestamp ? [pair.a, pair.b] : [pair.b, pair.a];
+
+      const prompt = `Two of your beliefs contradict each other:
+<older_belief>
+${escapeXml(olderFirst[0].content)}
+</older_belief>
+
+<newer_belief>
+${escapeXml(olderFirst[1].content)}
+</newer_belief>
+
+Write ONE resolution sentence acknowledging the shift.
+Example: "I trusted Bob until day 5, but his betrayal changed that — now I'm wary."
+Reply with ONLY the sentence. No labels, no JSON.`;
+
+      try {
+        const response = await llm.complete(
+          this.identity.map(m => m.content).join('\n'),
+          prompt,
+        );
+        const clean = response.trim().slice(0, 200);
+        if (clean.length < 15) continue;
+
+        // Demote the older (superseded) belief AND mark it as historical
+        // (bi-temporal invalidation — gap-analysis item 3.1).
+        olderFirst[0].importance = Math.max(1, olderFirst[0].importance - 3);
+        const resolutionId = crypto.randomUUID();
+        olderFirst[0].validUntil = this.currentDay;
+        olderFirst[0].supersededBy = resolutionId;
+        this.addBelief({
+          id: resolutionId,
+          agentId: this.agentId,
+          type: 'reflection',
+          content: clean,
+          importance: 9,
+          timestamp: Date.now(),
+          relatedAgentIds: [],
+          visibility: 'private',
+        });
+        console.log(`[Contradiction] ${this.agent.config.name}: resolved — "${clean.slice(0, 60)}..."`);
+      } catch {
+        // Non-critical
+      }
+    }
+  }
+
   // --- CULTURAL TRANSMISSION (cross-agent memory sharing) ---
 
   /**
@@ -1178,12 +2307,25 @@ If yes, state the contradiction in one honest sentence. If no contradiction, rep
       .sort((a, b) => b.importance - a.importance);
     shareable.push(...topBeliefs.slice(0, maxCount));
 
-    // Share learned strategies
+    // Share learned strategies — wrap LearnedStrategy in a Memory shape for transmission.
+    // Rank by utility (proven strategies first) rather than newness.
     if (shareable.length < maxCount) {
-      const strategies = this.learnedStrategies
-        .filter(s => s.visibility !== 'private')
-        .slice(-maxCount);
-      shareable.push(...strategies.slice(0, maxCount - shareable.length));
+      const currentDay = this.agent.joinedDay ?? 0;
+      const ranked = [...this.learnedStrategies]
+        .sort((a, b) => strategyUtility(b, currentDay) - strategyUtility(a, currentDay))
+        .slice(0, maxCount - shareable.length);
+      const wrapped: Memory[] = ranked.map(s => ({
+        id: crypto.randomUUID(),
+        agentId: this.agentId,
+        type: 'reflection',
+        content: s.content,
+        importance: 9,
+        isCore: true,
+        timestamp: Date.now(),
+        relatedAgentIds: [],
+        visibility: 'shared',
+      }));
+      shareable.push(...wrapped);
     }
 
     return shareable.slice(0, maxCount);
