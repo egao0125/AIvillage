@@ -7,6 +7,7 @@ import { ProfileHeader } from './ProfileHeader';
 import { CharacterArc } from './CharacterArc';
 import { Relationships } from './Relationships';
 import { AgentStats } from './AgentStats';
+import { CognitionPanel } from './CognitionPanel';
 
 export const AgentDetail: React.FC<{ agentId: string }> = ({ agentId }) => {
   const { colors } = useTheme();
@@ -36,6 +37,8 @@ export const AgentDetail: React.FC<{ agentId: string }> = ({ agentId }) => {
       <CharacterArc agentId={agentId} />
       <Divider />
       <AgentStats agent={agent} />
+      <Divider />
+      <CognitionPanel agent={agent} />
       <Divider />
       <Relationships agent={agent} />
       <Divider />
