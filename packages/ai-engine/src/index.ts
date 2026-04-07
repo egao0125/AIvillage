@@ -877,11 +877,11 @@ If nothing notable was exchanged, return []`;
         // the same template every turn. Now the example surfaces behavior this
         // specific agent has already chosen — no cross-agent priming.
         const firstName = situation.nearbyAgents[0]?.name?.toLowerCase() ?? 'someone';
-        const recentSocialIds = this.recentSocialActionIds.slice(-3);
-        const exampleActions = recentSocialIds.length >= 2
-          ? recentSocialIds.slice(0, 3).map(id => id.includes('_') ? id : `${id}_${firstName}`)
+        // Deduplicate recent social actions to prevent loop-priming
+        const uniqueRecent = [...new Set(this.recentSocialActionIds.slice(-6))];
+        const exampleActions = uniqueRecent.length >= 2
+          ? uniqueRecent.slice(0, 3).map(id => id.includes('_') ? id : `${id}_${firstName}`)
           : socialActions.slice(0, 3).map(a => {
-              // Prefer non-aggressive verbs for the default seed
               const prefix = a.id.split('_')[0];
               return `${prefix}_${firstName}`;
             });
@@ -1123,7 +1123,10 @@ ${jsonInstruction}`;
     // falling back to a varied category based on current vitals.
     console.warn(`[AgentCognition] ${this.agent.config.name} decide() parse failure: "${response.substring(0, 100)}..."`);
     const availableIds = new Set(situation.availableActions.map(a => a.id));
-    const lastAction = this.lastSuccessfulActionId && availableIds.has(this.lastSuccessfulActionId)
+    // Skip talk_ as fallback — it feeds the conversation loop. Prefer physical actions.
+    const lastAction = this.lastSuccessfulActionId
+      && availableIds.has(this.lastSuccessfulActionId)
+      && !this.lastSuccessfulActionId.startsWith('talk_')
       ? this.lastSuccessfulActionId
       : undefined;
     const vitalsSteer = situation.vitals.energy <= 20

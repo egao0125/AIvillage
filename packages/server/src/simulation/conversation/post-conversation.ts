@@ -103,8 +103,8 @@ export class PostConversationProcessor {
         console.error(`[Memory] Failed to store conversation summary for ${participant.config.name}:`, err);
       }
 
-      // --- 2. Agreements → memories + social ledger entries (max 2) ---
-      for (let agreement of result.agreements.slice(0, 2)) {
+      // --- 2. Agreements → memories + social ledger entries (max 1 per conversation) ---
+      for (let agreement of result.agreements.slice(0, 1)) {
         // Rewrite vague time references ("at dawn" → "on Day 5, hour 7") before processing
         agreement = rewriteVagueTime(agreement, this.world.time.day, this.world.time.hour);
 
@@ -115,7 +115,7 @@ export class PostConversationProcessor {
             agentId: participantId,
             type: 'plan',
             content: `AGREEMENT with ${othersLabel}: ${agreement}`,
-            importance: 7,
+            importance: 5,
             timestamp: Date.now(),
             relatedAgentIds: otherIds,
             causedBy: conversationMemoryId,
@@ -134,7 +134,7 @@ export class PostConversationProcessor {
               agentId: otherId,
               type: 'plan',
               content: `AGREEMENT with ${participant.config.name}: ${agreement}`,
-              importance: 7,
+              importance: 5,
               timestamp: Date.now(),
               relatedAgentIds: [participantId],
               causedBy: conversationMemoryId,

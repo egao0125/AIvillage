@@ -1757,11 +1757,12 @@ export class SimulationEngine {
         .advanceTurn(conv.id, this.cognitions)
         .then((continuing: boolean) => {
           if (!continuing) {
-            // Release agents from conversation
+            // Release agents from conversation, recording per-pair partner
             for (const pid of conv.participants) {
               const controller = this.controllers.get(pid);
               if (controller) {
-                controller.leaveConversation();
+                const partnerId = conv.participants.find(p => p !== pid);
+                controller.leaveConversation(partnerId);
               }
             }
           }
@@ -1773,7 +1774,8 @@ export class SimulationEngine {
           for (const pid of conv.participants) {
             const controller = this.controllers.get(pid);
             if (controller) {
-              controller.leaveConversation();
+              const partnerId = conv.participants.find(p => p !== pid);
+              controller.leaveConversation(partnerId);
             }
           }
         });

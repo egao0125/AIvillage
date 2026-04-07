@@ -52,6 +52,8 @@ export class AgentController {
   private planningInProgress: boolean = false;
   private reflectingInProgress: boolean = false;
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
+  /** Per-pair conversation tracking: agentId → { count, day }. Max 2 per pair per day. */
+  private conversationPairLog: Map<string, { count: number; day: number }> = new Map();
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
@@ -860,15 +862,38 @@ export class AgentController {
    * Leave conversing state (called externally when conversation ends).
    * Immediately moves to next plan item so agent walks away.
    */
-  leaveConversation(): void {
+  leaveConversation(partnerId?: string): void {
     if (this.state === 'conversing') {
       this.state = 'idle';
       this.conversationCooldown = 60;
       this.postConversationPending = true;
       this.postConvWaitTimer = 0;
+      // Record per-pair conversation count
+      if (partnerId) {
+        this.recordConversationWith(partnerId);
+      }
       // DON'T call decideAndAct() — wait for post-processing to finish
       this.world.updateAgentState(this.agent.id, 'idle', '');
     }
+  }
+
+  /** Record a conversation with a specific partner for per-pair daily limits */
+  private recordConversationWith(partnerId: string): void {
+    const day = this.world.time.day;
+    const entry = this.conversationPairLog.get(partnerId);
+    if (entry && entry.day === day) {
+      entry.count++;
+    } else {
+      this.conversationPairLog.set(partnerId, { count: 1, day });
+    }
+  }
+
+  /** Check if this agent can still talk to a specific partner today (max 2/day) */
+  canTalkTo(partnerId: string): boolean {
+    const day = this.world.time.day;
+    const entry = this.conversationPairLog.get(partnerId);
+    if (!entry || entry.day !== day) return true;
+    return entry.count < 2;
   }
 
   /** Called by ConversationManager after post-processing completes */
@@ -2258,7 +2283,9 @@ State your vote and explain your reasoning.`;
 
     // Social action patterns — listed ONCE, not per agent
     if (nearby.length > 0) {
-      if (this.conversationCooldown <= 0) {
+      const canTalkToAnyone = this.conversationCooldown <= 0
+        && nearby.some(a => this.canTalkTo(a.id));
+      if (canTalkToAnyone) {
         actions.push({ id: 'talk_NAME', label: 'Talk to someone', category: 'social' });
       }
       if (this.agent.inventory.length > 0) {
@@ -2538,15 +2565,13 @@ State your vote and explain your reasoning.`;
         }
 
         if (canFulfill.length > 0 && missing.length === 0) {
-          // Have everything — fulfill
-          return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is RIGHT HERE and you have everything. Honor it: give_${firstName.toLowerCase()}.`;
+          return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is nearby and you have everything needed. Consider fulfilling it.`;
         } else if (canFulfill.length > 0) {
-          // Have some — offer partial or renegotiate
-          return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is here. You have ${canFulfill.join(', ')} but missing ${missing.join(', ')}. Options: give what you have (give_${firstName.toLowerCase()}), talk to renegotiate (talk_${firstName.toLowerCase()}), or break it (rep ${c.weight === 5 ? '-8' : c.weight === 3 ? '-3' : '-1'}).`;
+          return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is nearby. You have ${canFulfill.join(', ')} but missing ${missing.join(', ')}. You could give what you have, gather more, or renegotiate.`;
         } else {
           // Have nothing — renegotiate or work toward it
           if (daysLeft <= 0) {
-            return `YOUR ${weightLabel} to ${firstName} is OVERDUE: "${c.content}". You lack ${missing.join(', ')}. ${firstName} is here — renegotiate now (talk_${firstName.toLowerCase()}) or it breaks automatically (rep ${c.weight === 5 ? '-8' : c.weight === 3 ? '-3' : '-1'}).`;
+            return `YOUR ${weightLabel} to ${firstName} is OVERDUE: "${c.content}". You lack ${missing.join(', ')}. ${firstName} is nearby. Breaking it costs rep ${c.weight === 5 ? '-8' : c.weight === 3 ? '-3' : '-1'}.`;
           }
           continue; // Still time — don't interrupt, let them gather
         }
@@ -2555,11 +2580,11 @@ State your vote and explain your reasoning.`;
       // Non-item commitments (meet, talk, teach, etc.)
       const talkMatch = text.match(/meet|talk|discuss|tell|warn|teach|show|confess|report|present/);
       if (talkMatch) {
-        return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is RIGHT HERE. Follow through: talk_${firstName.toLowerCase()}.`;
+        return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is nearby. You could follow through, but consider if you have more pressing needs first.`;
       }
 
       // Generic: target is nearby
-      return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is right here. Act on it or renegotiate.`;
+      return `YOUR ${weightLabel}: "${c.content}".${urgency} ${firstName} is nearby.`;
     }
 
     // 2. Ally in crisis — trusted person nearby dying
@@ -2571,9 +2596,9 @@ State your vote and explain your reasoning.`;
           const firstName = nearby.name.split(' ')[0];
           const hasFood = this.agent.inventory.some(i => i.type === 'food');
           if (hasFood) {
-            return `${firstName.toUpperCase()} IS DYING (hunger:${nearby.vitals.hunger} health:${nearby.vitals.health}). You trust them (${trust}). You have food. Give it: give_${firstName.toLowerCase()}. They will die if you don't act.`;
+            return `${firstName} is in trouble (hunger:${nearby.vitals.hunger} health:${nearby.vitals.health}). You trust them (${trust}) and you have food.`;
           } else {
-            return `${firstName.toUpperCase()} IS DYING (hunger:${nearby.vitals.hunger} health:${nearby.vitals.health}). You trust them (${trust}). You have no food — go gather some immediately.`;
+            return `${firstName} is in trouble (hunger:${nearby.vitals.hunger} health:${nearby.vitals.health}). You trust them (${trust}) but you have no food.`;
           }
         }
       }
@@ -3034,6 +3059,11 @@ State your vote and explain your reasoning.`;
       for (const agent of this.world.agents.values()) {
         if (agent.id !== this.agent.id &&
             agent.config.name.split(' ')[0].toLowerCase() === firstName) {
+          // Per-pair daily limit: max 2 conversations with the same person per day
+          if (!this.canTalkTo(agent.id)) {
+            this.lastTrigger = `You've already spoken with ${agent.config.name} twice today. Do something else.`;
+            this.state = 'idle'; this.idleTimer = 0; return;
+          }
           // Fulfill talk/meet commitments targeting this person
           for (const commit of (this.agent.commitments ?? [])) {
             if (commit.fulfilled || commit.broken) continue;
