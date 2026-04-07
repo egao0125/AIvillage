@@ -463,6 +463,18 @@ io.on('connection', (socket) => {
     io.emit('world:snapshot', engine.getSnapshot());
   });
 
+  socket.on('dev:resurrect-all', async (token: unknown) => {
+    if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
+    if (!engine.isLeader) {
+      socket.emit('dev:resurrect-all:result', { error: 'Not the leader Pod' });
+      return;
+    }
+    const resurrected = await engine.resurrectAllAgents();
+    io.emit('world:snapshot', engine.getSnapshot());
+    socket.emit('dev:resurrect-all:result', { resurrected });
+    console.log(`[Server] Resurrected ${resurrected.length} agents: ${resurrected.join(', ')}`);
+  });
+
   socket.on('dev:fresh-start', async (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) {
       console.warn(`[Server] Fresh start DENIED — socket ${socket.id} not authorized (isAdmin=${socket.data.isAdmin})`);
