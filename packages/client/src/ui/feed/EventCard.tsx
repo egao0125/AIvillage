@@ -3,6 +3,7 @@ import type { VillageEvent } from './types';
 import type { ChatEntry } from '../../core/GameStore';
 import { ConversationExpander } from './ConversationExpander';
 import { ReactionsExpander, getReactionCount } from './ReactionsExpander';
+import { ConsequencesExpander } from './ConsequencesExpander';
 import { gameStore } from '../../core/GameStore';
 import { FONTS } from '../styles';
 import { useTheme } from '../ThemeContext';
@@ -105,6 +106,22 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         {displayText}
       </div>
 
+      {/* Structured rule fields — always visible for rule events */}
+      {event.type === 'rule' && (event.sourceData as any)?.ruleAppliesTo && (
+        <div style={{ marginTop: 6, fontSize: '11px', fontFamily: FONTS.body, lineHeight: '1.5' }}>
+          {(event.sourceData as any).ruleAppliesTo && (
+            <div><span style={{ color: '#fbbf24', fontWeight: 'bold' }}>Applies to:</span>{' '}
+              <span style={{ color: colors.textDim }}>{(event.sourceData as any).ruleAppliesTo}</span>
+            </div>
+          )}
+          {(event.sourceData as any).ruleConsequence && (
+            <div><span style={{ color: '#ef4444', fontWeight: 'bold' }}>Consequence:</span>{' '}
+              <span style={{ color: colors.textDim }}>{(event.sourceData as any).ruleConsequence}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Footer: day + reaction count hint when collapsed */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
         <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: colors.textDim, letterSpacing: 0.5 }}>
@@ -117,7 +134,8 @@ export const EventCard: React.FC<EventCardProps> = ({ event, chatLog }) => {
         )}
       </div>
 
-      {/* Reactions — shown when card is expanded */}
+      {/* Details & reactions — shown when card is expanded */}
+      {expanded && <ConsequencesExpander event={event} />}
       {expanded && reactionCount > 0 && <ReactionsExpander event={event} />}
 
       {/* Conversation expander */}

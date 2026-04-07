@@ -165,7 +165,19 @@ export const OverlayPanel: React.FC<OverlayPanelProps> = ({ onAddAgent }) => {
                           lineHeight: 1.4,
                         }}
                       >
-                        <span style={{ color: colors.text }}>{rule.content}</span>
+                        <span style={{ color: colors.text }}>{rule.ruleAction || rule.content}</span>
+                        {rule.ruleAppliesTo && (
+                          <div style={{ fontSize: '10px', marginTop: 3 }}>
+                            <span style={{ color: '#fbbf24' }}>Applies to:</span>{' '}
+                            <span style={{ color: colors.textDim }}>{rule.ruleAppliesTo}</span>
+                          </div>
+                        )}
+                        {rule.ruleConsequence && (
+                          <div style={{ fontSize: '10px' }}>
+                            <span style={{ color: '#ef4444' }}>Consequence:</span>{' '}
+                            <span style={{ color: colors.textDim }}>{rule.ruleConsequence}</span>
+                          </div>
+                        )}
                         <div style={{ fontSize: '10px', color: colors.textDim, marginTop: 2 }}>
                           by {rule.authorName} — Day {rule.day}
                         </div>

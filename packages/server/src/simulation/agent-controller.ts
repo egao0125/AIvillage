@@ -4278,18 +4278,21 @@ Write ONLY the rule in the format above. Stay in character.`;
           rulePrompt,
         );
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
-        if (ruleContent.length < 3 || ruleContent.length > 500) {
-          console.warn(`[ProposeRule] ${this.agent.config.name} content length out of range (${ruleContent.length}), using reason`);
-          ruleContent = this.truncateAtSentence(decision.reason, 200);
-        }
 
-        // Parse structured rule fields
+        // Parse structured rule fields FIRST — the format overhead (RULE:/APPLIES TO:/CONSEQUENCE:)
+        // can push total length past 500 even when the rule itself is fine.
         const ruleMatch = ruleContent.match(/RULE:\s*(.+?)(?=\nAPPLIES TO:)/is);
         const appliesMatch = ruleContent.match(/APPLIES TO:\s*(.+?)(?=\nCONSEQUENCE:)/is);
         const conseqMatch = ruleContent.match(/CONSEQUENCE:\s*(.+?)$/is);
-        ruleAction = ruleMatch?.[1]?.trim();
+        ruleAction = ruleMatch?.[1]?.trim().slice(0, 250);
         ruleAppliesTo = appliesMatch?.[1]?.trim() || 'Everyone';
         ruleConsequence = conseqMatch?.[1]?.trim() || 'Reputation loss';
+
+        // Only fall back to reason if structured parsing failed AND content is bad
+        if (!ruleAction && (ruleContent.length < 3 || ruleContent.length > 500)) {
+          console.warn(`[ProposeRule] ${this.agent.config.name} unstructured content length out of range (${ruleContent.length}), using reason`);
+          ruleContent = this.truncateAtSentence(decision.reason, 200);
+        }
       } catch (err) {
         console.error(`[ProposeRule] ${this.agent.config.name} LLM call failed:`, err);
         ruleContent = this.truncateAtSentence(decision.reason, 200);

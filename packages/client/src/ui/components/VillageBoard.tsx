@@ -79,8 +79,20 @@ export const VillageBoard: React.FC = () => {
                 </span>
               </div>
               <div style={{ color: colors.text, lineHeight: '1.6' }}>
-                {post.content}
+                {post.ruleAction || post.content}
               </div>
+              {post.type === 'rule' && post.ruleAppliesTo && (
+                <div style={{ marginTop: 4, fontSize: '11px', lineHeight: '1.4' }}>
+                  <div><span style={{ color: '#fbbf24', fontWeight: 'bold' }}>Applies to:</span>{' '}
+                    <span style={{ color: colors.textDim }}>{post.ruleAppliesTo}</span>
+                  </div>
+                  {post.ruleConsequence && (
+                    <div><span style={{ color: '#ef4444', fontWeight: 'bold' }}>Consequence:</span>{' '}
+                      <span style={{ color: colors.textDim }}>{post.ruleConsequence}</span>
+                    </div>
+                  )}
+                </div>
+              )}
               <div
                 style={{
                   color: colors.textDim,
