@@ -840,6 +840,17 @@ export class SimulationEngine {
         this.controllers.set(agent.id, controller);
       }
 
+      // --- One-shot resurrection via env var (set, deploy, then remove) ---
+      if (process.env.RESURRECT_AGENTS) {
+        const names = process.env.RESURRECT_AGENTS.split(',').map(n => n.trim().toLowerCase());
+        for (const agent of this.world.agents.values()) {
+          if (agent.alive === false && names.includes(agent.config.name.toLowerCase())) {
+            console.log(`[Engine] Resurrecting ${agent.config.name} via RESURRECT_AGENTS env var`);
+            void this.resurrectAgent(agent.id);
+          }
+        }
+      }
+
       // --- Data cleanup: fix corrupted commitments, concerns, and institution spam ---
       const currentDay = this.world.time.day;
       for (const agent of agents) {
