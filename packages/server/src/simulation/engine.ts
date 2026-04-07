@@ -843,10 +843,14 @@ export class SimulationEngine {
       // --- One-shot resurrection via env var (set, deploy, then remove) ---
       if (process.env.RESURRECT_AGENTS) {
         const names = process.env.RESURRECT_AGENTS.split(',').map(n => n.trim().toLowerCase());
+        console.log(`[Engine] RESURRECT_AGENTS env set — looking for: ${names.join(', ')}`);
         for (const agent of this.world.agents.values()) {
-          if (agent.alive === false && names.includes(agent.config.name.toLowerCase())) {
-            console.log(`[Engine] Resurrecting ${agent.config.name} via RESURRECT_AGENTS env var`);
-            void this.resurrectAgent(agent.id);
+          if (names.includes(agent.config.name.toLowerCase())) {
+            console.log(`[Engine] Found ${agent.config.name}: alive=${agent.alive}, state=${agent.state}`);
+            if (agent.alive === false || agent.state === 'dead') {
+              console.log(`[Engine] Resurrecting ${agent.config.name} via RESURRECT_AGENTS env var`);
+              void this.resurrectAgent(agent.id);
+            }
           }
         }
       }
