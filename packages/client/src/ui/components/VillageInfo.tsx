@@ -74,7 +74,21 @@ export const VillageInfo: React.FC = () => {
                     lineHeight: 1.4,
                   }}
                 >
-                  <span style={{ color: colors.text }}>{rule.content}</span>
+                  <span style={{ color: colors.text }}>{rule.ruleAction || rule.content}</span>
+                  {(rule.ruleAppliesTo || rule.ruleConsequence) && (
+                    <div style={{ marginTop: 3, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {rule.ruleAppliesTo && (
+                        <div style={{ fontSize: '10px', color: colors.textDim }}>
+                          <span style={{ color: '#fbbf24' }}>Applies to:</span> {rule.ruleAppliesTo}
+                        </div>
+                      )}
+                      {rule.ruleConsequence && (
+                        <div style={{ fontSize: '10px', color: colors.textDim }}>
+                          <span style={{ color: '#ef4444' }}>Consequence:</span> {rule.ruleConsequence}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ fontSize: '10px', color: colors.textDim, marginTop: 2 }}>
                     by {rule.authorName} — Day {rule.day}
                   </div>

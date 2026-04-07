@@ -111,6 +111,10 @@ export interface Agent {
   // Per-agent scalarization weights — turn same reward vector into different personalities.
   // Farmer weights resources+goalProgress; politician weights social; survivor weights hp.
   rewardWeights?: RewardVector;
+  // Goal affinity map: action-type prefix → affinity [-0.3, +0.5].
+  // Generated at spawn from config.goal via cheap LLM call. Used by goalProgress axis
+  // so that a farmer's gather_wheat scores higher than a politician's gather_wheat.
+  goalAffinities?: Record<string, number>;
 
   // --- Strategy Tracking ---
   strategyHistory?: StrategySnapshot[];

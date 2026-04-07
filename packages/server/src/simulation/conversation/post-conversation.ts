@@ -3,7 +3,7 @@ import { AgentCognition } from '@ai-village/ai-engine';
 import { AREA_DESCRIPTIONS } from '../../map/starting-knowledge.js';
 import type { World } from '../world.js';
 import type { EventBroadcaster } from '../events.js';
-import { findAgentByName, classifyAgreementType, classifyCommitmentWeight, extractItemsPromised } from './helpers.js';
+import { findAgentByName, classifyAgreementType, classifyCommitmentWeight, extractItemsPromised, rewriteVagueTime } from './helpers.js';
 
 const MAX_COMMITMENT_WEIGHT = 15;
 
@@ -104,7 +104,10 @@ export class PostConversationProcessor {
       }
 
       // --- 2. Agreements → memories + social ledger entries (max 2) ---
-      for (const agreement of result.agreements.slice(0, 2)) {
+      for (let agreement of result.agreements.slice(0, 2)) {
+        // Rewrite vague time references ("at dawn" → "on Day 5, hour 7") before processing
+        agreement = rewriteVagueTime(agreement, this.world.time.day, this.world.time.hour);
+
         // Memory for this participant
         try {
           await cognition.addLinkedMemory({
@@ -146,17 +149,21 @@ export class PostConversationProcessor {
         const now = this.world.time.totalMinutes;
         const day = this.world.time.day;
 
-        if (entryType === 'promise' || entryType === 'task') {
-          // NEW: Create weighted Commitment
+        if (entryType === 'promise' || entryType === 'task' || entryType === 'meeting') {
+          // Create weighted Commitment — meetings are lightweight (weight 1)
           const isPublic = conversation.participants.length > 2;
-          // Parse weight prefix from LLM if present, else keyword classify
           let weight: 1 | 3 | 5;
-          const prefixMatch = agreement.match(/^\[(CASUAL|PROMISE|OATH)\]\s*/i);
-          if (prefixMatch) {
-            const tag = prefixMatch[1].toUpperCase();
-            weight = tag === 'OATH' ? 5 : tag === 'CASUAL' ? 1 : 3;
+          if (entryType === 'meeting') {
+            weight = 1; // meetings are casual commitments — expire same day
           } else {
-            weight = classifyCommitmentWeight(agreement, isPublic, isPublic);
+            // Parse weight prefix from LLM if present, else keyword classify
+            const prefixMatch = agreement.match(/^\[(CASUAL|PROMISE|OATH)\]\s*/i);
+            if (prefixMatch) {
+              const tag = prefixMatch[1].toUpperCase();
+              weight = tag === 'OATH' ? 5 : tag === 'CASUAL' ? 1 : 3;
+            } else {
+              weight = classifyCommitmentWeight(agreement, isPublic, isPublic);
+            }
           }
           const items = extractItemsPromised(agreement);
           const cleanAgreement = agreement.replace(/^\[(CASUAL|PROMISE|OATH)\]\s*/i, '');
@@ -189,8 +196,8 @@ export class PostConversationProcessor {
             }
           }
         } else {
-          // Keep social ledger for trades, meetings, alliances, rules
-          const expiresAt = entryType === 'meeting' ? now + 480 : now + 1440;
+          // Keep social ledger for trades, alliances, rules
+          const expiresAt = now + 1440;
           const thisEntry: SocialLedgerEntry = {
             id: crypto.randomUUID(),
             type: entryType,

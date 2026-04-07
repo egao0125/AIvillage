@@ -63,8 +63,23 @@ export const RulesPanel: React.FC = () => {
                     marginBottom: 6,
                   }}
                 >
-                  {rule.content}
+                  {rule.ruleAction || rule.content}
                 </div>
+
+                {(rule.ruleAppliesTo || rule.ruleConsequence) && (
+                  <div style={{ marginBottom: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {rule.ruleAppliesTo && (
+                      <div style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim }}>
+                        <span style={{ color: colors.accent }}>Applies to:</span> {rule.ruleAppliesTo}
+                      </div>
+                    )}
+                    {rule.ruleConsequence && (
+                      <div style={{ fontFamily: FONTS.body, fontSize: 10, color: colors.textDim }}>
+                        <span style={{ color: colors.warning }}>Consequence:</span> {rule.ruleConsequence}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span

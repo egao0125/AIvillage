@@ -100,6 +100,35 @@ export function extractItemsPromised(agreement: string): string[] {
   return items;
 }
 
+/**
+ * Rewrite vague time references ("at dawn", "tomorrow", "this evening") into
+ * concrete game-time format ("Day N, hour H"). Prevents agents from making
+ * commitments the system can't track or enforce.
+ */
+export function rewriteVagueTime(text: string, currentDay: number, currentHour: number): string {
+  const tomorrow = currentDay + 1;
+  const replacements: [RegExp, string][] = [
+    [/\bat dawn\b/gi,            `on Day ${currentHour < 7 ? currentDay : tomorrow}, hour 7`],
+    [/\bat sunrise\b/gi,         `on Day ${currentHour < 6 ? currentDay : tomorrow}, hour 6`],
+    [/\b(this |in the )?morning\b/gi, `on Day ${currentHour < 10 ? currentDay : tomorrow}, hour 9`],
+    [/\bat noon\b/gi,            `on Day ${currentHour < 12 ? currentDay : tomorrow}, hour 12`],
+    [/\b(this |in the )?afternoon\b/gi, `on Day ${currentHour < 16 ? currentDay : tomorrow}, hour 14`],
+    [/\b(this |in the )?evening\b/gi, `on Day ${currentHour < 20 ? currentDay : tomorrow}, hour 19`],
+    [/\bat dusk\b/gi,            `on Day ${currentHour < 19 ? currentDay : tomorrow}, hour 19`],
+    [/\bat sunset\b/gi,          `on Day ${currentHour < 19 ? currentDay : tomorrow}, hour 19`],
+    [/\btonight\b/gi,            `on Day ${currentDay}, hour 21`],
+    [/\btomorrow\b/gi,           `on Day ${tomorrow}`],
+    [/\blater today\b/gi,        `on Day ${currentDay}, hour ${Math.min(23, currentHour + 2)}`],
+    [/\bsoon\b/gi,               `on Day ${currentDay}, hour ${Math.min(23, currentHour + 1)}`],
+    [/\bnext time we meet\b/gi,  `when we next meet`], // keep as-is, no fake time
+  ];
+  let result = text;
+  for (const [pattern, replacement] of replacements) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
 export function buildInstitutionContext(world: World, agentId: string): string {
   const institutions = Array.from(world.institutions.values()).filter(i => !i.dissolved);
   if (institutions.length === 0) return '';

@@ -694,23 +694,6 @@ If nothing notable was exchanged, return []`;
       parts.push(`\nRULES YOU MUST FOLLOW (these define your nature):\n${ruleLines}`);
     }
 
-    // Personality bias hints (C2 fix: phrased as tendencies the agent has noticed
-    // about themselves, not as imperatives. Prior phrasing — "You read threat" —
-    // functioned as an LLM instruction every turn, locking personality in. These
-    // leave room for situational override and self-contradiction.)
-    const p = config.personality;
-    const biases: string[] = [];
-    if (p.neuroticism > 0.7) biases.push('People have told you that you read threat into neutral actions — you\'re not sure they\'re always right.');
-    if (p.neuroticism < 0.3) biases.push('You tend to give people the benefit of the doubt, even when others wouldn\'t.');
-    if (p.agreeableness < 0.3) biases.push('You usually assume others are looking out for themselves — though you\'ve been wrong before.');
-    if (p.agreeableness > 0.7) biases.push('You\'ve noticed you trust easily — maybe too easily.');
-    if (p.openness > 0.7) biases.push('You notice yourself drawn to novelty and unusual solutions.');
-    if (p.extraversion > 0.7) biases.push('You tend to feel more alive around people.');
-    if (p.extraversion < 0.3) biases.push('You tend to prefer solitude — though you can surprise yourself.');
-    if (biases.length > 0) {
-      parts.push(`\nYOUR TENDENCIES:\n${biases.join(' ')}`);
-    }
-
     // Evolved identity — top 3 beliefs learned from experience (max 200 chars)
     if (this.fourStream) {
       const topBeliefs = this.fourStream.getTopBeliefs?.(3) ?? [];

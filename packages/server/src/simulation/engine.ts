@@ -1,6 +1,6 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
-import { EventBus, deriveRewardWeights } from '@ai-village/shared';
+import { EventBus, deriveRewardWeights, DEFAULT_REWARD_WEIGHTS } from '@ai-village/shared';
 import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, VoyageEmbeddingProvider, OpenAIEmbeddingProvider, SEASONS, getMapConfig, buildWerewolfRules } from '@ai-village/ai-engine';
 import type { EmbeddingProvider } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
@@ -752,10 +752,15 @@ export class SimulationEngine {
         const agent = agents[i];
         // Backwards compat: tag agents loaded before map_id migration
         if (!agent.mapId) agent.mapId = mapId;
-        // Backfill personality-derived reward weights for agents created before this feature
-        if (!agent.rewardWeights && agent.config.personality) {
-          agent.rewardWeights = deriveRewardWeights(agent.config.personality);
-          agent.normWeight = agent.normWeight ?? (0.3 + agent.config.personality.agreeableness * 0.6);
+        // Set defaults for agents without reward weights, then derive from soul.
+        if (!agent.rewardWeights) {
+          agent.rewardWeights = { ...DEFAULT_REWARD_WEIGHTS };
+          agent.normWeight = agent.normWeight ?? 0.5;
+        }
+        // Soul-derived weights override Big Five defaults for all agents with soul text.
+        // Fire-and-forget — agent starts with existing/default weights until LLM returns.
+        if (agent.config.soul || agent.config.backstory) {
+          void this.generateSoulWeights(agent);
         }
         this.world.addAgent(agent);
 
@@ -1015,10 +1020,9 @@ export class SimulationEngine {
     agent.dossiers = [];
     agent.institutionIds = [];
 
-    // Derive personality-based reward weights + norm sensitivity from Big Five traits.
-    // Each agent now optimizes for different things based on who they are.
-    agent.rewardWeights = deriveRewardWeights(config.personality);
-    agent.normWeight = 0.3 + config.personality.agreeableness * 0.6; // 0.3..0.9
+    // Sensible defaults — overwritten by generateSoulWeights() once the LLM call returns.
+    agent.rewardWeights = { ...DEFAULT_REWARD_WEIGHTS };
+    agent.normWeight = 0.5;
 
     this.world.addAgent(agent);
 
@@ -1116,6 +1120,10 @@ export class SimulationEngine {
     // saveAllFireAndForget keeps worldStateVersion in sync so the next periodic save
     // does not trigger a spurious VersionConflictError.
     this.saveAllFireAndForget('addAgent', seedMemories);
+
+    // Fire-and-forget: derive reward weights, norm sensitivity, and goal affinities
+    // from soul text via cheap LLM. Agent runs with defaults until this completes.
+    void this.generateSoulWeights(agent);
 
     this.refreshNameMaps();
     return agent;
@@ -1432,6 +1440,9 @@ export class SimulationEngine {
     }
 
     console.log(`[Engine] Agent resurrected: ${agent.config.name}`);
+
+    // Re-derive soul weights on resurrection (fresh start)
+    void this.generateSoulWeights(agent);
 
     this.refreshNameMaps();
 
@@ -2242,32 +2253,29 @@ export class SimulationEngine {
       }
 
       try {
-        // Build rich voting context
-        // 1. Dossier on proposer
-        let proposerContext = '';
-        const dossier = cognition.fourStream?.getDossier?.(rulePost.authorId);
-        if (dossier) {
-          proposerContext = `\nYour relationship with ${proposerName}: ${dossier.summary.slice(0, 100)}. Trust: ${dossier.trust}.`;
+        // Build full working memory so voters can recall relevant experiences
+        let memoryCtx = '';
+        if (cognition.fourStream) {
+          const wm = cognition.fourStream.buildWorkingMemory(
+            undefined, undefined, undefined, 'plan',
+            `rule vote ${proposerName} ${rulePost.content.slice(0, 80)}`,
+          );
+          const sections: string[] = [];
+          if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
+          if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+          if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+          if (wm.learnedStrategies) sections.push('LESSONS LEARNED:\n' + wm.learnedStrategies);
+          if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+          if (sections.length > 0) memoryCtx = '\n\n' + sections.join('\n\n');
         }
 
-        // 2. Proposer reputation
-        let repContext = '';
-        const repEntry = this.world.reputation?.find(
-          r => r.toAgentId === rulePost.authorId && r.fromAgentId === 'system'
-        );
-        if (repEntry) {
-          repContext = ` Their public reputation: ${repEntry.score}.`;
-        }
-
-        // 3. Existing passed rules
+        // Village context
         const passedRules = this.world.getActiveBoard()
           .filter(p => p.type === 'rule' && p.ruleStatus === 'passed')
           .map(p => p.content.slice(0, 50));
         const existingRulesCtx = passedRules.length > 0
           ? `\nExisting village rules: ${passedRules.join('; ')}`
           : '\nNo village rules exist yet.';
-
-        // 4. Village state
         const aliveCount = Array.from(this.world.agents.values())
           .filter(a => a.alive !== false).length;
         const deadCount = Array.from(this.world.agents.values())
@@ -2276,34 +2284,24 @@ export class SimulationEngine {
         const seasons = ['spring', 'summer', 'autumn', 'winter'];
         const villageCtx = `\nVillage: Day ${this.world.time.day}, ${seasons[seasonIdx]}. ${aliveCount} alive, ${deadCount} dead.`;
 
-        // 5. Beliefs
-        let beliefCtx = '';
-        const beliefs = cognition.fourStream?.getTopBeliefs?.(3) ?? [];
-        if (beliefs.length > 0) {
-          beliefCtx = `\nYour beliefs: ${beliefs.map(b => b.content?.slice(0, 40)).join('; ')}`;
-        }
-
-        // 6. Commitment to vote a certain way?
-        let commitmentCtx = '';
-        const concerns = cognition.fourStream?.getAllConcerns?.() ?? [];
-        const voteConcern = concerns.find(c =>
-          c.content.toLowerCase().includes('vote') &&
-          (c.content.toLowerCase().includes(proposerName.toLowerCase()) ||
-           c.content.toLowerCase().includes(rulePost.content.slice(0, 20).toLowerCase()))
+        // Proposer reputation
+        let repContext = '';
+        const repEntry = this.world.reputation?.find(
+          r => r.toAgentId === rulePost.authorId && r.fromAgentId === 'system'
         );
-        if (voteConcern) {
-          commitmentCtx = `\nYou previously committed: "${voteConcern.content.slice(0, 60)}"`;
+        if (repEntry) {
+          repContext = `\n${proposerName}'s public reputation: ${repEntry.score}.`;
         }
 
         const result = await cognition.llmProvider.complete(
           `You are ${agent.config.name}. Answer with ONLY "support" or "oppose". Nothing else.`,
-          `${cognition.identityBlock}
+          `${cognition.identityBlock}${memoryCtx}
 ${villageCtx}${existingRulesCtx}
 ${proposerName} proposed a new village rule:
 "${rulePost.content}"
-${proposerContext}${repContext}${beliefCtx}${commitmentCtx}
+${repContext}
 
-Consider: is it aligned with the community you want to build? Does it address a real problem? Do you trust the person proposing it?
+Vote based on YOUR experiences, relationships, and beliefs — not abstract principles. Has this rule's subject affected you personally? Do you trust ${proposerName}? Would this rule help or hurt you and people you care about?
 Answer with ONLY one word: "support" or "oppose".`,
         );
 
@@ -2367,9 +2365,15 @@ Answer with ONLY one word: "support" or "oppose".`,
       }
 
       // Add permanent concern to ALL agents (rule or claim)
-      const concernContent = rulePost.claimTarget
-        ? `Property: ${rulePost.content}`
-        : `Village rule: ${rulePost.content}`;
+      // Include structured fields so agents see the full rule (who + consequence)
+      let concernContent: string;
+      if (rulePost.claimTarget) {
+        concernContent = `Property: ${rulePost.content}`;
+      } else if (rulePost.ruleAction && rulePost.ruleConsequence) {
+        concernContent = `Village rule: ${rulePost.ruleAction}\nApplies to: ${rulePost.ruleAppliesTo || 'Everyone'}\nConsequence: ${rulePost.ruleConsequence}`;
+      } else {
+        concernContent = `Village rule: ${rulePost.content}`;
+      }
       for (const [id, agent] of this.world.agents) {
         if (agent.alive === false) continue;
         const cog = this.cognitions.get(id);
@@ -2654,6 +2658,102 @@ Answer with ONLY one word: "support" or "oppose".`,
     fourStream.seedIdentity(agent.config);
     fourStream.setCurrentDay(this.world.time.day);
     cognition.fourStream = fourStream;
+  }
+
+  /**
+   * One-shot cheap LLM call to derive reward weights, norm sensitivity, and goal
+   * affinities from the agent's soul text + goal. Replaces Big Five personality-based
+   * derivation so the reward system aligns with the character the LLM actually plays.
+   *
+   * Three outputs stored on agent:
+   *   - rewardWeights: 7-axis weights (sum to 1.0)
+   *   - normWeight: 0.1..0.9 scalar
+   *   - goalAffinities: action-type → [-0.3, +0.5] affinity map
+   *
+   * Fire-and-forget — agent runs with DEFAULT_REWARD_WEIGHTS until this completes.
+   */
+  private async generateSoulWeights(agent: Agent): Promise<void> {
+    const soul = agent.config.soul || agent.config.backstory || '';
+    if (!soul) return;
+    const keyInfo = this.agentApiKeys.get(agent.id);
+    if (!keyInfo?.apiKey) return;
+    const cheapLlm = this.getThrottledProvider(keyInfo.apiKey, SimulationEngine.CHEAP_LLM_MODEL);
+    try {
+      const actionTypes = [
+        'gather', 'craft', 'trade', 'give', 'eat', 'rest', 'go',
+        'talk', 'ally', 'betray', 'threaten', 'confront', 'steal', 'fight',
+        'propose_rule', 'propose_group_rule', 'post_board', 'call_meeting',
+        'claim', 'accuse', 'kick',
+      ];
+      const goal = agent.config.goal || '';
+      const result = await cheapLlm.complete(
+        `You are a game designer calibrating an AI village agent's reward system based on their character description. Output ONLY valid JSON with exactly these 3 keys:
+
+1. "rewardWeights": object with keys hp, resources, social, goalProgress, exploration, normDeviation, villageImpact. Values 0.02-0.40, MUST sum to 1.0. Assign based on what THIS character would optimize for:
+   - hp: survival, safety, health (high for cautious/anxious characters)
+   - resources: material wealth, items, skills (high for acquisitive/industrious characters)
+   - social: relationships, reputation, trust (high for social/political characters)
+   - goalProgress: advancing their stated goal (high for driven/focused characters)
+   - exploration: novelty, discovery (high for curious/adventurous characters)
+   - normDeviation: conforming to village rules (high for rule-followers, LOW for rebels/criminals)
+   - villageImpact: helping the commons (high for altruistic characters, low for selfish ones)
+
+2. "normWeight": single number 0.1-0.9. How much this character cares about social norms. 0.1 = rebel/outcast who ignores rules. 0.9 = conformist who follows every rule.
+
+3. "goalAffinities": object mapping action types to numbers -0.3 to 0.5. How well each action advances their goal. Omit actions with ~0 affinity.`,
+        `Character: ${agent.config.name} (${agent.config.occupation || 'villager'})\n\nSoul:\n${soul.slice(0, 600)}\n\nGoal: "${goal}"\n\nAction types for goalAffinities: ${actionTypes.join(', ')}\n\nReturn the JSON:`
+      );
+
+      // Extract the outermost JSON object (may contain nested objects)
+      const jsonStart = result.indexOf('{');
+      const jsonEnd = result.lastIndexOf('}');
+      if (jsonStart === -1 || jsonEnd === -1) return;
+      const parsed = JSON.parse(result.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>;
+
+      // --- rewardWeights ---
+      const rawWeights = parsed.rewardWeights as Record<string, unknown> | undefined;
+      if (rawWeights && typeof rawWeights === 'object') {
+        const axes = ['hp', 'resources', 'social', 'goalProgress', 'exploration', 'normDeviation', 'villageImpact'];
+        const floored: Record<string, number> = {};
+        for (const axis of axes) {
+          const v = rawWeights[axis];
+          floored[axis] = typeof v === 'number' ? Math.max(0.02, Math.min(0.40, v)) : 0.14;
+        }
+        // Normalize to sum = 1.0
+        const sum = Object.values(floored).reduce((s, v) => s + v, 0);
+        const norm = (k: string) => Math.round((floored[k] / sum) * 1000) / 1000;
+        agent.rewardWeights = {
+          hp: norm('hp'), resources: norm('resources'), social: norm('social'),
+          goalProgress: norm('goalProgress'), exploration: norm('exploration'),
+          normDeviation: norm('normDeviation'), villageImpact: norm('villageImpact'),
+        };
+        console.log(`[Engine] Soul weights for ${agent.config.name}: ${JSON.stringify(agent.rewardWeights)}`);
+      }
+
+      // --- normWeight ---
+      const rawNorm = parsed.normWeight;
+      if (typeof rawNorm === 'number') {
+        agent.normWeight = Math.max(0.1, Math.min(0.9, Math.round(rawNorm * 100) / 100));
+        console.log(`[Engine] Soul normWeight for ${agent.config.name}: ${agent.normWeight}`);
+      }
+
+      // --- goalAffinities ---
+      const rawAffinities = parsed.goalAffinities as Record<string, unknown> | undefined;
+      if (rawAffinities && typeof rawAffinities === 'object') {
+        const affinities: Record<string, number> = {};
+        for (const [key, val] of Object.entries(rawAffinities)) {
+          if (typeof val === 'number' && val >= -0.3 && val <= 0.5 && actionTypes.includes(key)) {
+            affinities[key] = Math.round(val * 100) / 100;
+          }
+        }
+        if (Object.keys(affinities).length > 0) {
+          agent.goalAffinities = affinities;
+          console.log(`[Engine] Soul affinities for ${agent.config.name}: ${JSON.stringify(affinities)}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Engine] Soul weight generation failed for ${agent.config.name}:`, (err as Error).message);
+    }
   }
 
   private createActionExecutor() {

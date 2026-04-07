@@ -1188,7 +1188,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     // --- CONCERNS (budget from profile) ---
     // Sorted by category weight × decay
     const PREFIX: Record<string, string> = {
-      rule: '⚠ RULE: ', threat: '⚠ ',
+      rule: '⚠ ', threat: '⚠ ',
       commitment: '', need: '', goal: '', unresolved: '',
     };
     const scoredConcerns = this.getAllConcerns()
@@ -1203,7 +1203,9 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     const cLines: string[] = [];
     for (const { c } of scoredConcernsTrimmed) {
       const p = PREFIX[c.category] ?? '';
-      const t = c.content.length > 100 ? c.content.slice(0, 97) + '...' : c.content;
+      // Rules with structured fields (APPLIES TO / CONSEQUENCE) need more room
+      const maxLen = c.category === 'rule' ? 250 : 100;
+      const t = c.content.length > maxLen ? c.content.slice(0, maxLen - 3) + '...' : c.content;
       const line = `- ${p}${t}`;
       if (cBudget - line.length < 0 && cLines.length >= 3) break;
       cLines.push(line);

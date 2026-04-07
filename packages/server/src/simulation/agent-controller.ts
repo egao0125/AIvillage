@@ -280,13 +280,17 @@ export class AgentController {
     // whether the agent personally benefited.
     const villageImpact = this.world.computeVillageImpact(actionType, !!outcome.success);
 
-    // goalProgress axis: hard to measure per-action without explicit goal tracking.
-    // Heuristic: success + resource gain is directional progress, failure is setback.
-    // Also diminishing — grinding the same action doesn't compound goal progress.
-    const rawGoal = outcome.success
-      ? Math.min(0.3, itemsGainedCount * 0.1)
-      : -0.1;
-    const goalProgress = rawGoal > 0 ? rawGoal * diminishing : rawGoal;
+    // goalProgress axis: goal-aware via affinity map. Agents with goalAffinities get
+    // a per-action bonus/penalty based on how well the action type aligns with their goal.
+    // Fallback to generic heuristic if affinities not yet generated.
+    const affinity = this.getGoalAffinity(actionType);
+    const baseGoal = outcome.success
+      ? Math.min(0.2, itemsGainedCount * 0.08)
+      : -0.05;
+    const rawGoal = baseGoal + affinity; // affinity shifts the baseline [-0.3, +0.5]
+    const goalProgress = Math.max(-1, Math.min(1,
+      rawGoal > 0 ? rawGoal * diminishing : rawGoal
+    ));
 
     // exploration axis: novelty of action type. New action type = positive signal.
     // Suppresses rut behavior — gathering wheat for the 30th time gives no novelty.
@@ -296,6 +300,20 @@ export class AgentController {
     const exploration = Math.max(-0.2, 0.3 - sameTypeCount * 0.03);
 
     return { hp, resources, social, goalProgress, exploration, normDeviation, villageImpact };
+  }
+
+  /**
+   * Look up goal affinity for an action type. Prefix-matches against goalAffinities map.
+   * Returns 0 if no affinities exist (graceful fallback to generic scoring).
+   */
+  private getGoalAffinity(actionType: string): number {
+    const affinities = this.agent.goalAffinities;
+    if (!affinities) return 0;
+    // Exact match first, then prefix match (e.g., "gather_wheat" → "gather")
+    if (affinities[actionType] !== undefined) return affinities[actionType];
+    const prefix = actionType.split('_')[0];
+    if (prefix && affinities[prefix] !== undefined) return affinities[prefix];
+    return 0;
   }
 
   /**
@@ -3370,7 +3388,7 @@ State your vote and explain your reasoning.`;
         day: this.world.time.day,
         significance: 7,
         actorId: this.agent.id,
-        actionType: 'theft',
+        actionType: 'steal',
         witnessIds: theftWitnesses,
         personalCost: 0.3,         // gained items
         villageBenefit: -0.5,      // trust erosion, fear, victim harm
@@ -3567,7 +3585,7 @@ State your vote and explain your reasoning.`;
         day: this.world.time.day,
         significance: 8,
         actorId: this.agent.id,
-        actionType: 'violence',
+        actionType: 'fight',
         witnessIds: witnesses.map(w => w.id),
         personalCost: -0.2,        // took damage
         villageBenefit: -0.8,      // victim harm, fear, precedent
@@ -3851,7 +3869,7 @@ State your vote and explain your reasoning.`;
         day: this.world.time.day,
         significance: 7,
         actorId: this.agent.id,
-        actionType: 'betrayal',
+        actionType: 'betray',
         witnessIds: group.members.filter(m => m.agentId !== this.agent.id).map(m => m.agentId),
         personalCost: 0.1,
         villageBenefit: -0.4,
@@ -4227,13 +4245,26 @@ Examples of good posts: "Looking for someone to trade wheat for fish." / "Meetin
       let ruleConsequence: string | undefined;
       try {
         const identity = this.cognition.identityBlock;
-        const rulePrompt = `${identity}
+        // Inject working memory so the agent can reference lived experience when proposing
+        let memoryCtx = '';
+        if (this.cognition.fourStream) {
+          const wm = this.cognition.fourStream.buildWorkingMemory(
+            undefined, undefined, undefined, 'plan', `propose rule ${decision.reason}`,
+          );
+          const sections: string[] = [];
+          if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
+          if (wm.dossiers) sections.push('PEOPLE YOU KNOW:\n' + wm.dossiers);
+          if (wm.beliefs) sections.push('WHAT YOU BELIEVE:\n' + wm.beliefs);
+          if (wm.timeline) sections.push('RECENT EVENTS:\n' + wm.timeline);
+          if (sections.length > 0) memoryCtx = '\n\n' + sections.join('\n\n');
+        }
+        const rulePrompt = `${identity}${memoryCtx}
 
 You decided to propose a rule for the village.
 
 Your reason: ${decision.reason}
 
-Write a rule that other villagers will vote on. The rule MUST follow this exact format:
+Write a rule grounded in your actual experiences and concerns — reference what happened to you or what you witnessed. The rule MUST follow this exact format:
 
 RULE: [What specific action is required or prohibited]
 APPLIES TO: [Who — everyone, property owners, group members, etc.]
@@ -4323,9 +4354,20 @@ Write ONLY the rule in the format above. Stay in character.`;
 
       let ruleContent: string;
       try {
+        // Inject working memory so group leaders reference lived experience
+        let memoryCtx = '';
+        if (this.cognition.fourStream) {
+          const wm = this.cognition.fourStream.buildWorkingMemory(
+            undefined, undefined, undefined, 'plan', `group rule ${group.name} ${decision.reason}`,
+          );
+          const sections: string[] = [];
+          if (wm.concerns) sections.push('ON YOUR MIND: ' + wm.concerns);
+          if (wm.beliefs) sections.push('BELIEFS: ' + wm.beliefs);
+          if (sections.length > 0) memoryCtx = '\n' + sections.join('\n');
+        }
         ruleContent = await this.cognition.llmProvider.complete(
           `Write only the rule. No preamble, no quotes. 1 sentence.`,
-          `${this.cognition.identityBlock}\n\nYou are setting a rule for ${group.name}. Reason: ${decision.reason}\n\nWrite the RULE that members must follow. Keep to 1 sentence.`
+          `${this.cognition.identityBlock}${memoryCtx}\n\nYou are setting a rule for ${group.name}. Reason: ${decision.reason}\n\nWrite the RULE that members must follow. Ground it in your experience. Keep to 1 sentence.`
         );
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
         if (ruleContent.length < 3 || ruleContent.length > 200) {
