@@ -75,6 +75,25 @@ export function buildWorldStateForResolver(world: World): ResolverWorldState {
   };
 }
 
+/** Detect if an agreement implies creating an institution/organization */
+export function isInstitutionFormingAgreement(content: string): boolean {
+  const lower = content.toLowerCase();
+  // "form a council", "create a guild", "establish the trade commission", etc.
+  return /\b(form|create|establish|found|start|build|organize|set up)\b.*\b(council|guild|group|organization|committee|society|order|faction|association|coalition|commission|collective|union|syndicate|brotherhood|sisterhood|assembly|league|team)\b/i.test(lower)
+    || /\b(council|guild|group|organization|committee|society|order|faction|association|coalition|commission|collective|union|syndicate|brotherhood|sisterhood|assembly|league|team)\b.*\b(form|create|establish|found|start|build|organize|set up)\b/i.test(lower);
+}
+
+/** Extract a name for the institution from agreement text */
+export function extractInstitutionName(content: string): string {
+  // Match "the Food Council", "a Traders Guild", etc.
+  const match = content.match(/(?:the|a|an|our|called|named)\s+([\w\s''-]+?(?:council|guild|group|organization|committee|society|order|faction|association|coalition|commission|collective|union|syndicate|brotherhood|sisterhood|assembly|league|team))/i);
+  if (match) return match[1].trim();
+  // Fallback: just grab any capitalized multi-word name before common org words
+  const fallback = content.match(/((?:[A-Z][\w''-]*\s*){1,4}(?:council|guild|group|organization|committee|society|order|faction|association|coalition|commission|collective|union|syndicate|brotherhood|sisterhood|assembly|league|team))/i);
+  if (fallback) return fallback[1].trim();
+  return 'New Organization';
+}
+
 /** Classify commitment weight from agreement text + context */
 export function classifyCommitmentWeight(
   agreement: string,

@@ -30,6 +30,8 @@ export const DevPanel: React.FC = () => {
   }, []);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
+    // Don't start drag when clicking interactive elements (buttons, inputs)
+    if ((e.target as HTMLElement).closest('button')) return;
     e.stopPropagation();
     e.preventDefault();
     dragging.current = true;

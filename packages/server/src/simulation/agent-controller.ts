@@ -2460,21 +2460,33 @@ State your vote and explain your reasoning.`;
       }).join('\n\n');
     }
 
-    // Build group info from Institution membership
+    // Build group info from Institution membership — prominent so agents act on it
     let groupInfo: string | undefined;
     const gId = this.agent.institutionIds?.[0];
     const grp = gId ? this.world.getInstitution(gId) : undefined;
     if (grp && !grp.dissolved) {
       const memberNames = grp.members
-        .map(m => this.world.getAgent(m.agentId)?.config.name ?? 'Unknown')
+        .map(m => {
+          const a = this.world.getAgent(m.agentId);
+          return a ? `${a.config.name} (${m.role})` : 'Unknown';
+        })
         .join(', ');
       const myRole = grp.members.find(m => m.agentId === this.agent.id)?.role ?? 'member';
-      groupInfo = `${grp.name} — you are the ${myRole.toUpperCase()}. Members: ${memberNames}.`;
-      if (myRole === 'founder' || myRole === 'leader') {
-        groupInfo += '\nAs leader you can: set group rules, kick members, and distribute resources.';
-      }
+      groupInfo = `You belong to "${grp.name}" as ${myRole.toUpperCase()}. Members: ${memberNames}.`;
       if (grp.description) groupInfo += `\nPurpose: ${grp.description}`;
-      if (grp.rules.length > 0) groupInfo += `\nRules: ${grp.rules.join('; ')}`;
+      if (grp.rules.length > 0) groupInfo += `\nGroup rules: ${grp.rules.join('; ')}`;
+      if (myRole === 'founder' || myRole === 'leader') {
+        groupInfo += '\nAs leader: set group rules, recruit members, manage treasury, and direct group activity.';
+      }
+      // Nudge the agent to coordinate with fellow members
+      const nearbyMembers = grp.members
+        .filter(m => m.agentId !== this.agent.id)
+        .map(m => this.world.getAgent(m.agentId))
+        .filter(a => a && a.alive !== false)
+        .map(a => a!.config.name);
+      if (nearbyMembers.length > 0) {
+        groupInfo += `\nConsider coordinating with your fellow members (${nearbyMembers.join(', ')}) toward your group's purpose.`;
+      }
     }
 
     // Build all agent locations for dossier display

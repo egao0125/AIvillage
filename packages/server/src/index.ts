@@ -420,42 +420,31 @@ io.on('connection', (socket) => {
   });
 
   // --- Dev tools (token-gated) ---
+  // Non-leader pods forward commands to the leader via serverSideEmit (Redis adapter).
   socket.on('dev:pause', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) {
-      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot pause' });
-      return;
-    }
+    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'pause' }); return; }
     engine.pause();
     io.emit('dev:status', { paused: !engine.isRunning });
   });
 
   socket.on('dev:resume', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) {
-      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot resume' });
-      return;
-    }
+    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'resume' }); return; }
     engine.start();
     io.emit('dev:status', { paused: !engine.isRunning });
   });
 
   socket.on('dev:step', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) {
-      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot step' });
-      return;
-    }
+    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'step' }); return; }
     engine.singleTick();
     io.emit('world:snapshot', engine.getSnapshot());
   });
 
   socket.on('dev:reset-vitals', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) {
-      socket.emit('dev:status', { paused: true, error: 'Not the leader Pod — cannot reset vitals' });
-      return;
-    }
+    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'reset-vitals' }); return; }
     const snapshot = engine.getSnapshot();
     for (const agent of snapshot.agents) {
       engine.resetAgentVitals(agent.id);
@@ -465,13 +454,10 @@ io.on('connection', (socket) => {
 
   socket.on('dev:resurrect-all', async (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) {
-      socket.emit('dev:resurrect-all:result', { error: 'Not the leader Pod' });
-      return;
-    }
+    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'resurrect-all' }); return; }
     const resurrected = await engine.resurrectAllAgents();
     io.emit('world:snapshot', engine.getSnapshot());
-    socket.emit('dev:resurrect-all:result', { resurrected });
+    io.emit('dev:resurrect-all:result', { resurrected });
     console.log(`[Server] Resurrected ${resurrected.length} agents: ${resurrected.join(', ')}`);
   });
 
@@ -481,12 +467,9 @@ io.on('connection', (socket) => {
       socket.emit('dev:fresh-start:error', { error: 'Not authorized' });
       return;
     }
-    if (!engine.isLeader) {
-      socket.emit('dev:fresh-start:error', { error: 'Not the leader Pod — cannot fresh-start' });
-      return;
-    }
+    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'fresh-start' }); return; }
     console.log('[Server] Fresh start requested');
-    socket.emit('dev:fresh-start:ack');
+    io.emit('dev:fresh-start:ack');
     try {
       await engine.freshStart();
       io.emit('world:snapshot', engine.getSnapshot());
@@ -495,7 +478,7 @@ io.on('connection', (socket) => {
       console.log('[Server] Fresh start complete — snapshot broadcast');
     } catch (err) {
       console.error('[Server] Fresh start failed:', (err as Error).message);
-      socket.emit('dev:fresh-start:error', { error: (err as Error).message });
+      io.emit('dev:fresh-start:error', { error: (err as Error).message });
     }
   });
 
@@ -555,6 +538,55 @@ io.on('connection', (socket) => {
       watchIntervals.delete(socket.id);
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// Inter-pod dev command forwarding via serverSideEmit (Redis adapter).
+// When a non-leader pod receives an admin dev command, it forwards to all pods.
+// Only the leader executes the command; followers ignore.
+// ---------------------------------------------------------------------------
+io.on('dev:forward', (data: { type: string }) => {
+  if (!engine.isLeader) return;
+  console.log(`[Server] Leader received forwarded dev command: ${data.type}`);
+  switch (data.type) {
+    case 'pause':
+      engine.pause();
+      io.emit('dev:status', { paused: !engine.isRunning });
+      break;
+    case 'resume':
+      engine.start();
+      io.emit('dev:status', { paused: !engine.isRunning });
+      break;
+    case 'step':
+      engine.singleTick();
+      io.emit('world:snapshot', engine.getSnapshot());
+      break;
+    case 'reset-vitals': {
+      const snapshot = engine.getSnapshot();
+      for (const agent of snapshot.agents) engine.resetAgentVitals(agent.id);
+      io.emit('world:snapshot', engine.getSnapshot());
+      break;
+    }
+    case 'resurrect-all':
+      void engine.resurrectAllAgents().then((resurrected) => {
+        io.emit('world:snapshot', engine.getSnapshot());
+        io.emit('dev:resurrect-all:result', { resurrected });
+        console.log(`[Server] Resurrected ${resurrected.length} agents via forwarded command`);
+      });
+      break;
+    case 'fresh-start':
+      io.emit('dev:fresh-start:ack');
+      void engine.freshStart().then(() => {
+        io.emit('world:snapshot', engine.getSnapshot());
+        io.emit('dev:status', { paused: !engine.isRunning });
+        io.emit('dev:fresh-start:done');
+        console.log('[Server] Fresh start complete via forwarded command');
+      }).catch((err: unknown) => {
+        console.error('[Server] Forwarded fresh start failed:', (err as Error).message);
+        io.emit('dev:fresh-start:error', { error: (err as Error).message });
+      });
+      break;
+  }
 });
 
 engine.initialize().then(() => {

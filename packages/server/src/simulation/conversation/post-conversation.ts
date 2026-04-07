@@ -1,9 +1,9 @@
-import type { Conversation, Memory, SocialLedgerEntry, Commitment } from '@ai-village/shared';
+import type { Conversation, Memory, SocialLedgerEntry, Commitment, Institution } from '@ai-village/shared';
 import { AgentCognition } from '@ai-village/ai-engine';
 import { AREA_DESCRIPTIONS } from '../../map/starting-knowledge.js';
 import type { World } from '../world.js';
 import type { EventBroadcaster } from '../events.js';
-import { findAgentByName, classifyAgreementType, classifyCommitmentWeight, extractItemsPromised, rewriteVagueTime } from './helpers.js';
+import { findAgentByName, classifyAgreementType, classifyCommitmentWeight, extractItemsPromised, rewriteVagueTime, isInstitutionFormingAgreement, extractInstitutionName } from './helpers.js';
 
 const MAX_COMMITMENT_WEIGHT = 15;
 
@@ -141,6 +141,72 @@ export class PostConversationProcessor {
             });
           } catch (err) {
             console.warn(`[post-conversation] Failed to write agreement memory for agent ${otherId}:`, err);
+          }
+        }
+
+        // --- Check if this agreement is about forming an institution ---
+        if (isInstitutionFormingAgreement(agreement)) {
+          // Don't create duplicate — skip if any participant already has an institution
+          const anyHasInstitution = conversation.participants.some(pid => {
+            const a = this.world.getAgent(pid);
+            return a?.institutionIds && a.institutionIds.length > 0
+              && a.institutionIds.some(iid => {
+                const inst = this.world.getInstitution(iid);
+                return inst && !inst.dissolved;
+              });
+          });
+
+          if (!anyHasInstitution) {
+            const instName = extractInstitutionName(agreement);
+            const inst: Institution = {
+              id: crypto.randomUUID(),
+              name: instName,
+              type: 'community',
+              description: agreement,
+              founderId: participantId,
+              members: [
+                { agentId: participantId, role: 'founder', joinedAt: Date.now() },
+                ...otherIds.map(id => ({ agentId: id, role: 'member' as string, joinedAt: Date.now() })),
+              ],
+              treasury: 0,
+              rules: [],
+              createdAt: Date.now(),
+            };
+            this.world.addInstitution(inst);
+
+            // Track membership on all participants
+            for (const pid of conversation.participants) {
+              const a = this.world.getAgent(pid);
+              if (a) {
+                if (!a.institutionIds) a.institutionIds = [];
+                a.institutionIds.push(inst.id);
+              }
+            }
+
+            this.broadcaster?.institutionUpdate(inst);
+            console.log(`[PostConversation] Institution "${instName}" formed from agreement between ${participant.config.name} and ${othersLabel}`);
+
+            // Store a high-importance memory about founding for all participants
+            for (const pid of conversation.participants) {
+              const cog = cognitions.get(pid);
+              if (!cog) continue;
+              try {
+                await cog.addLinkedMemory({
+                  id: crypto.randomUUID(),
+                  agentId: pid,
+                  type: 'plan',
+                  content: `I am a ${pid === participantId ? 'FOUNDER' : 'MEMBER'} of "${instName}". We formed this institution to: ${agreement}. I must work with fellow members toward our shared purpose.`,
+                  importance: 8,
+                  timestamp: Date.now(),
+                  relatedAgentIds: conversation.participants.filter(p => p !== pid),
+                  causedBy: conversationMemoryId,
+                });
+              } catch (err) {
+                console.warn(`[PostConversation] Failed to write institution memory for ${pid}:`, (err as Error).message);
+              }
+            }
+
+            continue; // Skip normal agreement processing — institution created instead
           }
         }
 
