@@ -289,6 +289,16 @@ export class InMemoryStore implements MemoryStore {
     const memories = this.getAgentMemories(agentId);
     return memories.find(m => m.id === memoryId);
   }
+
+  /** Wipe all in-memory state (memories, embedders, caches). Used by freshStart(). */
+  clearAll(): void {
+    this.memories.clear();
+    this.embedders.clear();
+    this.hydeCache.clear();
+    this.neuralQueryCache.clear();
+    this._loggedEmbedSuccess = false;
+    this._loggedEmbedFailure = false;
+  }
 }
 
 export default InMemoryStore;

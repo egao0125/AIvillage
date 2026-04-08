@@ -3078,6 +3078,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       ? new RdsMemoryStore(this.persistence.pool)
       : new InMemoryStore();
     this.sharedMemoryStore = sharedMemoryStore instanceof RdsMemoryStore ? sharedMemoryStore : null;
+    this.cachedGameRules = null;
 
     for (const agent of this.world.agents.values()) {
       // Reset agent state
@@ -3101,6 +3102,18 @@ Answer with ONLY one word: "support" or "oppose".`,
       agent.dossiers = [];
       agent.institutionIds = [];
       agent.joinedDay = 1;
+      agent.commitments = [];
+      agent.archivedCommitments = [];
+      agent.beliefs = [];
+      agent.learnedStrategies = [];
+      agent.learnedAversions = [];
+      agent.totalActionOutcomes = 0;
+      agent.reasoningScore = undefined;
+      agent.normWeight = undefined;
+      agent.rewardWeights = undefined;
+      agent.goalAffinities = undefined;
+      agent.strategyHistory = [];
+      agent.config.occupation = undefined;
 
       // Recreate cognition with fresh worldView — BYOK key only, no global fallback.
       const keyData = this.agentApiKeys.get(agent.id);

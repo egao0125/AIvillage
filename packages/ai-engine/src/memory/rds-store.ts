@@ -319,6 +319,16 @@ export class RdsMemoryStore implements MemoryStore {
     this.bootstrapped.delete(agentId);
   }
 
+  /** Wipe all in-memory caches (embedders, HyDE, neural, bootstrap). Used by freshStart(). */
+  clearCaches(): void {
+    this.embedders.clear();
+    this.bootstrapped.clear();
+    this.hydeCache.clear();
+    this.neuralQueryCache.clear();
+    this._loggedEmbedSuccess = false;
+    this._loggedEmbedFailure = false;
+  }
+
   async getById(agentId: string, memoryId: string): Promise<Memory | undefined> {
     try {
       const result = await this.pool.query<Record<string, unknown>>(
