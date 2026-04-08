@@ -131,6 +131,19 @@ export class FourStreamMemory {
     if (this.agent.activeConcerns) {
       this.concerns = [...this.agent.activeConcerns];
     }
+    if (this.agent.beliefs) {
+      this.beliefs = this.agent.beliefs.map(b => ({
+        id: crypto.randomUUID(),
+        agentId: this.agentId,
+        type: 'reflection' as const,
+        content: b.content,
+        importance: 8,
+        timestamp: b.timestamp,
+        relatedAgentIds: [],
+        validFrom: b.validFrom,
+        validUntil: b.validUntil,
+      }));
+    }
     if (this.agent.learnedStrategies) {
       // Backfill legacy shape {content, timestamp} into full LearnedStrategy form.
       this.learnedStrategies = this.agent.learnedStrategies.map((s: LearnedStrategy | { content: string; timestamp: number }) => {
