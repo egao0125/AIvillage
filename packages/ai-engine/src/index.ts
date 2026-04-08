@@ -80,6 +80,7 @@ export interface AgentSituation {
   allAgentLocations?: { id: string; location: string }[];
   allReputations?: { id: string; score: number }[];
   villageHistory?: string;        // top village memory entries
+  villagePopulation?: string;     // all agents in the village with locations + occupations
 }
 
 export interface AvailableAction {
@@ -669,7 +670,8 @@ If nothing notable was exchanged, return []`;
     // Soul + backstory (800 char limit — enough for rich original characters)
     const soulRaw = config.soul || config.backstory || '';
     const soulText = soulRaw.length > 800 ? soulRaw.slice(0, 800) + '...' : soulRaw;
-    parts.push(`You are ${sanitizeForPrompt(config.name)}, age ${config.age}. ${soulText}`);
+    const occStr = config.occupation ? `, the village ${config.occupation}` : '';
+    parts.push(`You are ${sanitizeForPrompt(config.name)}, age ${config.age}${occStr}. ${soulText}`);
     // Use explicit goal, or first desire as fallback
     const effectiveGoal = config.goal || (config.desires?.length ? config.desires[0] : '');
     if (effectiveGoal) parts.push(`Your goal: ${effectiveGoal}`);
@@ -978,7 +980,8 @@ ${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must 
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
-${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}${predictionBlock}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
+${situation.villagePopulation ? '\nPEOPLE IN THE VILLAGE (you can walk to anyone):\n' + situation.villagePopulation : ''}${predictionBlock}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
@@ -1002,7 +1005,8 @@ ${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must 
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
-${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}${predictionBlock}
+${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situation.villageHistory : ''}
+${situation.villagePopulation ? '\nPEOPLE IN THE VILLAGE (you can walk to anyone):\n' + situation.villagePopulation : ''}${predictionBlock}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
 ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}

@@ -688,6 +688,14 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     this.syncConcernsToAgent();
   }
 
+  /** Remove concerns whose content includes the given substring (used for rule repeal) */
+  removeConcernsByContent(substring: string): void {
+    const lower = substring.toLowerCase();
+    const before = this.concerns.length;
+    this.concerns = this.concerns.filter(c => !c.content.toLowerCase().includes(lower));
+    if (this.concerns.length !== before) this.syncConcernsToAgent();
+  }
+
   resolveConcern(id: string): void {
     const concern = this.concerns.find(c => c.id === id);
     if (concern) concern.resolved = true;

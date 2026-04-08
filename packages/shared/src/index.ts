@@ -938,6 +938,8 @@ export interface BoardPost {
   ruleAction?: string;      // structured: what specific action the rule requires/prohibits
   ruleAppliesTo?: string;   // structured: who the rule applies to
   ruleConsequence?: string; // structured: what happens on violation
+  repealTargetId?: string;  // if set, this is a repeal proposal targeting another rule
+  occupationProposal?: string; // if set, this is an occupation proposal for the author
 }
 
 export interface WorldSnapshot {

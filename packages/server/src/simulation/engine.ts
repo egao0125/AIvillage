@@ -2310,15 +2310,35 @@ export class SimulationEngine {
           repContext = `\n${proposerName}'s public reputation: ${repEntry.score}.`;
         }
 
+        // Tailor the voting prompt based on proposal type
+        let voteQuestion: string;
+        if (rulePost.repealTargetId) {
+          const targetRule = this.world.getActiveBoard().find(p => p.id === rulePost.repealTargetId);
+          voteQuestion = `${proposerName} wants to REPEAL an existing rule:
+Rule to remove: "${targetRule?.ruleAction || targetRule?.content || 'unknown rule'}"
+Reason: ${rulePost.content}
+
+Has this rule helped or harmed the village? Do you want it removed?`;
+        } else if (rulePost.occupationProposal) {
+          voteQuestion = `${proposerName} wants to become the village ${rulePost.occupationProposal}:
+"${rulePost.content}"
+
+Is ${proposerName} suited for this role? Would the village benefit from having an official ${rulePost.occupationProposal}?`;
+        } else {
+          voteQuestion = `${proposerName} proposed a new village rule:
+"${rulePost.content}"
+
+Has this rule's subject affected you personally? Do you trust ${proposerName}? Would this rule help or hurt you and people you care about?`;
+        }
+
         const result = await cognition.llmProvider.complete(
           `You are ${agent.config.name}. Answer with ONLY "support" or "oppose". Nothing else.`,
           `${cognition.identityBlock}${memoryCtx}
 ${villageCtx}${existingRulesCtx}
-${proposerName} proposed a new village rule:
-"${rulePost.content}"
+${voteQuestion}
 ${repContext}
 
-Vote based on YOUR experiences, relationships, and beliefs — not abstract principles. Has this rule's subject affected you personally? Do you trust ${proposerName}? Would this rule help or hurt you and people you care about?
+Vote based on YOUR experiences, relationships, and beliefs — not abstract principles.
 Answer with ONLY one word: "support" or "oppose".`,
         );
 
@@ -2357,6 +2377,115 @@ Answer with ONLY one word: "support" or "oppose".`,
 
     if (likeCount > dislikeCount) {
       rulePost.ruleStatus = 'passed';
+
+      // --- Handle REPEAL proposals ---
+      if (rulePost.repealTargetId) {
+        const targetRule = this.world.getActiveBoard().find(p => p.id === rulePost.repealTargetId);
+        if (targetRule) {
+          targetRule.ruleStatus = 'repealed';
+          this.broadcaster.boardPostUpdate(targetRule);
+
+          // Remove the permanent concern for the repealed rule from all agents
+          for (const [id, agent] of this.world.agents) {
+            if (agent.alive === false) continue;
+            const cog = this.cognitions.get(id);
+            if (cog?.fourStream) {
+              cog.fourStream.removeConcernsByContent(targetRule.ruleAction || targetRule.content);
+            }
+          }
+
+          this.world.addVillageMemory({
+            content: `Rule REPEALED (${likeCount}-${dislikeCount}): "${(targetRule.ruleAction || targetRule.content).slice(0, 60)}". Protested by ${rulePost.authorName}.`,
+            type: 'rule',
+            day: this.world.time.day,
+            significance: 7,
+          });
+
+          // Notify all agents about the repeal
+          for (const [id, agent] of this.world.agents) {
+            if (agent.alive === false) continue;
+            const cog = this.cognitions.get(id);
+            if (cog) {
+              void cog.addMemory({
+                id: crypto.randomUUID(), agentId: id, type: 'observation',
+                content: `Rule REPEALED (${likeCount}-${dislikeCount}): "${(targetRule.ruleAction || targetRule.content).slice(0, 50)}". ${voteBreakdown}`,
+                importance: 8, timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
+              }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (repeal):', (err as Error).message); });
+            }
+          }
+
+          const repealNews: BoardPost = {
+            id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+            type: 'news', channel: 'all',
+            content: `Rule repealed (${likeCount}-${dislikeCount}): "${(targetRule.ruleAction || targetRule.content).slice(0, 80)}". ${voteBreakdown}`,
+            timestamp: Date.now(), day: this.world.time.day,
+          };
+          this.world.addBoardPost(repealNews);
+          this.broadcaster.boardPost(repealNews);
+
+          console.log(`[RuleVote] REPEALED: "${targetRule.ruleAction || targetRule.content}" (${likeCount}-${dislikeCount})`);
+        }
+        this.broadcaster.boardPostUpdate(rulePost);
+        return;
+      }
+
+      // --- Handle OCCUPATION proposals ---
+      if (rulePost.occupationProposal) {
+        const proposer = this.world.getAgent(rulePost.authorId);
+        if (proposer) {
+          proposer.config.occupation = rulePost.occupationProposal;
+        }
+
+        this.world.addVillageMemory({
+          content: `${rulePost.authorName} is now the village ${rulePost.occupationProposal} (voted ${likeCount}-${dislikeCount}).`,
+          type: 'election',
+          day: this.world.time.day,
+          significance: 7,
+        });
+
+        // High-importance memory for ALL agents about the new occupation
+        for (const [id, agent] of this.world.agents) {
+          if (agent.alive === false) continue;
+          const cog = this.cognitions.get(id);
+          if (cog) {
+            const isProposer = id === rulePost.authorId;
+            void cog.addMemory({
+              id: crypto.randomUUID(), agentId: id, type: 'observation',
+              content: isProposer
+                ? `I am now the official village ${rulePost.occupationProposal}! Voted ${likeCount}-${dislikeCount}. I must fulfill this role.`
+                : `${rulePost.authorName} is now the official village ${rulePost.occupationProposal} (voted ${likeCount}-${dislikeCount}).`,
+              importance: isProposer ? 9 : 7,
+              timestamp: Date.now(), relatedAgentIds: [rulePost.authorId],
+            }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (occupation):', (err as Error).message); });
+          }
+          // Add permanent concern so agents always know this person's role
+          if (cog?.fourStream) {
+            cog.fourStream.addConcern({
+              id: crypto.randomUUID(),
+              content: id === rulePost.authorId
+                ? `I am the village ${rulePost.occupationProposal}. This is my duty and identity.`
+                : `${rulePost.authorName} is the village ${rulePost.occupationProposal}.`,
+              category: 'goal',
+              relatedAgentIds: [rulePost.authorId],
+              createdAt: this.world.time.totalMinutes,
+              permanent: true,
+            });
+          }
+        }
+
+        const occNews: BoardPost = {
+          id: crypto.randomUUID(), authorId: 'system', authorName: 'Village News',
+          type: 'news', channel: 'all',
+          content: `${rulePost.authorName} voted in as village ${rulePost.occupationProposal} (${likeCount}-${dislikeCount}). ${voteBreakdown}`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(occNews);
+        this.broadcaster.boardPost(occNews);
+
+        console.log(`[RuleVote] OCCUPATION APPROVED: ${rulePost.authorName} → ${rulePost.occupationProposal} (${likeCount}-${dislikeCount})`);
+        this.broadcaster.boardPostUpdate(rulePost);
+        return;
+      }
 
       // Village collective memory — rule passed
       this.world.addVillageMemory({

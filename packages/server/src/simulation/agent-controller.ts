@@ -2273,9 +2273,10 @@ State your vote and explain your reasoning.`;
       const otherArea = getAreaAt(a.position);
       const spatialStr = dist < 2 ? '' : `, ${dist} tiles ${dir}${otherArea ? ' at ' + otherArea.name : ''}`;
 
+      const occTag = a.config.occupation ? ` [${a.config.occupation}]` : '';
       nearbyForSituation.push({
         name: a.config.name,
-        activity: (a.currentAction || 'idle') + otherInvStr + spatialStr,
+        activity: (a.currentAction || 'idle') + occTag + otherInvStr + spatialStr,
         id: a.id,
         vitals: a.vitals,
       });
@@ -2323,6 +2324,14 @@ State your vote and explain your reasoning.`;
       .some(p => p.type === 'rule' && p.authorId === this.agent.id && p.day === this.world.time.day);
     if (!hasProposedToday) {
       actions.push({ id: 'propose_rule', label: 'Propose a rule or claim (voted tonight)', category: 'creative' });
+      actions.push({ id: 'propose_occupation', label: 'Propose to become an official occupation (voted tonight)', category: 'creative' });
+    }
+
+    // Protest a passed rule — propose to repeal it (max 1 per day, shares the proposal limit)
+    const activeRules = this.world.getActiveBoard()
+      .filter(p => p.type === 'rule' && p.ruleStatus === 'passed' && !p.repealTargetId);
+    if (!hasProposedToday && activeRules.length > 0) {
+      actions.push({ id: 'protest_rule', label: 'Propose to repeal an existing rule (voted tonight)', category: 'creative' });
     }
 
     // Group rule — only founders/leaders can set rules directly
@@ -2489,18 +2498,19 @@ State your vote and explain your reasoning.`;
       }
     }
 
-    // Build all agent locations for dossier display
+    // Build all agent locations for dossier display + village population view
     const allAgentLocations: { id: string; location: string }[] = [];
+    const villagePopulation: string[] = [];
     for (const [id, agent] of this.world.agents) {
       if (id === this.agent.id) continue;
       if (agent.alive === false) continue;
       const agentArea = getAreaAt(agent.position);
-      allAgentLocations.push({
-        id,
-        location: agent.state === 'sleeping'
-          ? 'sleeping'
-          : (agentArea?.name ?? 'somewhere'),
-      });
+      const loc = agent.state === 'sleeping'
+        ? 'sleeping'
+        : (agentArea?.name ?? 'somewhere');
+      allAgentLocations.push({ id, location: loc });
+      const occ = agent.config.occupation ? ` (${agent.config.occupation})` : '';
+      villagePopulation.push(`- ${agent.config.name}${occ} — ${loc}`);
     }
 
     return {
@@ -2526,6 +2536,7 @@ State your vote and explain your reasoning.`;
       propertyInfo,
       villageRules,
       allAgentLocations,
+      villagePopulation: villagePopulation.length > 0 ? villagePopulation.join('\n') : undefined,
       allReputations: (() => {
         // Aggregate ALL reputation entries per agent (system + per-agent from conversations)
         const repByAgent = new Map<string, number>();
@@ -4388,6 +4399,149 @@ Write ONLY the rule in the format above. Stay in character.`;
       return;
     }
 
+    // --- Protest Rule: propose to repeal an existing passed rule ---
+    if (actionId === 'protest_rule') {
+      const passedRulesForProtest = this.world.getActiveBoard()
+        .filter(p => p.type === 'rule' && p.ruleStatus === 'passed' && !p.repealTargetId);
+      if (passedRulesForProtest.length === 0) {
+        this.lastTrigger = 'There are no active rules to protest.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+
+      // LLM picks which rule to protest
+      let targetRule: BoardPost | undefined;
+      let protestReason: string;
+      try {
+        const ruleList = passedRulesForProtest.map((p, i) =>
+          `${i + 1}. "${p.ruleAction || p.content}" (proposed by ${p.authorName})`
+        ).join('\n');
+
+        const pickPrompt = `${this.cognition.identityBlock}
+
+You want to protest a village rule. Your reason: ${decision.reason}
+
+Active village rules:
+${ruleList}
+
+Which rule do you want to repeal? Reply with ONLY the number and a one-sentence reason why.
+Format: NUMBER: reason
+Example: 2: This rule unfairly targets farmers and hurts food production.`;
+
+        const pickResult = await this.cognition.llmProvider.complete(
+          `You are ${this.agent.config.name}. Pick a rule number and give a reason. Format: NUMBER: reason`,
+          pickPrompt,
+        );
+        const numMatch = pickResult.match(/(\d+)/);
+        const idx = numMatch ? parseInt(numMatch[1]) - 1 : 0;
+        targetRule = passedRulesForProtest[Math.max(0, Math.min(idx, passedRulesForProtest.length - 1))];
+        protestReason = pickResult.replace(/^\d+[:.]\s*/, '').trim() || decision.reason;
+      } catch {
+        targetRule = passedRulesForProtest[0];
+        protestReason = decision.reason;
+      }
+
+      const post: BoardPost = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'rule' as const,
+        channel: 'all' as const,
+        content: `REPEAL: "${targetRule.ruleAction || targetRule.content}". Reason: ${protestReason.slice(0, 200)}`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+        votes: [],
+        ruleStatus: 'proposed' as const,
+        repealTargetId: targetRule.id,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+
+      // Notify all agents
+      for (const [id, agent] of this.world.agents) {
+        if (id === this.agent.id || agent.alive === false) continue;
+        const cog = this.agentCognitions?.get(id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(), agentId: id, type: 'observation',
+            content: `${this.agent.config.name} wants to REPEAL the rule: "${targetRule.ruleAction || targetRule.content}". Reason: ${protestReason.slice(0, 80)}`,
+            importance: 7, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
+        }
+      }
+
+      this.lastOutcome = `You proposed to repeal the rule: "${(targetRule.ruleAction || targetRule.content).slice(0, 60)}"`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.broadcaster.agentAction(this.agent.id, `proposed to repeal a village rule`);
+      return;
+    }
+
+    // --- Propose Occupation: propose to become an official occupation ---
+    if (actionId === 'propose_occupation') {
+      let occupationName: string;
+      let occupationReason: string;
+      try {
+        const occPrompt = `${this.cognition.identityBlock}
+
+You want to propose becoming an official occupation in the village.
+Your reason: ${decision.reason}
+
+What occupation do you want to hold? This should be a specific role that serves the village (e.g., baker, healer, guard, farmer, teacher, blacksmith, judge, messenger).
+
+Reply with ONLY the occupation title and a one-sentence explanation of what you'll do.
+Format: TITLE: explanation
+Example: Village Baker: I will bake bread daily and distribute it to those in need.`;
+
+        const result = await this.cognition.llmProvider.complete(
+          `You are ${this.agent.config.name}. Reply with only: TITLE: explanation`,
+          occPrompt,
+        );
+        const titleMatch = result.match(/^([^:]+):\s*(.+)/s);
+        occupationName = titleMatch ? titleMatch[1].trim().slice(0, 50) : result.trim().split('\n')[0].slice(0, 50);
+        occupationReason = titleMatch ? titleMatch[2].trim().slice(0, 200) : decision.reason;
+      } catch {
+        occupationName = 'Village Worker';
+        occupationReason = decision.reason;
+      }
+
+      const post: BoardPost = {
+        id: crypto.randomUUID(),
+        authorId: this.agent.id,
+        authorName: this.agent.config.name,
+        type: 'rule' as const,
+        channel: 'all' as const,
+        content: `${this.agent.config.name} proposes to become: ${occupationName}. ${occupationReason}`,
+        timestamp: Date.now(),
+        day: this.world.time.day,
+        votes: [],
+        ruleStatus: 'proposed' as const,
+        occupationProposal: occupationName,
+      };
+      this.world.addBoardPost(post);
+      this.broadcaster.boardPost(post);
+      if (this.bus) this.bus.emit({ type: 'board_post_created', post });
+
+      // Notify all agents
+      for (const [id, agent] of this.world.agents) {
+        if (id === this.agent.id || agent.alive === false) continue;
+        const cog = this.agentCognitions?.get(id);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(), agentId: id, type: 'observation',
+            content: `${this.agent.config.name} wants to become the village ${occupationName}: ${occupationReason.slice(0, 80)}`,
+            importance: 6, timestamp: Date.now(), relatedAgentIds: [this.agent.id],
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
+        }
+      }
+
+      this.lastOutcome = `You proposed to become: ${occupationName}`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.broadcaster.agentAction(this.agent.id, `proposed to become ${occupationName}`);
+      return;
+    }
+
     // --- Propose Group Rule (leaders set rules directly, no vote) ---
     if (actionId === 'propose_group_rule') {
       const groupId = this.agent.institutionIds?.[0];
@@ -4411,8 +4565,17 @@ Write ONLY the rule in the format above. Stay in character.`;
           if (sections.length > 0) memoryCtx = '\n' + sections.join('\n');
         }
         ruleContent = await this.cognition.llmProvider.complete(
-          `Write only the rule. No preamble, no quotes. 1 sentence.`,
-          `${this.cognition.identityBlock}${memoryCtx}\n\nYou are setting a rule for ${group.name}. Reason: ${decision.reason}\n\nWrite the RULE that members must follow. Ground it in your experience. Keep to 1 sentence.`
+          `Write only the rule. No preamble, no quotes. 1 sentence. Must be SPECIFIC and ACTIONABLE.`,
+          `${this.cognition.identityBlock}${memoryCtx}\n\nYou are setting a rule for ${group.name}. Reason: ${decision.reason}
+
+Write the RULE that members must follow. The rule MUST be CONCRETE and ACTIONABLE — something other agents can actually do and verify.
+
+BAD (too abstract): "We should store food for winter" or "Everyone must cooperate"
+GOOD: "Each member must give 1 wheat per day to the group treasury"
+GOOD: "The farm goes on a rotating basis — only 3 members can gather crops each day"
+GOOD: "All fish caught at the river must be split equally among members"
+
+Write ONLY the specific, actionable rule. 1 sentence.`
         );
         ruleContent = ruleContent.replace(/^["']|["']$/g, '').trim();
         if (ruleContent.length < 3 || ruleContent.length > 200) {
