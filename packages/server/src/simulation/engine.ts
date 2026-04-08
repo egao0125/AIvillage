@@ -632,7 +632,12 @@ export class SimulationEngine {
         .then((newVersion: number) => {
           this.worldStateVersion = newVersion;
           // Publish snapshot to Redis so follower Pods can serve getSnapshot() without RDS.
-          return this.writeRedisSnapshot();
+          // Also broadcast to connected clients so memory fields (concerns, dossiers,
+          // beliefs, strategies, aversions) stay up-to-date — individual events only
+          // cover position/action/speech, not cognition state.
+          const snapshot = this.getSnapshot();
+          this.broadcaster.worldSnapshot(snapshot);
+          return this.writeRedisSnapshot(snapshot);
         })
         .catch((err: unknown) => {
           if ((err as Error).name === 'VersionConflictError') {
@@ -3273,12 +3278,12 @@ Answer with ONLY one word: "support" or "oppose".`,
    * will fall back to their last cached snapshot or return stale data, which is
    * acceptable for a read-only view.
    */
-  private async writeRedisSnapshot(): Promise<void> {
+  private async writeRedisSnapshot(precomputed?: WorldSnapshot): Promise<void> {
     const redis = getRedis();
     if (!redis) return; // single-Pod dev mode — no Redis, nothing to write
 
     try {
-      const snapshot = this.getSnapshot();
+      const snapshot = precomputed ?? this.getSnapshot();
       await redis.set(
         'ai-village:world:snapshot',
         JSON.stringify(snapshot),
