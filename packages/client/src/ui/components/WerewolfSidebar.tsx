@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 import {
   useChatLog,
   useAgentsMap,
@@ -72,13 +73,14 @@ const VillagerRoster: React.FC<{
   roles: Map<string, string>;
   godMode: boolean;
 }> = ({ agents, roles, godMode }) => {
+  const { colors } = useTheme();
   const [expanded, setExpanded] = useState(true);
   const aliveAgents = agents.filter(a => a.alive !== false);
   const deadAgents = agents.filter(a => a.alive === false);
   const sorted = [...aliveAgents, ...deadAgents];
 
   return (
-    <div style={{ borderBottom: `1px solid ${COLORS.border}`, flexShrink: 0 }}>
+    <div style={{ borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
       <div
         onClick={() => setExpanded(!expanded)}
         style={{
@@ -87,13 +89,13 @@ const VillagerRoster: React.FC<{
           justifyContent: 'space-between',
           alignItems: 'center',
           padding: '6px 14px',
-          background: COLORS.bgCard,
+          background: colors.bgCard,
         }}
       >
-        <span style={{ fontFamily: FONTS.pixel, fontSize: '7px', color: COLORS.textDim, letterSpacing: 0.5 }}>
+        <span style={{ fontFamily: FONTS.pixel, fontSize: '7px', color: colors.textDim, letterSpacing: 0.5 }}>
           VILLAGERS ({aliveAgents.length} alive)
         </span>
-        <span style={{ fontSize: 10, color: COLORS.textDim }}>{expanded ? '\u25BE' : '\u25B8'}</span>
+        <span style={{ fontSize: 10, color: colors.textDim }}>{expanded ? '\u25BE' : '\u25B8'}</span>
       </div>
       {expanded && (
         <div style={{ padding: '2px 14px 8px' }}>
@@ -111,16 +113,16 @@ const VillagerRoster: React.FC<{
                 <span style={{
                   fontFamily: FONTS.body,
                   fontSize: 12,
-                  color: isDead ? COLORS.textDim : COLORS.text,
+                  color: isDead ? colors.textDim : colors.text,
                   textDecoration: isDead ? 'line-through' : 'none',
                 }}>
                   {agent.config.name}
                   {role ? (
-                    <span style={{ color: godMode ? (ROLE_COLORS[role] ?? COLORS.textDim) : COLORS.textDim }}>
+                    <span style={{ color: godMode ? (ROLE_COLORS[role] ?? colors.textDim) : colors.textDim }}>
                       {' '}({godMode ? role.charAt(0).toUpperCase() + role.slice(1) : 'Villager'})
                     </span>
                   ) : (
-                    <span style={{ color: COLORS.textDim }}> (Unassigned)</span>
+                    <span style={{ color: colors.textDim }}> (Unassigned)</span>
                   )}
                 </span>
                 {isDead && (
@@ -147,19 +149,20 @@ const VoteTracker: React.FC<{
   currentRound: number;
   phase: string | null;
 }> = ({ votes, getName, currentRound, phase }) => {
+  const { colors } = useTheme();
   if (votes.length === 0) return null;
 
   // Show most recent vote first
   const sorted = [...votes].reverse();
 
   return (
-    <div style={{ borderBottom: `1px solid ${COLORS.border}`, flexShrink: 0 }}>
+    <div style={{ borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
       <div style={{
         padding: '6px 14px',
-        background: COLORS.bgCard,
+        background: colors.bgCard,
         fontFamily: FONTS.pixel,
         fontSize: '7px',
-        color: COLORS.textDim,
+        color: colors.textDim,
         letterSpacing: 0.5,
       }}>
         VOTES ({votes.length})
@@ -181,13 +184,13 @@ const VoteTracker: React.FC<{
           return (
             <div key={i} style={{
               padding: '6px 0',
-              borderBottom: i < sorted.length - 1 ? `1px solid ${COLORS.border}22` : undefined,
+              borderBottom: i < sorted.length - 1 ? `1px solid ${colors.border}22` : undefined,
             }}>
               {/* Vote header */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                 <span style={{
                   fontFamily: FONTS.pixel, fontSize: '6px', letterSpacing: 0.3,
-                  color: COLORS.textDim,
+                  color: colors.textDim,
                 }}>
                   R{vote.round}
                 </span>
@@ -209,12 +212,12 @@ const VoteTracker: React.FC<{
                     <div key={targetId} style={{
                       fontFamily: FONTS.body, fontSize: 10,
                       padding: '2px 6px', borderRadius: 3,
-                      background: isTarget ? '#ef444418' : COLORS.bgCard,
-                      border: `1px solid ${isTarget ? '#ef444433' : COLORS.border + '33'}`,
-                      color: isTarget ? '#ef4444' : COLORS.text,
+                      background: isTarget ? '#ef444418' : colors.bgCard,
+                      border: `1px solid ${isTarget ? '#ef444433' : colors.border + '33'}`,
+                      color: isTarget ? '#ef4444' : colors.text,
                     }}>
                       <span style={{ fontWeight: 600 }}>{getName(targetId)}</span>
-                      <span style={{ color: COLORS.textDim }}> — {voters.length} vote{voters.length !== 1 ? 's' : ''} ({voters.join(', ')})</span>
+                      <span style={{ color: colors.textDim }}> — {voters.length} vote{voters.length !== 1 ? 's' : ''} ({voters.join(', ')})</span>
                     </div>
                   );
                 })}
@@ -234,6 +237,7 @@ const VoteTracker: React.FC<{
 const MeetingLog: React.FC<{
   transcripts: Array<{ round: number; transcript: Array<{ name: string; message: string }> }>;
 }> = ({ transcripts }) => {
+  const { colors } = useTheme();
   const [expanded, setExpanded] = useState(false);
   if (transcripts.length === 0) return null;
 
@@ -241,7 +245,7 @@ const MeetingLog: React.FC<{
   const latest = transcripts[transcripts.length - 1];
 
   return (
-    <div style={{ borderBottom: `1px solid ${COLORS.border}`, flexShrink: 0 }}>
+    <div style={{ borderBottom: `1px solid ${colors.border}`, flexShrink: 0 }}>
       <div
         onClick={() => setExpanded(!expanded)}
         style={{
@@ -250,31 +254,31 @@ const MeetingLog: React.FC<{
           justifyContent: 'space-between',
           alignItems: 'center',
           padding: '6px 14px',
-          background: COLORS.bgCard,
+          background: colors.bgCard,
         }}
       >
         <span style={{ fontFamily: FONTS.pixel, fontSize: '7px', color: '#f97316', letterSpacing: 0.5 }}>
           MEETING LOG R{latest.round} ({latest.transcript.length} lines)
         </span>
-        <span style={{ fontSize: 10, color: COLORS.textDim }}>{expanded ? '\u25BE' : '\u25B8'}</span>
+        <span style={{ fontSize: 10, color: colors.textDim }}>{expanded ? '\u25BE' : '\u25B8'}</span>
       </div>
       {expanded && (
         <div style={{ padding: '4px 14px 8px', maxHeight: 250, overflowY: 'auto' }}>
           {latest.transcript.map((line, i) => (
             <div key={i} style={{
               padding: '3px 0',
-              borderBottom: i < latest.transcript.length - 1 ? `1px solid ${COLORS.border}15` : undefined,
+              borderBottom: i < latest.transcript.length - 1 ? `1px solid ${colors.border}15` : undefined,
             }}>
               <span style={{ fontFamily: FONTS.body, fontSize: 11, color: '#f97316', fontWeight: 600 }}>
                 {line.name}:
               </span>{' '}
-              <span style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.text }}>
+              <span style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.text }}>
                 {line.message}
               </span>
             </div>
           ))}
           {transcripts.length > 1 && (
-            <div style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: COLORS.textDim, marginTop: 6, letterSpacing: 0.3 }}>
+            <div style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: colors.textDim, marginTop: 6, letterSpacing: 0.3 }}>
               {transcripts.length} meetings total
             </div>
           )}
@@ -289,6 +293,7 @@ const MeetingLog: React.FC<{
 // ---------------------------------------------------------------------------
 
 export const WerewolfSidebar: React.FC = () => {
+  const { colors } = useTheme();
   const [events, setEvents] = useState<WerewolfEvent[]>([]);
   const [filterType, setFilterType] = useState<WerewolfEventType | null>(null);
 
@@ -500,8 +505,8 @@ export const WerewolfSidebar: React.FC = () => {
       right: 0,
       width: isMobile ? '100%' : 420,
       bottom: 0,
-      background: COLORS.bg,
-      borderLeft: `1px solid ${COLORS.border}`,
+      background: colors.bg,
+      borderLeft: `1px solid ${colors.border}`,
       display: 'flex',
       flexDirection: 'column',
       zIndex: 12,
@@ -536,13 +541,13 @@ export const WerewolfSidebar: React.FC = () => {
         flexWrap: 'wrap',
         gap: 4,
         padding: '8px 10px',
-        borderBottom: `1px solid ${COLORS.border}`,
+        borderBottom: `1px solid ${colors.border}`,
         flexShrink: 0,
       }}>
         <FilterChip
           label={`ALL (${events.filter(e => e.type !== 'night' || godMode).length})`}
           active={filterType === null}
-          color={COLORS.accent}
+          color={colors.accent}
           onClick={() => setFilterType(null)}
         />
         {([...typeCounts.entries()] as [WerewolfEventType, number][]).map(([type, count]) => {
@@ -565,7 +570,7 @@ export const WerewolfSidebar: React.FC = () => {
           <div style={{
             padding: '40px 20px',
             textAlign: 'center',
-            color: COLORS.textDim,
+            color: colors.textDim,
             fontFamily: FONTS.body,
             fontSize: 13,
             lineHeight: 1.6,
@@ -604,17 +609,18 @@ const SidebarHeader: React.FC<{
   roles: Map<string, string>;
   agentsMap: Map<string, { config: { name: string }; alive?: boolean }>;
 }> = ({ phase, round, godMode, totalCount, aliveCount, deadCount, roles, agentsMap }) => {
+  const { colors } = useTheme();
   return (
     <div style={{
       padding: '12px 14px',
-      borderBottom: `1px solid ${COLORS.border}`,
+      borderBottom: `1px solid ${colors.border}`,
       flexShrink: 0,
-      background: COLORS.bgCard,
+      background: colors.bgCard,
     }}>
       {/* Row 1: Title + controls */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: COLORS.accent, letterSpacing: 1 }}>
+          <span style={{ fontFamily: FONTS.pixel, fontSize: '9px', color: colors.accent, letterSpacing: 1 }}>
             WEREWOLF
           </span>
           {phase && (
@@ -635,11 +641,11 @@ const SidebarHeader: React.FC<{
               style={{
                 padding: '4px 12px',
                 background: totalCount >= 6 ? '#4ade8022' : 'transparent',
-                border: `1px solid ${totalCount >= 6 ? '#4ade80' : COLORS.border}`,
+                border: `1px solid ${totalCount >= 6 ? '#4ade80' : colors.border}`,
                 borderRadius: 4,
                 cursor: totalCount >= 6 ? 'pointer' : 'not-allowed',
                 fontFamily: FONTS.pixel, fontSize: '7px', letterSpacing: 1,
-                color: totalCount >= 6 ? '#4ade80' : COLORS.textDim,
+                color: totalCount >= 6 ? '#4ade80' : colors.textDim,
                 opacity: totalCount >= 6 ? 1 : 0.5,
               }}
             >
@@ -652,11 +658,11 @@ const SidebarHeader: React.FC<{
               style={{
                 padding: '4px 10px',
                 background: godMode ? '#ef444422' : 'transparent',
-                border: `1px solid ${godMode ? '#ef4444' : COLORS.border}`,
+                border: `1px solid ${godMode ? '#ef4444' : colors.border}`,
                 borderRadius: 4,
                 cursor: 'pointer',
                 fontFamily: FONTS.pixel, fontSize: '6px', letterSpacing: 0.5,
-                color: godMode ? '#ef4444' : COLORS.textDim,
+                color: godMode ? '#ef4444' : colors.textDim,
                 transition: 'all 0.15s',
               }}
             >
@@ -677,7 +683,7 @@ const SidebarHeader: React.FC<{
           </span>
         )}
         {!phase && (
-          <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', letterSpacing: 0.5, color: COLORS.textDim }}>
+          <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', letterSpacing: 0.5, color: colors.textDim }}>
             {aliveCount >= 6 ? 'READY' : `NEED ${6 - aliveCount} MORE`}
           </span>
         )}
@@ -721,15 +727,16 @@ const FilterChip: React.FC<{
   active: boolean;
   color: string;
   onClick: () => void;
-}> = ({ label, active, color, onClick }) => (
-  <button
+}> = ({ label, active, color, onClick }) => {
+  const { colors } = useTheme();
+  return (<button
     onClick={onClick}
     style={{
       padding: '3px 8px',
       borderRadius: 4,
-      border: `1px solid ${active ? color : COLORS.border}`,
+      border: `1px solid ${active ? color : colors.border}`,
       background: active ? color + '22' : 'transparent',
-      color: active ? color : COLORS.textDim,
+      color: active ? color : colors.textDim,
       fontFamily: FONTS.pixel,
       fontSize: '5px',
       letterSpacing: 0.5,
@@ -739,8 +746,8 @@ const FilterChip: React.FC<{
     }}
   >
     {label}
-  </button>
-);
+  </button>);
+};
 
 // ---------------------------------------------------------------------------
 // Event Card
@@ -753,6 +760,7 @@ const EventCard: React.FC<{
   godMode: boolean;
   getName: (id: string) => string;
 }> = ({ event, chatLog, roles, godMode, getName }) => {
+  const { colors } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const badge = EVENT_BADGES[event.type];
 
@@ -766,14 +774,14 @@ const EventCard: React.FC<{
   return (
     <div
       onClick={() => { if (isExpandable) setExpanded(prev => !prev); }}
-      onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgHover; }}
-      onMouseLeave={e => { e.currentTarget.style.background = COLORS.bgCard; }}
+      onMouseEnter={e => { e.currentTarget.style.background = colors.bgHover; }}
+      onMouseLeave={e => { e.currentTarget.style.background = colors.bgCard; }}
       style={{
         margin: '6px 10px',
         padding: '12px 14px',
-        background: COLORS.bgCard,
+        background: colors.bgCard,
         borderRadius: 8,
-        border: `1px solid ${COLORS.border}`,
+        border: `1px solid ${colors.border}`,
         cursor: isExpandable ? 'pointer' : undefined,
         transition: 'background 0.15s ease',
       }}
@@ -793,18 +801,18 @@ const EventCard: React.FC<{
           {badge.label}
         </span>
         {event.agentNames && event.agentNames.length > 0 && (
-          <span style={{ fontFamily: FONTS.body, fontSize: 11, color: COLORS.textDim }}>
+          <span style={{ fontFamily: FONTS.body, fontSize: 11, color: colors.textDim }}>
             {event.agentNames.join(', ')}
           </span>
         )}
         {/* Right-aligned round + expand hint */}
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
           {isExpandable && !expanded && (
-            <span style={{ fontFamily: FONTS.pixel, fontSize: '5px', color: COLORS.textDim }}>
+            <span style={{ fontFamily: FONTS.pixel, fontSize: '5px', color: colors.textDim }}>
               {convMessages.length} msg
             </span>
           )}
-          <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: COLORS.textDim }}>
+          <span style={{ fontFamily: FONTS.pixel, fontSize: '6px', color: colors.textDim }}>
             R{event.round}
           </span>
         </span>
@@ -814,7 +822,7 @@ const EventCard: React.FC<{
       <div style={{
         fontFamily: FONTS.body,
         fontSize: 13,
-        color: COLORS.text,
+        color: colors.text,
         lineHeight: 1.5,
         whiteSpace: 'pre-wrap',
       }}>
@@ -826,7 +834,7 @@ const EventCard: React.FC<{
         <div style={{
           fontFamily: FONTS.body,
           fontSize: 11,
-          color: COLORS.textDim,
+          color: colors.textDim,
           marginTop: 4,
           lineHeight: 1.5,
           whiteSpace: 'pre-wrap',
@@ -878,19 +886,19 @@ const EventCard: React.FC<{
         <div style={{
           marginTop: 10,
           paddingTop: 8,
-          borderTop: `1px solid ${COLORS.border}44`,
+          borderTop: `1px solid ${colors.border}44`,
           maxHeight: 240,
           overflowY: 'auto',
         }}>
           {convMessages.map(msg => (
             <div key={msg.id} style={{
               padding: '4px 0',
-              borderBottom: `1px solid ${COLORS.border}15`,
+              borderBottom: `1px solid ${colors.border}15`,
             }}>
               <span style={{
                 fontFamily: FONTS.pixel,
                 fontSize: '6px',
-                color: COLORS.accent,
+                color: colors.accent,
                 marginRight: 6,
               }}>
                 {msg.agentName}
@@ -898,7 +906,7 @@ const EventCard: React.FC<{
               <span style={{
                 fontFamily: FONTS.body,
                 fontSize: 12,
-                color: COLORS.text,
+                color: colors.text,
                 lineHeight: 1.4,
               }}>
                 {msg.message}

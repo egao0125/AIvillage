@@ -2,7 +2,8 @@ import React from 'react';
 import { useWerewolfGodMode, useWerewolfPhase, useAgents } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 import { werewolfStart } from '../../network/socket';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 const PHASE_INFO: Record<string, { label: string; color: string }> = {
   night: { label: 'NIGHT', color: '#6366f1' },
@@ -12,19 +13,20 @@ const PHASE_INFO: Record<string, { label: string; color: string }> = {
   ended: { label: 'ENDED', color: '#6b7280' },
 };
 
-const btnStyle: React.CSSProperties = {
-  padding: '5px 10px',
-  background: COLORS.bg,
-  border: `1px solid ${COLORS.border}`,
-  borderRadius: 4,
-  cursor: 'pointer',
-  fontFamily: FONTS.pixel,
-  fontSize: '7px',
-  letterSpacing: 1,
-  transition: 'all 0.2s',
-};
-
 export const WerewolfControls: React.FC = () => {
+  const { colors } = useTheme();
+
+  const btnStyle: React.CSSProperties = {
+    padding: '5px 10px',
+    background: colors.bg,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    cursor: 'pointer',
+    fontFamily: FONTS.pixel,
+    fontSize: '7px',
+    letterSpacing: 1,
+    transition: 'all 0.2s',
+  };
   const godMode = useWerewolfGodMode();
   const { phase, round } = useWerewolfPhase();
   const agents = useAgents();
@@ -46,15 +48,15 @@ export const WerewolfControls: React.FC = () => {
 
     return (
       <div style={containerStyle}>
-        <span style={{ fontFamily: FONTS.pixel, fontSize: '7px', color: COLORS.textDim, letterSpacing: 1 }}>
+        <span style={{ fontFamily: FONTS.pixel, fontSize: '7px', color: colors.textDim, letterSpacing: 1 }}>
           {agentCount} AGENTS
         </span>
         <button
           onClick={() => canStart && werewolfStart()}
           style={{
             ...btnStyle,
-            color: canStart ? '#4ade80' : COLORS.textDim,
-            border: `1px solid ${canStart ? '#4ade80' : COLORS.border}`,
+            color: canStart ? '#4ade80' : colors.textDim,
+            border: `1px solid ${canStart ? '#4ade80' : colors.border}`,
             cursor: canStart ? 'pointer' : 'not-allowed',
             opacity: canStart ? 1 : 0.5,
           }}
@@ -65,7 +67,7 @@ export const WerewolfControls: React.FC = () => {
     );
   }
 
-  const info = PHASE_INFO[phase] ?? { label: phase.toUpperCase(), color: COLORS.textDim };
+  const info = PHASE_INFO[phase] ?? { label: phase.toUpperCase(), color: colors.textDim };
 
   return (
     <div style={containerStyle}>
@@ -76,8 +78,8 @@ export const WerewolfControls: React.FC = () => {
           alignItems: 'center',
           gap: 6,
           padding: '5px 10px',
-          background: COLORS.bg,
-          border: `1px solid ${COLORS.border}`,
+          background: colors.bg,
+          border: `1px solid ${colors.border}`,
           borderRadius: 4,
           fontFamily: FONTS.pixel,
           fontSize: '7px',
@@ -95,7 +97,7 @@ export const WerewolfControls: React.FC = () => {
           }}
         />
         <span style={{ color: info.color }}>{info.label}</span>
-        <span style={{ color: COLORS.textDim }}>R{round}</span>
+        <span style={{ color: colors.textDim }}>R{round}</span>
       </div>
 
       {/* God mode toggle */}
@@ -103,9 +105,9 @@ export const WerewolfControls: React.FC = () => {
         onClick={() => gameStore.toggleWerewolfGodMode()}
         style={{
           ...btnStyle,
-          background: godMode ? '#2a1a1a' : COLORS.bg,
-          color: godMode ? '#ef4444' : COLORS.textDim,
-          border: `1px solid ${godMode ? '#ef4444' : COLORS.border}`,
+          background: godMode ? '#2a1a1a' : colors.bg,
+          color: godMode ? '#ef4444' : colors.textDim,
+          border: `1px solid ${godMode ? '#ef4444' : colors.border}`,
         }}
       >
         {godMode ? 'HIDE ROLES' : 'SHOW ROLES'}

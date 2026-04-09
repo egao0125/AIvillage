@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { WerewolfGameOverPayload } from '@ai-village/shared';
-import { COLORS, FONTS } from '../styles';
+import { FONTS } from '../styles';
+import { useTheme } from '../ThemeContext';
 
 interface Props {
   payload: WerewolfGameOverPayload;
@@ -30,6 +31,7 @@ const PHASE_ICONS: Record<string, string> = {
 };
 
 export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBackToMenu }) => {
+  const { colors } = useTheme();
   const [revealedCards, setRevealedCards] = useState(0);
   const [showTimeline, setShowTimeline] = useState(false);
   const [showStats, setShowStats] = useState(false);
@@ -86,7 +88,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
         <p style={{
           fontFamily: FONTS.body,
           fontSize: 14,
-          color: COLORS.textDim,
+          color: colors.textDim,
           margin: '8px 0 0',
         }}>
           {isVillagersWin
@@ -106,16 +108,16 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
       }}>
         {payload.roles.map((r, i) => {
           const isRevealed = i < revealedCards;
-          const roleColor = ROLE_COLORS[r.role] ?? COLORS.textDim;
+          const roleColor = ROLE_COLORS[r.role] ?? colors.textDim;
           return (
             <div key={r.agentId} style={{
               width: 100,
               padding: '12px 8px',
               borderRadius: 8,
-              border: `1px solid ${isRevealed ? roleColor : COLORS.border}`,
+              border: `1px solid ${isRevealed ? roleColor : colors.border}`,
               background: isRevealed
-                ? `linear-gradient(180deg, ${roleColor}15 0%, ${COLORS.bg} 100%)`
-                : COLORS.bg,
+                ? `linear-gradient(180deg, ${roleColor}15 0%, ${colors.bg} 100%)`
+                : colors.bg,
               textAlign: 'center',
               opacity: isRevealed ? (r.alive ? 1 : 0.5) : 0.3,
               transform: isRevealed ? 'scale(1)' : 'scale(0.85)',
@@ -131,7 +133,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
               <div style={{
                 fontFamily: FONTS.pixel,
                 fontSize: 7,
-                color: COLORS.text,
+                color: colors.text,
                 marginBottom: 4,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -153,7 +155,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
                 <div style={{
                   fontFamily: FONTS.body,
                   fontSize: 9,
-                  color: COLORS.textDim,
+                  color: colors.textDim,
                   marginTop: 2,
                 }}>
                   DEAD
@@ -177,7 +179,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
           <h2 style={{
             fontFamily: FONTS.pixel,
             fontSize: 10,
-            color: COLORS.textAccent,
+            color: colors.textAccent,
             marginBottom: 12,
             letterSpacing: 2,
           }}>
@@ -187,7 +189,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
             maxHeight: 240,
             overflowY: 'auto',
             borderRadius: 6,
-            border: `1px solid ${COLORS.border}`,
+            border: `1px solid ${colors.border}`,
           }}>
             {payload.timeline.map((entry, i) => (
               <div key={i} style={{
@@ -198,7 +200,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
                 background: entry.phase === 'night' || entry.phase === 'dawn'
                   ? 'rgba(26,26,46,0.8)'
                   : 'rgba(22,33,62,0.5)',
-                borderBottom: i < payload.timeline.length - 1 ? `1px solid ${COLORS.border}` : 'none',
+                borderBottom: i < payload.timeline.length - 1 ? `1px solid ${colors.border}` : 'none',
               }}>
                 <span style={{ fontSize: 14, flexShrink: 0 }}>
                   {PHASE_ICONS[entry.phase] ?? ''}
@@ -206,7 +208,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
                 <span style={{
                   fontFamily: FONTS.pixel,
                   fontSize: 7,
-                  color: COLORS.textDim,
+                  color: colors.textDim,
                   flexShrink: 0,
                   width: 50,
                 }}>
@@ -215,7 +217,7 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
                 <span style={{
                   fontFamily: FONTS.body,
                   fontSize: 13,
-                  color: COLORS.text,
+                  color: colors.text,
                   flex: 1,
                 }}>
                   {entry.event}
@@ -247,22 +249,22 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
             <div key={stat.label} style={{
               padding: '10px 16px',
               borderRadius: 6,
-              background: COLORS.bgCard,
-              border: `1px solid ${COLORS.border}`,
+              background: colors.bgCard,
+              border: `1px solid ${colors.border}`,
               textAlign: 'center',
               minWidth: 80,
             }}>
               <div style={{
                 fontFamily: FONTS.pixel,
                 fontSize: 16,
-                color: COLORS.textAccent,
+                color: colors.textAccent,
               }}>
                 {stat.value}
               </div>
               <div style={{
                 fontFamily: FONTS.body,
                 fontSize: 11,
-                color: COLORS.textDim,
+                color: colors.textDim,
                 marginTop: 2,
               }}>
                 {stat.label}
@@ -302,8 +304,8 @@ export const WerewolfGameOver: React.FC<Props> = ({ payload, onPlayAgain, onBack
               fontSize: 10,
               padding: '12px 24px',
               background: 'transparent',
-              color: COLORS.textDim,
-              border: `1px solid ${COLORS.border}`,
+              color: colors.textDim,
+              border: `1px solid ${colors.border}`,
               borderRadius: 6,
               cursor: 'pointer',
               letterSpacing: 1,
