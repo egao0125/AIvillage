@@ -3085,8 +3085,19 @@ Answer with ONLY one word: "support" or "oppose".`,
     await new Promise(resolve => setTimeout(resolve, 2000));
     console.log('[FreshStart] Old controllers cleared, in-flight writes settled');
 
-    // 1. Wipe RDS data (memories, world_state, agent_controllers) but keep agent rows
+    // 1. Wipe all agents from memory
+    this.world.agents.clear();
+    this.agentApiKeys.clear();
+    this.lastConversationPair.clear();
+
+    // 2. Wipe RDS data (agents, memories, world_state, agent_controllers)
     if (this.persistence) {
+      try {
+        await this.persistence.deleteAllAgents();
+        console.log('[FreshStart] All agents deleted');
+      } catch (err) {
+        console.error('[FreshStart] Failed to delete agents:', err);
+      }
       try {
         await this.persistence.deleteAllMemories();
         console.log('[FreshStart] All memories deleted');

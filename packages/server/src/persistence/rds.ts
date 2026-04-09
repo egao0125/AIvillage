@@ -458,6 +458,15 @@ export class RdsPersistence {
   // Additional methods to replace persistence.client direct references
   // ---------------------------------------------------------------------------
 
+  async deleteAllAgents(): Promise<void> {
+    try {
+      await this.pool.query(`DELETE FROM agents`);
+    } catch (err) {
+      console.error('[RDS] deleteAllAgents failed:', (err as Error).message);
+      throw err;
+    }
+  }
+
   async deleteAllMemories(): Promise<void> {
     try {
       await this.pool.query(`DELETE FROM memories`);
