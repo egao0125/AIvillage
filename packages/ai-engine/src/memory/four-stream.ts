@@ -1594,12 +1594,20 @@ ${escapeXml(outcomeText)}
 ${existingLessons ? '<existing_lessons>\n' + escapeXml(existingLessons) + '\n</existing_lessons>\n\nDo not repeat existing lessons. Only add NEW insights.' : ''}
 
 What patterns do you see? What works and what doesn't?
-Extract 1-2 actionable strategy lessons. Be specific and practical.
+Extract 1-2 actionable strategy lessons. Each lesson MUST:
+- Name a SPECIFIC action type (gather, trade, craft, talk, claim, etc.)
+- State the expected outcome or why it works/fails
+- Be at least 15 words long
 
-Examples of good lessons:
-- "Gathering wheat in the morning before others arrive yields more"
-- "Trading with Felix always ends badly — he undervalues my goods"
-- "Crafting bread before eating raw wheat is more efficient for hunger"
+Examples of GOOD lessons:
+- "Gathering wheat at the farm in morning yields 2x more because fewer agents compete for resources"
+- "Trading herbs with Rosalind at the garden gets wheat in return — she always accepts herb trades"
+- "Claiming areas always gets rejected 1-6 — build alliances first before attempting property claims"
+
+Examples of BAD lessons (too vague — do NOT output these):
+- "Build alliances" (no specific action or outcome)
+- "Be more careful" (not actionable)
+- "Talk to people more" (no specific target or purpose)
 
 JSON array of strings. Only genuinely new insights. Empty array [] if nothing new to learn.`;
 
@@ -1625,6 +1633,10 @@ JSON array of strings. Only genuinely new insights. Empty array [] if nothing ne
       if (Array.isArray(lessons)) {
         for (const lesson of lessons.slice(0, 2)) {
           if (typeof lesson !== 'string' || lesson.length < 10) continue;
+          // Specificity filter (research: Agent Skills +7.8pp from refinement):
+          // Reject vague strategies that don't name a concrete action or outcome.
+          const wordCount = lesson.split(/\s+/).length;
+          if (wordCount < 12) continue; // too vague to be actionable
           // Deduplicate against existing strategies
           const isDuplicate = this.learnedStrategies.some(s =>
             s.content.toLowerCase() === lesson.toLowerCase()

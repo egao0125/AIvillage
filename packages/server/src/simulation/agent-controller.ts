@@ -56,6 +56,8 @@ export class AgentController {
   private conversationPairLog: Map<string, { count: number; day: number }> = new Map();
   /** Per-target cooldown: agentId → last game-minute talked. Prevents same-person spam. */
   private lastTalkedGameMinute: Map<string, number> = new Map();
+  /** Per-action-prefix success tracking for outcome-conditioned reward. */
+  private actionTypeSuccessMap: Map<string, { successes: number; attempts: number }> = new Map();
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
@@ -287,11 +289,36 @@ export class AgentController {
     // goalProgress axis: goal-aware via affinity map. Agents with goalAffinities get
     // a per-action bonus/penalty based on how well the action type aligns with their goal.
     // Fallback to generic heuristic if affinities not yet generated.
-    const affinity = this.getGoalAffinity(actionType);
+    //
+    // Outcome-conditioned affinity (research fix): static affinity rewarded agents
+    // for intent even on repeated failure (e.g. Nox claiming areas 6 times, all
+    // rejected, still getting +0.45 goalProgress each time). Now scale affinity by
+    // historical success rate: effectiveAffinity = affinity × max(0.1, successRate)
+    // where successRate = (successes + 1) / (attempts + 2) [Laplace smoothing].
+    const rawAffinity = this.getGoalAffinity(actionType);
+    const prefix = actionType.split('_')[0];
+    const prefixHistory = history.filter(s => s.actionType.startsWith(prefix));
+    let effectiveAffinity = rawAffinity;
+    if (prefixHistory.length >= 3 && rawAffinity > 0) {
+      // Count successes: entries followed by a positive outcome are "successes"
+      // Use the actionSuccess field from memories if available, else use the
+      // simpler proxy: did the agent's stats improve after the action?
+      const attempts = prefixHistory.length;
+      // We don't have per-entry success in strategyHistory, so use the current
+      // outcome to update a running count. Track on agent object.
+      if (!this.actionTypeSuccessMap) this.actionTypeSuccessMap = new Map();
+      const key = prefix;
+      const prev = this.actionTypeSuccessMap.get(key) ?? { successes: 0, attempts: 0 };
+      prev.attempts++;
+      if (outcome.success) prev.successes++;
+      this.actionTypeSuccessMap.set(key, prev);
+      const successRate = (prev.successes + 1) / (prev.attempts + 2); // Laplace
+      effectiveAffinity = rawAffinity * Math.max(0.1, successRate);
+    }
     const baseGoal = outcome.success
       ? Math.min(0.2, itemsGainedCount * 0.08)
       : -0.05;
-    const rawGoal = baseGoal + affinity; // affinity shifts the baseline [-0.3, +0.5]
+    const rawGoal = baseGoal + effectiveAffinity;
     const goalProgress = Math.max(-1, Math.min(1,
       rawGoal > 0 ? rawGoal * diminishing : rawGoal
     ));
@@ -2578,9 +2605,33 @@ State your vote and explain your reasoning.`;
 
     const nearbyIds = new Set(situation.nearbyAgents.map(a => a.id));
 
-    // 1. Check weighted commitments — promises/oaths from conversations
+    // 0. Time-aware commitment urgency (research: temporal reasoning / BDI):
+    // Fire even when the target ISN'T nearby — if a commitment expires today
+    // or is overdue, warn the agent so they can go fulfill it proactively.
     const activeCommitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
+    for (const c of activeCommitments) {
+      if (nearbyIds.has(c.targetId)) continue; // handled by existing logic below
+      const daysLeft = c.expiresDay - this.world.time.day;
+      if (daysLeft > 0) continue; // not due yet
+      const weightLabel = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'PROMISE' : 'casual promise';
+      const urgency = daysLeft < 0 ? 'OVERDUE' : 'due TODAY';
+      const targetName = this.world.getAgent(c.targetId)?.config.name ?? 'someone';
+      // Item-based commitments: do we have what we need?
+      if (c.itemsPromised && c.itemsPromised.length > 0) {
+        const missing = c.itemsPromised.filter(item =>
+          !this.agent.inventory.some(i => i.name.toLowerCase().includes(item))
+        );
+        if (missing.length > 0) {
+          return `YOUR ${weightLabel} to ${targetName} is ${urgency}: "${c.content.slice(0, 50)}". You still need: ${missing.join(', ')}. Go gather or trade for them before time runs out.`;
+        } else {
+          return `YOUR ${weightLabel} to ${targetName} is ${urgency}: "${c.content.slice(0, 50)}". You have everything needed — go find ${targetName} and deliver.`;
+        }
+      }
+      // Talk/meet commitments: just remind them to go find the person
+      return `YOUR ${weightLabel} to ${targetName} is ${urgency}: "${c.content.slice(0, 50)}". Go find ${targetName} before you break another promise.`;
+    }
 
+    // 1. Check weighted commitments — targets that ARE nearby
     for (const c of activeCommitments) {
       // Is the commitment target nearby?
       if (!nearbyIds.has(c.targetId)) continue;

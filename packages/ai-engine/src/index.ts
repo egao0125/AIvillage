@@ -805,22 +805,36 @@ If nothing notable was exchanged, return []`;
     return base;
   }
 
-  /** Build a promise ledger showing current commitments (max 200 chars) */
+  /** Build a promise ledger showing current commitments + reliability rate */
   private buildPromiseLedger(): string {
-    const commitments = (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken);
-    if (commitments.length === 0) return '';
-    const totalWeight = commitments.reduce((s, c) => s + c.weight, 0);
+    const all = this.agent.commitments ?? [];
+    const active = all.filter(c => !c.fulfilled && !c.broken);
+    if (active.length === 0 && all.length === 0) return '';
+
+    // Reliability scorecard (research: metacognition / self-directed learning)
+    const fulfilled = all.filter(c => c.fulfilled).length;
+    const broken = all.filter(c => c.broken).length;
+    const total = fulfilled + broken;
+    let reliabilityLine = '';
+    if (total >= 2) {
+      const pct = Math.round((fulfilled / total) * 100);
+      reliabilityLine = `\nYour track record: ${fulfilled}/${total} promises kept (${pct}%). Others notice.`;
+    }
+
+    if (active.length === 0) return reliabilityLine;
+
+    const totalWeight = active.reduce((s, c) => s + c.weight, 0);
     const MAX = 15;
     const lines: string[] = [];
     let budget = 150;
-    for (const c of commitments) {
+    for (const c of active) {
       const tag = c.weight === 5 ? 'OATH' : c.weight === 3 ? 'promise' : 'casual';
       const line = `- ${c.targetName}: ${c.content.slice(0, 30)} (${tag}, exp d${c.expiresDay})`;
       if (budget - line.length < 0) break;
       lines.push(line);
       budget -= line.length;
     }
-    return `\nPROMISES (${totalWeight}/${MAX} weight, ${MAX - totalWeight} free):\n${lines.join('\n')}`;
+    return `\nPROMISES (${totalWeight}/${MAX} weight, ${MAX - totalWeight} free):\n${lines.join('\n')}${reliabilityLine}`;
   }
 
   /** Commitment context for talk() — max 100 chars */
@@ -851,10 +865,21 @@ If nothing notable was exchanged, return []`;
 
     // Build sectioned action menu
     const physicalActions = situation.availableActions.filter(a => a.category === 'physical');
-    const socialActions = situation.availableActions.filter(a => a.category === 'social');
     const communityActions = situation.availableActions.filter(a => a.category === 'creative');
     const movementActions = situation.availableActions.filter(a => a.category === 'movement');
     const restActions = situation.availableActions.filter(a => a.category === 'rest');
+
+    // Hard survival gate (research: satisficing / homeostatic agents):
+    // When starving with no food, remove pure social actions from the menu.
+    // Keep trade/give (can acquire food) but filter out talk/ally/confront etc.
+    // Don't ask the LLM to resist temptation — remove the temptation.
+    const starving = situation.vitals.hunger >= 70 && !situation.inventory.some(i => i.type === 'food');
+    const socialActions = situation.availableActions.filter(a => {
+      if (a.category !== 'social') return false;
+      if (!starving) return true;
+      // Keep food-acquiring social actions
+      return a.id.startsWith('trade') || a.id.startsWith('give') || a.id.startsWith('steal');
+    });
 
     let actionMenu = 'WHAT YOU CAN DO:\n';
 
@@ -962,6 +987,42 @@ Reply with ONLY valid JSON:
         })()
       : '';
 
+    // Repeated failure detection (research: counterfactual learning):
+    // If an action-type prefix has been attempted 3+ times with 0 or very low
+    // success, warn the agent so they don't keep doing the same thing.
+    let failurePatternBlock = '';
+    const stratHistory = this.agent.strategyHistory ?? [];
+    if (stratHistory.length >= 5) {
+      const prefixCounts = new Map<string, { attempts: number; description: string }>();
+      for (const s of stratHistory) {
+        const pfx = s.actionType.split('_')[0];
+        const entry = prefixCounts.get(pfx) ?? { attempts: 0, description: s.actionType };
+        entry.attempts++;
+        prefixCounts.set(pfx, entry);
+      }
+      // Check recent memories for success signals per prefix
+      const recentOutcomes = this.fourStream?.getRecentTimeline(30) ?? [];
+      const prefixSuccesses = new Map<string, number>();
+      for (const m of recentOutcomes) {
+        if (m.actionSuccess === true) {
+          const pfx = (m.actionType ?? '').split('_')[0];
+          if (pfx) prefixSuccesses.set(pfx, (prefixSuccesses.get(pfx) ?? 0) + 1);
+        }
+      }
+      const warnings: string[] = [];
+      for (const [pfx, { attempts }] of prefixCounts) {
+        if (attempts < 3) continue;
+        const successes = prefixSuccesses.get(pfx) ?? 0;
+        const rate = successes / attempts;
+        if (rate < 0.15) {
+          warnings.push(`You've tried "${pfx}" actions ${attempts} times with ${successes} successes. Your current approach is not working — try something fundamentally different.`);
+        }
+      }
+      if (warnings.length > 0) {
+        failurePatternBlock = '\n\nFAILURE PATTERNS:\n' + warnings.slice(0, 2).join('\n');
+      }
+    }
+
     const systemPrompt = survivalCrisis
       // Crisis ordering: identity stays at position 1 (global workspace anchor); vitals
       // urgency competes AFTER identity is established, not by replacing it.
@@ -984,7 +1045,7 @@ ${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situ
 ${situation.villagePopulation ? '\nPEOPLE IN THE VILLAGE (you can walk to anyone):\n' + situation.villagePopulation : ''}${predictionBlock}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
-${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
+${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}${failurePatternBlock}
 
 ${actionMenu}
 
@@ -1009,7 +1070,7 @@ ${situation.villageHistory ? '\nVILLAGE HISTORY (what everyone knows):\n' + situ
 ${situation.villagePopulation ? '\nPEOPLE IN THE VILLAGE (you can walk to anyone):\n' + situation.villagePopulation : ''}${predictionBlock}
 ${situation.recentOutcome ? '\nJUST HAPPENED: ' + situation.recentOutcome : ''}
 ${situation.todaySummary ? '\nTODAY SO FAR: ' + situation.todaySummary : ''}
-${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}
+${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}${failurePatternBlock}
 
 ${actionMenu}
 
@@ -1605,6 +1666,17 @@ Your turn:`;
       }
     }
 
+    // Commitment reliability scorecard (research: metacognition / self-refinement)
+    const allCommitments = this.agent.commitments ?? [];
+    const fulfilledCount = allCommitments.filter(c => c.fulfilled).length;
+    const brokenCount = allCommitments.filter(c => c.broken).length;
+    const totalResolved = fulfilledCount + brokenCount;
+    let commitmentScorecard = '';
+    if (totalResolved >= 2) {
+      const pct = Math.round((fulfilledCount / totalResolved) * 100);
+      commitmentScorecard = `\n\nCOMMITMENT SCORECARD: You made ${totalResolved} promises. You kept ${fulfilledCount}. You broke ${brokenCount}. Reliability: ${pct}%.${pct < 50 ? ' This is damaging your reputation. Are you over-committing, or failing to follow through?' : ''}`;
+    }
+
     // Infra 7: Single prompt produces both reflection + MY EXPERIENCE update
     const systemPrompt = `${this.worldView}
 
@@ -1619,7 +1691,7 @@ ${this.buildReflectionGuide()}
 What are you STILL upset about from before today? What can't you let go of?
 ${this.getSituationalObservations()}
 
-${this.buildContextBlock()}${socialSection}
+${this.buildContextBlock()}${socialSection}${commitmentScorecard}
 
 WHAT YOU WROTE YESTERDAY (MY EXPERIENCE):
 ${this.myExperience}
@@ -1648,7 +1720,27 @@ Include your social map — who matters, who's dangerous, who's useful, who you 
 Be specific: names, numbers, locations, skill levels. Remove what's outdated. Add what you learned.
 Max 500 words. First person. No section headers. No lists of places.`;
 
-    const userPrompt = `Today's events:\n${memoryText}${narrativeSection}${failureSection}${strategySection}`;
+    // Goal adaptation pressure (research: identity-strategy lock-in):
+    // If the agent's daily goals have been similar for 3+ days without visible
+    // progress, surface a "hard question" that pushes toward strategic adaptation.
+    let goalAdaptationSection = '';
+    const history2 = this.agent.strategyHistory ?? [];
+    if (history2.length >= 20) {
+      // Check if key metrics (reputation, avgTrust, inventoryCount) are flat or declining
+      const recent = history2.slice(-10);
+      const earlier = history2.slice(-20, -10);
+      const avgOf = (arr: typeof recent, key: 'avgTrust' | 'reputation' | 'inventoryCount') =>
+        arr.reduce((s, e) => s + e[key], 0) / arr.length;
+      const trustDelta = avgOf(recent, 'avgTrust') - avgOf(earlier, 'avgTrust');
+      const repDelta = avgOf(recent, 'reputation') - avgOf(earlier, 'reputation');
+      const invDelta = avgOf(recent, 'inventoryCount') - avgOf(earlier, 'inventoryCount');
+      const stagnant = trustDelta <= 0 && repDelta <= 0 && invDelta <= 0;
+      if (stagnant) {
+        goalAdaptationSection = `\n\nHARD QUESTION: Your trust, reputation, and material wealth have not improved over your last 20 actions. Are your goals actually achievable with your current methods? If you've been pursuing the same approach for multiple days without progress, you need a fundamentally different strategy — not just trying harder at the same thing.`;
+      }
+    }
+
+    const userPrompt = `Today's events:\n${memoryText}${narrativeSection}${failureSection}${strategySection}${goalAdaptationSection}`;
 
     const response = await this.llm.complete(systemPrompt, userPrompt);
 
