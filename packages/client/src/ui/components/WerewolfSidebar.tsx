@@ -15,7 +15,7 @@ import {
 } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 import { eventBus } from '../../core/EventBus';
-import { werewolfStart } from '../../network/socket';
+import { werewolfStart, devResume } from '../../network/socket';
 import type { ChatEntry } from '../../core/GameStore';
 
 // ---------------------------------------------------------------------------
@@ -631,7 +631,7 @@ const SidebarHeader: React.FC<{
         <div style={{ display: 'flex', gap: 6 }}>
           {!phase && (
             <button
-              onClick={() => totalCount >= 6 && werewolfStart()}
+              onClick={() => { if (totalCount >= 6) { devResume(); werewolfStart(); } }}
               style={{
                 padding: '4px 12px',
                 background: totalCount >= 6 ? '#4ade8022' : 'transparent',
