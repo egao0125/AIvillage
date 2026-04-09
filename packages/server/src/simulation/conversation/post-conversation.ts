@@ -235,6 +235,15 @@ export class PostConversationProcessor {
           const cleanAgreement = agreement.replace(/^\[(CASUAL|PROMISE|OATH)\]\s*/i, '');
           const expiresDay = day + (weight === 1 ? 0 : weight === 3 ? 1 : 2);
 
+          // Reliability-aware weight downgrade: if agent has >60% broken promises,
+          // cap all new commitments to casual (weight 1). They haven't earned
+          // the right to make heavy promises yet.
+          const allResolved = (participant.commitments ?? []).filter(c => c.fulfilled || c.broken);
+          const brokenCount = allResolved.filter(c => c.broken).length;
+          if (allResolved.length >= 3 && brokenCount / allResolved.length > 0.6) {
+            weight = 1;
+          }
+
           // Check weight budget before adding
           const currentWeight = (participant.commitments ?? [])
             .filter(c => !c.fulfilled && !c.broken)

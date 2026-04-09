@@ -223,7 +223,7 @@ ${transcript}
 Summarize in JSON:
 {
   "summary": "2-3 sentences from YOUR perspective. What mattered? How did you feel? What changed?",
-  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific ('will bring wheat to tavern on Day 28'). OATH = sworn/public ('I swear I will'). Only real commitments, not pleasantries. Example: '[PROMISE] Will give food next time we meet at the farm'. Use day numbers, not 'tomorrow' or 'at dawn'."],
+  "agreements": ["Prefix each with [CASUAL], [PROMISE], or [OATH]. CASUAL = vague ('could help sometime'). PROMISE = specific, with items you CURRENTLY HAVE ('will bring wheat to tavern on Day 28'). OATH = sworn/public ('I swear I will'). Only include commitments that were EXPLICITLY stated, not implied. Don't promise items you don't have. Empty array [] if no real agreements were made. Use day numbers, not 'tomorrow'."],
   "learned": ["new facts you learned — about people, places, or resources (max 2, short)"],
   "tension": "any unresolved conflict, distrust, or worry (or null if none)"
 }
@@ -1543,7 +1543,12 @@ You can act during conversation:
   [ACTION: fight PERSON]         (hostile; both take damage, reputation cost)
 Use your actual inventory items and the real person's name. Actions happen instantly — items leave your inventory, trades are binding, fights hurt both of you.
 
-Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan. Good dialogue ends with a specific commitment: "I'll bring wheat to the farm on Day ${this.currentTime.day + 1}" or "I'll give you food when I see you at the farm." Bad commitment: "at dawn" or "tomorrow" or "by sunset" — use the day number instead. Bad dialogue is vague: "We should work together."
+Try to achieve something concrete. Don't just chat — negotiate, propose, demand, confess, or plan.
+ONLY make a promise if you genuinely intend to follow through AND have the means to deliver. Don't promise items you don't have. Don't promise to meet somewhere unless you're willing to drop everything to get there on time. Breaking promises costs reputation.${
+  (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken).reduce((s, c) => s + c.weight, 0) >= 10
+    ? ' You already have many active promises — do NOT make new ones until you fulfill existing ones.'
+    : ''
+} If you do commit, use day numbers: "on Day ${this.currentTime.day + 1}" not "tomorrow" or "at dawn".
 
 Output ONLY spoken words in quotation marks. 1-3 sentences.
 
