@@ -82,6 +82,8 @@ export class ConversationManager {
     let maxTurns: number;
     if (purpose === 'werewolf_night_hunt') {
       maxTurns = 4; // wolves agree on target quickly (2 exchanges)
+    } else if (purpose === 'werewolf_town_meeting') {
+      maxTurns = agentIds.length * 3; // everyone speaks ~3 times; force-ended by vote at 13:00
     } else if (purpose && ConversationManager.PURPOSE_SHORT.test(purpose)) {
       maxTurns = 6; // transactional — trade, give, teach, ask
     } else if (purpose) {
@@ -89,8 +91,10 @@ export class ConversationManager {
     } else {
       maxTurns = 8; // spontaneous/social
     }
-    // Hard cap
-    maxTurns = Math.min(maxTurns, 10);
+    // Hard cap (meetings exempt — they're force-ended by vote timer)
+    if (purpose !== 'werewolf_town_meeting') {
+      maxTurns = Math.min(maxTurns, 10);
+    }
 
     const conversation: Conversation = {
       id,
@@ -102,7 +106,12 @@ export class ConversationManager {
 
     this.world.addConversation(conversation);
     const agendas = new Map<string, string>();
-    if (purpose) {
+    if (purpose === 'werewolf_town_meeting') {
+      // Everyone shares the meeting agenda
+      for (const aid of agentIds) {
+        agendas.set(aid, 'Discuss suspicions and share evidence at the town meeting. Who might be a werewolf?');
+      }
+    } else if (purpose) {
       // The initiator's agenda is their purpose for starting this conversation
       const initiatorId = agentIds[0];
       agendas.set(initiatorId, purpose);
@@ -425,6 +434,18 @@ export class ConversationManager {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Force-end a conversation from outside (e.g. phase manager ending meeting for vote).
+   * Returns participant IDs so the caller can release them.
+   */
+  forceEndConversation(conversationId: string): string[] {
+    const active = this.activeConversations.get(conversationId);
+    if (!active) return [];
+    const participants = [...active.conversation.participants];
+    this.endConversation(conversationId);
+    return participants;
   }
 
   /**

@@ -467,6 +467,16 @@ export class WerewolfPhaseManager {
     // Stop capturing meeting speech — we have the full transcript
     this.broadcaster.setOnSpeakHook(undefined);
 
+    // Force-end the meeting group conversation if still active
+    if (this.state.meetingConversationId) {
+      const participants = this.conversationManager.forceEndConversation(this.state.meetingConversationId);
+      for (const pid of participants) {
+        const ctrl = this.controllers.get(pid);
+        if (ctrl) ctrl.leaveConversation();
+      }
+      this.state.meetingConversationId = null;
+    }
+
     this.state.voteCalled = true;
     this.state.phase = 'vote';
     this.state.phaseTimer = 0;
@@ -477,7 +487,7 @@ export class WerewolfPhaseManager {
 
     this.voteManager.startVote(this.meetingTranscript);
 
-    console.log(`[Werewolf] System triggers vote — all agents must name their exile target`);
+    console.log(`[Werewolf] System triggers vote — ${this.meetingTranscript.length} transcript lines — all agents must name their exile target`);
   }
 
   /**
@@ -829,6 +839,26 @@ export class WerewolfPhaseManager {
       }).catch(() => {});
     }
 
+    // Start a forced group conversation with ALL alive agents
+    const aliveIds = [...this.state.alive];
+    if (aliveIds.length >= 2) {
+      // Use first alive agent's position as meeting location (plaza)
+      const firstAgent = this.world.getAgent(aliveIds[0]);
+      const meetingLoc = firstAgent ? { ...firstAgent.position } : { x: 512, y: 512 };
+      const convId = this.conversationManager.startConversation(
+        aliveIds,
+        undefined,
+        meetingLoc,
+        'werewolf_town_meeting',
+      );
+      this.state.meetingConversationId = convId;
+      // Put all alive agents into conversing state
+      for (const id of aliveIds) {
+        const ctrl = this.controllers.get(id);
+        if (ctrl) ctrl.enterConversation();
+      }
+    }
+
     // Event log
     this.state.eventLog.push({
       day: this.state.round,
@@ -837,7 +867,7 @@ export class WerewolfPhaseManager {
       agentIds: [],
     });
 
-    console.log(`[Werewolf] Town Meeting begins (Round ${this.state.round})`);
+    console.log(`[Werewolf] Town Meeting begins (Round ${this.state.round}) — ${aliveIds.length} agents in group conversation`);
   }
 
   private transitionToAfternoon(): void {

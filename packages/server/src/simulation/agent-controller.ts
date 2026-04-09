@@ -1901,7 +1901,7 @@ State your vote and explain your reasoning.`;
     const raw = decision.actionId.trim().toLowerCase();
 
     // Werewolf actions that take a target (space or underscore separated)
-    const TARGET_ACTIONS = ['attack', 'investigate', 'guard', 'vote', 'accuse', 'whisper', 'change_target'];
+    const TARGET_ACTIONS = ['attack', 'investigate', 'guard', 'vote', 'accuse', 'whisper', 'talk', 'change_target'];
 
     for (const action of TARGET_ACTIONS) {
       // "guard elena" → guard + elena
@@ -2083,6 +2083,30 @@ State your vote and explain your reasoning.`;
         }
         this.state = 'performing';
         this.activityTimer = 3;
+        return true;
+      }
+
+      case 'talk': {
+        // Day-phase conversation — set pending target and move toward them
+        const targetId = resolveTarget(decision.targetName);
+        if (targetId) {
+          this.pendingConversationTarget = targetId;
+          this.pendingConversationPurpose = shortReason;
+          const target = this.world.getAgent(targetId);
+          if (target) {
+            const dist = Math.abs(this.agent.position.x - target.position.x) + Math.abs(this.agent.position.y - target.position.y);
+            if (dist > 3) {
+              this.startMoveTo({ ...target.position });
+            } else if (this.soloActionExecutor) {
+              const started = this.soloActionExecutor.requestConversation(this.agent.id, targetId);
+              if (started) {
+                this.pendingConversationTarget = null;
+                this.pendingConversationPurpose = null;
+              }
+            }
+          }
+          this.broadcaster.agentAction(this.agent.id, `wants to talk to ${decision.targetName}`);
+        }
         return true;
       }
 
