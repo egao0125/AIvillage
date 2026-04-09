@@ -9,6 +9,7 @@ import { eventBus } from '../../core/EventBus';
 import { gameStore } from '../../core/GameStore';
 import { sendViewportUpdate } from '../../network/socket';
 import { generateAgentTexture, agentColorsFromName } from './BootScene';
+import { devPause } from '../../network/socket';
 import type { Agent, GameTime } from '@ai-village/shared';
 
 const TILE_SIZE = 32; // display size (16px source tiles scaled 2x)
@@ -52,6 +53,9 @@ export class ArenaScene extends Phaser.Scene {
     this.setupEventListeners();
     this.setupStoreSubscription();
     this.syncInitialState();
+
+    // Pause sim until werewolf game is explicitly started
+    devPause();
   }
 
   // ── Tilemap — Tiled JSON loaded in BootScene ──────────────
@@ -258,16 +262,7 @@ export class ArenaScene extends Phaser.Scene {
       }),
 
       eventBus.on('agent:death', (data: { agentId: string; cause: string }) => {
-        // In werewolf mode, show dead agents as dimmed bodies instead of removing them
-        if (gameStore.getState().werewolfPhase) {
-          const sprite = this.agentSprites.get(data.agentId);
-          if (sprite) {
-            sprite.setDead(true);
-            this.deadAgentIds.add(data.agentId);
-          }
-        } else {
-          this.despawnAgent(data.agentId);
-        }
+        this.despawnAgent(data.agentId);
       }),
 
       eventBus.on('agent:leave', (data: { agentId: string }) => {
@@ -289,8 +284,8 @@ export class ArenaScene extends Phaser.Scene {
 
       eventBus.on('werewolf:phase', (data: { phase: string; round: number }) => {
         this.updateWerewolfRoleLabels();
-        // Clear dead bodies at night start
         if (data.phase === 'night') {
+          // deadAgentIds no longer used — agents despawn immediately on death
           for (const deadId of this.deadAgentIds) {
             this.despawnAgent(deadId);
           }
