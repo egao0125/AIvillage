@@ -106,6 +106,14 @@ export class WerewolfPhaseManager {
       if (agent) this.agentNames.set(id, agent.config.name);
     }
 
+    // Wipe all agent memories from previous games — fresh start
+    for (const id of agentIds) {
+      const cognition = this.cognitions.get(id);
+      if (cognition?.fourStream) {
+        cognition.fourStream.reset();
+      }
+    }
+
     // Assign roles
     const roles = assignRoles(agentIds);
     this.state = this.freshState();
@@ -163,7 +171,8 @@ export class WerewolfPhaseManager {
    *   05:00 → Dawn  (results announced)
    *   05:01 → Day   (free roam, conversations)
    *   12:00 → Meeting (all agents gather at plaza for structured discussion)
-   *   12:30 → Afternoon (day resumes) if no vote called
+   *   14:00 → Vote (system triggers vote when meeting ends)
+   *   14:30 → Afternoon (day resumes) if no vote called
    *   21:00 → Next night
    */
   onTick(time: GameTime): void {
@@ -212,12 +221,12 @@ export class WerewolfPhaseManager {
         break;
 
       case 'meeting':
-        // At 13:00, system triggers the vote
-        if (hour === 13 && minute === 0 && !this.state.voteCalled) {
+        // At 14:00, system triggers the vote (meeting runs 12:00–14:00 = ~20s real time)
+        if (hour === 14 && minute === 0 && !this.state.voteCalled) {
           this.systemStartVote();
         }
-        // Safety: if clock passed 13:30 without vote starting, force it
-        if (hour >= 13 && minute >= 30 && !this.state.voteCalled) {
+        // Safety: if clock passed 14:30 without vote starting, force it
+        if (hour >= 14 && minute >= 30 && !this.state.voteCalled) {
           this.systemStartVote();
         }
         break;
@@ -587,7 +596,7 @@ export class WerewolfPhaseManager {
     this.state.nightActions = freshNightActions();
     this.state.phaseTimer = 0;
 
-    // Put villagers to sleep
+    // Put villagers to sleep — with context so they understand the gap
     for (const id of this.state.alive) {
       const role = this.state.roles.get(id);
       const agent = this.world.getAgent(id);
@@ -598,6 +607,19 @@ export class WerewolfPhaseManager {
         const ctrl = this.controllers.get(id);
         if (ctrl) {
           ctrl.state = 'sleeping';
+        }
+        // Give villagers a sleep memory so they understand the time gap
+        const cognition = this.cognitions.get(id);
+        if (cognition) {
+          void cognition.addMemory({
+            id: crypto.randomUUID(),
+            agentId: id,
+            type: 'observation',
+            content: `Night ${this.state.round} falls. As a villager with no special role, you go to sleep. You will not remember anything from tonight — only what is announced at dawn. Sleep well.`,
+            importance: 5,
+            timestamp: Date.now(),
+            relatedAgentIds: [],
+          }).catch(() => {});
         }
       } else {
         this.world.updateAgentState(id, 'active', '');
@@ -842,9 +864,12 @@ export class WerewolfPhaseManager {
     this.meetingTranscript = [];
     this.broadcaster.werewolfPhase('meeting', this.state.round);
 
-    // Start capturing all speech during the meeting
-    this.broadcaster.setOnSpeakHook((_agentId, name, message) => {
+    // Start capturing all speech during the meeting (filter to meeting conversation only)
+    this.broadcaster.setOnSpeakHook((_agentId, name, message, conversationId) => {
+      // Only capture speech from the meeting conversation (not side conversations)
+      if (this.state.meetingConversationId && conversationId !== this.state.meetingConversationId) return;
       this.meetingTranscript.push({ name, message });
+      console.log(`[MeetingTranscript] ${name}: "${message.substring(0, 60)}${message.length > 60 ? '...' : ''}" (${this.meetingTranscript.length} lines total)`);
     });
 
     // Inject meeting prompt to all alive agents

@@ -169,6 +169,26 @@ export class FourStreamMemory {
     }
   }
 
+  /**
+   * Wipe all memory streams — used when starting a new werewolf game so agents
+   * don't carry over knowledge of previous rounds (who was wolf, etc.).
+   */
+  reset(): void {
+    this.timeline = [];
+    this.dossiers.clear();
+    this.concerns = [];
+    this.beliefs = [];
+    this.learnedStrategies = [];
+    this.learnedAversions = [];
+    this.totalActionOutcomes = 0;
+    // Also clear persisted data on the agent object
+    this.agent.dossiers = [];
+    this.agent.beliefs = [];
+    this.agent.activeConcerns = [];
+    this.agent.learnedStrategies = [];
+    this.agent.learnedAversions = [];
+  }
+
   // --- STREAM 1: TIMELINE ---
 
   /**

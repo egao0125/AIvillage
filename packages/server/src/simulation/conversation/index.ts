@@ -360,46 +360,53 @@ export class ConversationManager {
       active.lastResponses.push(dialogueOnly);
       if (active.lastResponses.length > 4) active.lastResponses.shift();
 
+      // Meeting conversations are force-ended by the phase manager — skip early-exit checks
+      const isMeeting = active.purpose === 'werewolf_town_meeting';
+
       // Stall detection: both agents repeating movement-agreement phrases
-      const STALL_PHRASES = /\b(let's go|come on|lead the way|right behind|i'm ready|let's move|let's head|after you|shall we|let's do it|sounds good|let's get going|ready when you are)\b/i;
-      if (active.lastResponses.length >= 2) {
-        const curr = active.lastResponses[active.lastResponses.length - 1];
-        const prev = active.lastResponses[active.lastResponses.length - 2];
-        if (STALL_PHRASES.test(curr) && STALL_PHRASES.test(prev)) {
-          active.stallCount++;
-        } else {
-          active.stallCount = 0;
-        }
-        if (active.stallCount >= 2) {
-          console.log(`[Conversation] Stall detected (${active.stallCount} rounds of agreement) — ending`);
-          this.endConversation(conversationId, cognitions);
-          return false;
+      if (!isMeeting) {
+        const STALL_PHRASES = /\b(let's go|come on|lead the way|right behind|i'm ready|let's move|let's head|after you|shall we|let's do it|sounds good|let's get going|ready when you are)\b/i;
+        if (active.lastResponses.length >= 2) {
+          const curr = active.lastResponses[active.lastResponses.length - 1];
+          const prev = active.lastResponses[active.lastResponses.length - 2];
+          if (STALL_PHRASES.test(curr) && STALL_PHRASES.test(prev)) {
+            active.stallCount++;
+          } else {
+            active.stallCount = 0;
+          }
+          if (active.stallCount >= 2) {
+            console.log(`[Conversation] Stall detected (${active.stallCount} rounds of agreement) — ending`);
+            this.endConversation(conversationId, cognitions);
+            return false;
+          }
         }
       }
 
-      // Check if the speaker said goodbye
-      const lower = response.toLowerCase();
-      if (
-        active.turnCount >= 2 &&
-        (lower.includes('goodbye') ||
-          lower.includes('see you') ||
-          lower.includes('gotta go') ||
-          lower.includes('take care') ||
-          lower.includes('bye') ||
-          lower.includes('farewell') ||
-          lower.includes('until next time') ||
-          lower.includes('i must go') ||
-          lower.includes('i should go') ||
-          lower.includes('walk away') ||
-          lower.includes('walks away') ||
-          lower.includes('turns to leave') ||
-          lower.includes('heads off') ||
-          lower.includes('wanders off') ||
-          lower.includes('good day') ||
-          lower.includes('be well'))
-      ) {
-        this.endConversation(conversationId, cognitions);
-        return false;
+      // Check if the speaker said goodbye (skip for meetings — they're force-ended)
+      if (!isMeeting) {
+        const lower = response.toLowerCase();
+        if (
+          active.turnCount >= 2 &&
+          (lower.includes('goodbye') ||
+            lower.includes('see you') ||
+            lower.includes('gotta go') ||
+            lower.includes('take care') ||
+            lower.includes('bye') ||
+            lower.includes('farewell') ||
+            lower.includes('until next time') ||
+            lower.includes('i must go') ||
+            lower.includes('i should go') ||
+            lower.includes('walk away') ||
+            lower.includes('walks away') ||
+            lower.includes('turns to leave') ||
+            lower.includes('heads off') ||
+            lower.includes('wanders off') ||
+            lower.includes('good day') ||
+            lower.includes('be well'))
+        ) {
+          this.endConversation(conversationId, cognitions);
+          return false;
+        }
       }
 
       return true;
