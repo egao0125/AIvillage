@@ -211,21 +211,28 @@ export class SimulationEngine {
       console.warn('[Engine] Cannot start werewolf game — werewolf system not active');
       return;
     }
+
+    // End any lingering conversations
+    for (const conv of this.world.getActiveConversations()) {
+      this.conversationManager!.forceEndConversation(conv.id);
+    }
+
     // Reset world clock to Day 1, 21:00 — first night starts immediately
     this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
     this.broadcaster.worldTime(this.world.time);
 
-    // Revive all agents (they may be dead from a previous game)
+    // Revive all agents and reset controller states
     for (const agent of this.world.agents.values()) {
-      if (agent.alive === false) {
-        agent.alive = true;
-        agent.state = 'idle';
-        agent.werewolfRole = undefined;
-        agent.votingHistory = undefined;
-        agent.investigations = undefined;
-        agent.fellowWolves = undefined;
-        agent.lastGuarded = undefined;
-      }
+      agent.alive = true;
+      agent.state = 'idle';
+      agent.werewolfRole = undefined;
+      agent.votingHistory = undefined;
+      agent.investigations = undefined;
+      agent.fellowWolves = undefined;
+      agent.lastGuarded = undefined;
+      this.world.updateAgentState(agent.id, 'active', '');
+      const ctrl = this.controllers.get(agent.id);
+      if (ctrl) ctrl.state = 'idle';
     }
 
     const agentIds = Array.from(this.world.agents.values())
@@ -244,7 +251,12 @@ export class SimulationEngine {
       return;
     }
 
-    // 1. Reset all agents to alive
+    // 1. End all active conversations from previous game
+    for (const conv of this.world.getActiveConversations()) {
+      this.conversationManager!.forceEndConversation(conv.id);
+    }
+
+    // 2. Reset all agents to alive + reset controller states
     for (const agent of this.world.agents.values()) {
       agent.alive = true;
       agent.state = 'idle';
@@ -254,9 +266,14 @@ export class SimulationEngine {
       agent.lastGuarded = undefined;
       agent.votingHistory = undefined;
       this.world.updateAgentState(agent.id, 'active', '');
+      // Reset controller state — agents may be stuck in conversing/sleeping/deciding from last game
+      const ctrl = this.controllers.get(agent.id);
+      if (ctrl) {
+        ctrl.state = 'idle';
+      }
     }
 
-    // 2. Create new WerewolfPhaseManager
+    // 3. Create new WerewolfPhaseManager
     this.werewolfManager.dispose();
     this.werewolfManager = new WerewolfPhaseManager(
       this.bus, this.world, this.broadcaster, this.controllers, this.cognitions, this.conversationManager!,
@@ -266,15 +283,17 @@ export class SimulationEngine {
       ctrl.werewolfManager = this.werewolfManager;
     }
 
-    // 3. Reset world clock to Day 1, 21:00 — first night starts immediately
+    // 4. Reset world clock to Day 1, 21:00 — first night starts immediately
     this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
     this.broadcaster.worldTime(this.world.time);
 
-    // 4. Start fresh game (assigns roles, sets game rules, starts first night)
-    const agentIds = Array.from(this.world.agents.values()).map(a => a.id);
+    // 5. Start fresh game — filter out away agents (same as startWerewolfGame)
+    const agentIds = Array.from(this.world.agents.values())
+      .filter(a => a.state !== 'away')
+      .map(a => a.id);
     this.werewolfManager.startGame(agentIds);
 
-    // 5. Broadcast new game starting
+    // 6. Broadcast new game starting
     this.broadcaster.werewolfNewGame();
 
     console.log('[Engine] Werewolf game reset — new game started');
