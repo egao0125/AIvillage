@@ -533,10 +533,52 @@ export class SimulationEngine {
       }
     });
 
-    // Fix 5: Institutional rule enforcement — leaders react to violations
+    // Fix 5: Institutional rule enforcement — leaders react to violations + auto-kick repeat offenders
     this.bus.on('rule_violated', (e) => {
       const institution = this.world.institutions.get(e.institutionId);
       if (!institution) return;
+
+      // Track violations per member
+      if (!institution.violations) institution.violations = {};
+      institution.violations[e.agentId] = (institution.violations[e.agentId] ?? 0) + 1;
+      const violationCount = institution.violations[e.agentId];
+
+      // Reputation penalty for rule violation
+      const ctrl = this.controllers.get(e.agentId);
+      if (ctrl) {
+        ctrl.adjustReputation(e.agentId, -15, `Violated ${e.institutionName} rule`);
+      }
+
+      // Auto-kick on 2nd violation
+      if (violationCount >= 2 && institution.members.some(m => m.agentId === e.agentId)) {
+        this.world.removeInstitutionMember(institution.id, e.agentId);
+
+        // Expulsion news
+        const expelPost: BoardPost = {
+          id: crypto.randomUUID(), authorId: 'system',
+          authorName: 'Village News', type: 'news',
+          channel: 'all',
+          content: `${e.agentName} was expelled from ${e.institutionName} for repeated rule violations.`,
+          timestamp: Date.now(), day: this.world.time.day,
+        };
+        this.world.addBoardPost(expelPost);
+        this.broadcaster.boardPost(expelPost);
+
+        // Memory for expelled agent
+        const violatorCog = this.cognitions.get(e.agentId);
+        if (violatorCog) {
+          void violatorCog.addMemory({
+            id: crypto.randomUUID(), agentId: e.agentId,
+            type: 'observation',
+            content: `I was expelled from ${e.institutionName} for breaking rules ${violationCount} times.`,
+            importance: 8, timestamp: Date.now(), relatedAgentIds: [],
+          }).catch((err: unknown) => { console.warn('[Engine] addMemory failed (expulsion):', (err as Error).message); });
+        }
+
+        this.broadcaster.institutionUpdate(institution);
+        console.log(`[Institution] ${e.agentName} AUTO-EXPELLED from ${e.institutionName} (${violationCount} violations)`);
+        return;
+      }
 
       // Find institution leaders
       const leaders = (institution.members ?? [])
@@ -548,15 +590,15 @@ export class SimulationEngine {
 
       for (const leaderId of leaders) {
         const cognition = this.cognitions.get(leaderId);
-        const ctrl = this.controllers.get(leaderId);
-        if (!cognition || !ctrl || ctrl.apiExhausted) continue;
+        const leaderCtrl = this.controllers.get(leaderId);
+        if (!cognition || !leaderCtrl || leaderCtrl.apiExhausted) continue;
 
         // Leader gets a high-importance memory of the violation
         void cognition.addMemory({
           id: crypto.randomUUID(),
           agentId: leaderId,
           type: 'observation',
-          content: `${e.agentName} violated ${e.institutionName} rule: "${e.rule}" by doing: ${e.action}`,
+          content: `${e.agentName} violated ${e.institutionName} rule: "${e.rule}" by doing: ${e.action} (violation #${violationCount})`,
           importance: 8,
           timestamp: Date.now(),
           relatedAgentIds: [e.agentId],
@@ -564,14 +606,14 @@ export class SimulationEngine {
 
         // Trigger a reactive think — leader decides how to respond
         void cognition.think(
-          `${e.agentName}, a member of ${e.institutionName}, just broke the rule: "${e.rule}". They ${e.action}.`,
-          `You are a leader of ${e.institutionName}. You must decide how to respond — warn them, confront them, expel them, or let it slide.`,
+          `${e.agentName}, a member of ${e.institutionName}, just broke the rule: "${e.rule}". They ${e.action}. This is violation #${violationCount}.`,
+          `You are a leader of ${e.institutionName}. You must decide how to respond — warn them, confront them, expel them, or let it slide. ${violationCount >= 2 ? 'This is a repeat offender!' : ''}`,
         ).catch((err: unknown) => {
           console.warn(`[Engine] Leader think failed for ${leaderId}:`, (err as Error).message);
         });
       }
 
-      console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}"`);
+      console.log(`[Institution] ${e.agentName} violated ${e.institutionName} rule: "${e.rule}" (violation #${violationCount})`);
     });
 
     // Agent death — nearby witnesses form a memory and react immediately
@@ -2343,11 +2385,30 @@ ${villageCtx}${existingRulesCtx}
 ${voteQuestion}
 ${repContext}
 
+If this proposal addresses a real problem in the village and you have no strong personal objection, lean toward support — the proposer put their reputation on the line.
 Vote based on YOUR experiences, relationships, and beliefs — not abstract principles.
 Answer with ONLY one word: "support" or "oppose".`,
         );
 
-        const vote = result.trim().toLowerCase().includes('support') ? 'like' as const : 'dislike' as const;
+        const rawVote = result.trim().toLowerCase();
+        const supportIdx = rawVote.indexOf('support');
+        const opposeIdx = rawVote.indexOf('oppose');
+        let vote: 'like' | 'dislike';
+        if (supportIdx >= 0 && opposeIdx >= 0) {
+          // Both words found — check which comes first, but watch for negation before "support"
+          const preSupport = rawVote.slice(Math.max(0, supportIdx - 15), supportIdx);
+          const negated = /\b(don't|do not|not|cannot|never|refuse|wouldn't|won't)\b/.test(preSupport);
+          vote = negated ? 'dislike' : 'like';
+        } else if (supportIdx >= 0) {
+          const preSupport = rawVote.slice(Math.max(0, supportIdx - 15), supportIdx);
+          const negated = /\b(don't|do not|not|cannot|never|refuse|wouldn't|won't)\b/.test(preSupport);
+          vote = negated ? 'dislike' : 'like';
+        } else if (opposeIdx >= 0) {
+          vote = 'dislike';
+        } else {
+          // Neither word found — default to support (engagement over inaction)
+          vote = 'like';
+        }
         rulePost.votes.push({ agentId, vote });
 
         void cognition.addMemory({

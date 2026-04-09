@@ -943,6 +943,40 @@ export class World {
     return inst.treasury;
   }
 
+  contributeTreasury(instId: string, agentId: string, itemId: string): Item | null {
+    const inst = this.institutions.get(instId);
+    if (!inst) return null;
+    const item = this.items.get(itemId);
+    if (!item) return null;
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    // Remove from agent inventory
+    agent.inventory = agent.inventory.filter(i => i.id !== itemId);
+    item.ownerId = instId;
+    if (!inst.treasuryItems) inst.treasuryItems = [];
+    inst.treasuryItems.push(item);
+    // Recalculate numeric treasury from item values
+    inst.treasury = inst.treasuryItems.reduce((sum, i) => sum + (i.value ?? 0), 0);
+    console.log(`[World] ${agent.config.name} contributed ${item.name} to ${inst.name} treasury (now ${inst.treasury})`);
+    return item;
+  }
+
+  withdrawTreasury(instId: string, agentId: string, itemName: string): Item | null {
+    const inst = this.institutions.get(instId);
+    if (!inst || !inst.treasuryItems?.length) return null;
+    const idx = inst.treasuryItems.findIndex(i => i.name.toLowerCase().includes(itemName.toLowerCase()));
+    if (idx === -1) return null;
+    const item = inst.treasuryItems.splice(idx, 1)[0];
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    item.ownerId = agentId;
+    agent.inventory.push(item);
+    // Recalculate
+    inst.treasury = inst.treasuryItems.reduce((sum, i) => sum + (i.value ?? 0), 0);
+    console.log(`[World] ${agent.config.name} withdrew ${item.name} from ${inst.name} treasury (now ${inst.treasury})`);
+    return item;
+  }
+
   // --- Artifacts (Phase 6) ---
 
   addArtifact(artifact: Artifact): void {

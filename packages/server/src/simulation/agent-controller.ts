@@ -2208,7 +2208,7 @@ State your vote and explain your reasoning.`;
     const currentSeason = SEASON_ORDER[seasonIdx];
     const hour = this.world.time.hour;
 
-    const actions: AvailableAction[] = [];
+    let actions: AvailableAction[] = [];
 
     // ========================================
     // 1. PHYSICAL ACTIONS (location + skill + inventory checks)
@@ -2391,6 +2391,31 @@ State your vote and explain your reasoning.`;
       }
     }
 
+    // Treasury actions — contribute (any member), withdraw/distribute (leader only)
+    if (myGroup && !myGroup.dissolved) {
+      const myRole = myGroup.members.find(m => m.agentId === this.agent.id)?.role;
+      // Any member with items can contribute
+      if (this.agent.inventory.length > 0) {
+        actions.push({ id: 'contribute_group', label: `Contribute an item to ${myGroup.name} treasury`, category: 'social' });
+      }
+      // Leader can withdraw items from treasury
+      if ((myRole === 'founder' || myRole === 'leader') && myGroup.treasuryItems && myGroup.treasuryItems.length > 0) {
+        actions.push({ id: 'withdraw_group', label: `Take item from ${myGroup.name} treasury`, category: 'social' });
+      }
+      // Leader can distribute food to hungry members
+      if (myRole === 'founder' || myRole === 'leader') {
+        const hasFood = myGroup.treasuryItems?.some(i => i.type === 'food');
+        const hungryMember = myGroup.members.find(m => {
+          if (m.agentId === this.agent.id) return false;
+          const a = this.world.getAgent(m.agentId);
+          return a && a.alive !== false && (a.vitals?.hunger ?? 0) > 50;
+        });
+        if (hasFood && hungryMember) {
+          actions.push({ id: 'distribute_group', label: `Distribute food from ${myGroup.name} treasury to a hungry member`, category: 'social' });
+        }
+      }
+    }
+
     // Meeting — only with 3+ people nearby, with cooldown
     if (nearby.length >= 2) {
       const recentMeetings = this.cognition.fourStream
@@ -2510,11 +2535,37 @@ State your vote and explain your reasoning.`;
       .filter(p => p.type === 'rule' && p.ruleStatus === 'passed');
     if (passedRules.length > 0) {
       villageRules = passedRules.map((r, i) => {
+        const proposer = this.world.getAgent(r.authorId)?.config.name ?? 'Unknown';
+        const votesFor = (r.votes ?? []).filter(v => v.vote === 'like').length;
+        const votesAgainst = (r.votes ?? []).filter(v => v.vote === 'dislike').length;
+        const voteStr = ` [Proposed by ${proposer}, passed ${votesFor}-${votesAgainst}]`;
         if (r.ruleAction && r.ruleConsequence) {
-          return `${i + 1}. ${r.ruleAction}\n   Applies to: ${r.ruleAppliesTo || 'Everyone'}\n   Consequence: ${r.ruleConsequence}`;
+          return `${i + 1}. ${r.ruleAction}${voteStr}\n   Applies to: ${r.ruleAppliesTo || 'Everyone'}\n   Consequence: ${r.ruleConsequence}`;
         }
-        return `${i + 1}. ${r.content}`;
+        return `${i + 1}. ${r.content}${voteStr}`;
       }).join('\n\n');
+
+      // Hard-remove banned actions from menu based on simple rule keywords
+      for (const rule of passedRules) {
+        const rl = (rule.ruleAction || rule.content).toLowerCase();
+        if (rl.includes('no steal') || rl.includes('no theft') || rl.includes('ban steal') || rl.includes('prohibit steal')) {
+          actions = actions.filter(a => !a.id.startsWith('steal'));
+        }
+        if (rl.includes('no fight') || rl.includes('no attack') || rl.includes('no violen') || rl.includes('ban fight') || rl.includes('ban attack')) {
+          actions = actions.filter(a => !a.id.startsWith('fight') && !a.id.startsWith('attack'));
+        }
+        // Area restrictions: "farm reserved for" / "farm belongs to"
+        if (rl.includes('reserved for') || rl.includes('belongs to')) {
+          const areaMatch = rl.match(/(farm|garden|lake|forest|bakery|market)\b/);
+          if (areaMatch && areaId === areaMatch[1]) {
+            const ownerMatch = rl.match(/(?:reserved for|belongs to)\s+(\w+)/i);
+            const ownerName = ownerMatch?.[1]?.toLowerCase();
+            if (ownerName && !this.agent.config.name.toLowerCase().includes(ownerName)) {
+              actions = actions.filter(a => !a.id.startsWith('gather_'));
+            }
+          }
+        }
+      }
     }
 
     // Build group info from Institution membership — prominent so agents act on it
@@ -2532,8 +2583,15 @@ State your vote and explain your reasoning.`;
       groupInfo = `You belong to "${grp.name}" as ${myRole.toUpperCase()}. Members: ${memberNames}.`;
       if (grp.description) groupInfo += `\nPurpose: ${grp.description}`;
       if (grp.rules.length > 0) groupInfo += `\nGroup rules: ${grp.rules.join('; ')}`;
+      // Show treasury contents
+      if (grp.treasuryItems && grp.treasuryItems.length > 0) {
+        const treasuryContents = grp.treasuryItems.map(i => i.name).join(', ');
+        groupInfo += `\nTreasury (${grp.treasuryItems.length} items, value ${grp.treasury}): ${treasuryContents}`;
+      } else {
+        groupInfo += `\nTreasury: empty`;
+      }
       if (myRole === 'founder' || myRole === 'leader') {
-        groupInfo += '\nAs leader: set group rules, recruit members, manage treasury, and direct group activity.';
+        groupInfo += '\nAs leader: set group rules, recruit members, manage treasury, distribute food to hungry members, and direct group activity.';
       }
       // Nudge the agent to coordinate with fellow members
       const nearbyMembers = grp.members
@@ -3481,7 +3539,7 @@ State your vote and explain your reasoning.`;
 
       this.adjustReputation(this.agent.id, -10, 'Theft');
 
-      // Check village rule violations
+      // Check village rule violations — enhanced penalty for breaking passed laws
       const stealRulePosts = this.world.getActiveBoard()
         .filter(p => p.type === 'rule' && p.ruleStatus === 'passed');
       for (const rp of stealRulePosts) {
@@ -3491,13 +3549,13 @@ State your vote and explain your reasoning.`;
             id: crypto.randomUUID(), authorId: 'system',
             authorName: 'Village News', type: 'news',
             channel: 'all',
-            content: `RULE VIOLATION: ${this.agent.config.name} broke village rule "${rp.content.slice(0, 60)}"!`,
+            content: `LAW VIOLATION: ${this.agent.config.name} broke village law "${rp.content.slice(0, 60)}"!`,
             timestamp: Date.now(), day: this.world.time.day,
           };
           this.world.addBoardPost(vPost);
           this.broadcaster.boardPost(vPost);
           if (this.bus) this.bus.emit({ type: 'board_post_created', post: vPost });
-          this.adjustReputation(this.agent.id, -10, 'Broke village rule');
+          this.adjustReputation(this.agent.id, -15, 'Broke village law');
           break;
         }
       }
@@ -4785,6 +4843,154 @@ Write ONLY the specific, actionable rule. 1 sentence.`
       this.lastTrigger = this.lastOutcome;
       this.state = 'performing'; this.activityTimer = 3;
       this.broadcaster.agentAction(this.agent.id, `kicked ${targetName} from ${group.name}`);
+      return;
+    }
+
+    // --- Treasury: Contribute ---
+    if (actionId === 'contribute_group') {
+      const groupId = this.agent.institutionIds?.[0];
+      const group = groupId ? this.world.getInstitution(groupId) : undefined;
+      if (!group || this.agent.inventory.length === 0) {
+        this.lastTrigger = 'Nothing to contribute.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Pick item from reason text or first item
+      const reasonLower = (decision.reason || '').toLowerCase();
+      let item = this.agent.inventory.find(i => reasonLower.includes(i.name.toLowerCase()));
+      if (!item) item = this.agent.inventory[0];
+      const contributed = this.world.contributeTreasury(group.id, this.agent.id, item.id);
+      if (!contributed) {
+        this.lastTrigger = 'Contribution failed.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Memories for all members
+      for (const member of group.members) {
+        const cog = this.agentCognitions?.get(member.agentId);
+        if (cog) {
+          void cog.addMemory({
+            id: crypto.randomUUID(), agentId: member.agentId,
+            type: member.agentId === this.agent.id ? 'action_outcome' : 'observation',
+            content: `${this.agent.config.name} contributed ${contributed.name} to ${group.name}'s treasury.`,
+            importance: 5, timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id],
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
+        }
+      }
+      this.broadcaster.institutionUpdate(group);
+      this.lastOutcome = `You contributed ${contributed.name} to ${group.name}'s treasury.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.broadcaster.agentAction(this.agent.id, `contributed ${contributed.name} to ${group.name}`);
+      return;
+    }
+
+    // --- Treasury: Withdraw (leader only) ---
+    if (actionId === 'withdraw_group') {
+      const groupId = this.agent.institutionIds?.[0];
+      const group = groupId ? this.world.getInstitution(groupId) : undefined;
+      if (!group) {
+        this.lastTrigger = 'You have no group.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const myRole = group.members.find(m => m.agentId === this.agent.id)?.role;
+      if (myRole !== 'founder' && myRole !== 'leader') {
+        this.lastTrigger = 'Only leaders can withdraw from treasury.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const reasonLower = (decision.reason || '').toLowerCase();
+      const itemName = group.treasuryItems?.find(i => reasonLower.includes(i.name.toLowerCase()))?.name
+        ?? group.treasuryItems?.[0]?.name ?? '';
+      const withdrawn = this.world.withdrawTreasury(group.id, this.agent.id, itemName);
+      if (!withdrawn) {
+        this.lastTrigger = 'Nothing to withdraw.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      this.broadcaster.institutionUpdate(group);
+      this.lastOutcome = `You withdrew ${withdrawn.name} from ${group.name}'s treasury.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.broadcaster.agentAction(this.agent.id, `withdrew ${withdrawn.name} from ${group.name}`);
+      return;
+    }
+
+    // --- Treasury: Distribute food to hungry member (leader only) ---
+    if (actionId === 'distribute_group') {
+      const groupId = this.agent.institutionIds?.[0];
+      const group = groupId ? this.world.getInstitution(groupId) : undefined;
+      if (!group) {
+        this.lastTrigger = 'You have no group.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      const myRole = group.members.find(m => m.agentId === this.agent.id)?.role;
+      if (myRole !== 'founder' && myRole !== 'leader') {
+        this.lastTrigger = 'Only leaders can distribute from treasury.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Find food in treasury
+      const foodItem = group.treasuryItems?.find(i => i.type === 'food');
+      if (!foodItem) {
+        this.lastTrigger = 'No food in treasury.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Find target: from reason text or hungriest member
+      const reasonLower = (decision.reason || '').toLowerCase();
+      let targetId: string | undefined;
+      for (const member of group.members) {
+        if (member.agentId === this.agent.id) continue;
+        const a = this.world.getAgent(member.agentId);
+        if (a && a.alive !== false && reasonLower.includes(a.config.name.split(' ')[0].toLowerCase())) {
+          targetId = member.agentId;
+          break;
+        }
+      }
+      if (!targetId) {
+        // Pick hungriest member
+        let maxHunger = 0;
+        for (const member of group.members) {
+          if (member.agentId === this.agent.id) continue;
+          const a = this.world.getAgent(member.agentId);
+          if (a && a.alive !== false && (a.vitals?.hunger ?? 0) > maxHunger) {
+            maxHunger = a.vitals?.hunger ?? 0;
+            targetId = member.agentId;
+          }
+        }
+      }
+      if (!targetId) {
+        this.lastTrigger = 'No hungry members to feed.';
+        this.state = 'idle'; this.idleTimer = 0; return;
+      }
+      // Remove food from treasury and feed target
+      const idx = group.treasuryItems!.findIndex(i => i.id === foodItem.id);
+      if (idx !== -1) group.treasuryItems!.splice(idx, 1);
+      group.treasury = (group.treasuryItems ?? []).reduce((sum, i) => sum + (i.value ?? 0), 0);
+      const target = this.world.getAgent(targetId)!;
+      if (target.vitals) target.vitals.hunger = Math.max(0, target.vitals.hunger - 25);
+      this.world.removeItem(foodItem.id);
+      const targetName = target.config.name;
+      // Memories
+      for (const member of group.members) {
+        const cog = this.agentCognitions?.get(member.agentId);
+        if (cog) {
+          const content = member.agentId === this.agent.id
+            ? `I distributed ${foodItem.name} from ${group.name}'s treasury to ${targetName}.`
+            : member.agentId === targetId
+              ? `${this.agent.config.name} gave me ${foodItem.name} from ${group.name}'s treasury. I feel less hungry.`
+              : `${this.agent.config.name} distributed ${foodItem.name} from ${group.name}'s treasury to ${targetName}.`;
+          void cog.addMemory({
+            id: crypto.randomUUID(), agentId: member.agentId,
+            type: member.agentId === this.agent.id ? 'action_outcome' : 'observation',
+            content,
+            importance: member.agentId === targetId ? 7 : 5,
+            timestamp: Date.now(),
+            relatedAgentIds: [this.agent.id, targetId],
+          }).catch((err: unknown) => { console.warn('[Controller] addMemory failed:', (err as Error).message); });
+        }
+      }
+      this.broadcaster.institutionUpdate(group);
+      this.lastOutcome = `You distributed ${foodItem.name} to ${targetName} from ${group.name}'s treasury.`;
+      this.lastTrigger = this.lastOutcome;
+      this.state = 'performing'; this.activityTimer = 3;
+      this.broadcaster.agentAction(this.agent.id, `distributed ${foodItem.name} to ${targetName} from ${group.name}`);
       return;
     }
 

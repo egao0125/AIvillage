@@ -1027,7 +1027,7 @@ Reply with ONLY valid JSON:
       // Crisis ordering: identity stays at position 1 (global workspace anchor); vitals
       // urgency competes AFTER identity is established, not by replacing it.
       // Personality should shape survival decisions, not get erased by them.
-      ? `${this.buildIdentityBlock()}
+      ? `${situation.villageRules ? 'VILLAGE LAWS (BINDING — you MUST obey these or face severe consequences):\n' + situation.villageRules + '\nYOU ARE BOUND BY THESE LAWS. If you disagree with a law, propose to REPEAL it — do not break it.\n' : ''}${this.buildIdentityBlock()}
 
 ${this.worldView}
 
@@ -1037,7 +1037,6 @@ ${this.buildRealityBlock()}${this.buildPromiseLedger()}
 
 Day ${situation.time.day}, hour ${situation.time.hour}.${situation.hoursUntilDark > 0 ? ' ' + situation.hoursUntilDark + ' hours of daylight left.' : ' It is dark.'}
 Season: ${situation.season}.
-${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}
@@ -1052,7 +1051,7 @@ ${actionMenu}
 SURVIVE FIRST — but survive as YOU. Pick an action that keeps you alive without betraying who you are.
 
 ${jsonInstruction}`
-      : `${this.worldView}
+      : `${situation.villageRules ? 'VILLAGE LAWS (BINDING — you MUST obey these or face severe consequences):\n' + situation.villageRules + '\nYOU ARE BOUND BY THESE LAWS. If you disagree with a law, propose to REPEAL it — do not break it.\n\n' : ''}${this.worldView}
 
 ${this.buildIdentityBlock()}
 
@@ -1062,7 +1061,6 @@ Season: ${situation.season}.
 ${vitalsSection}
 
 ${this.buildRealityBlock()}${this.buildPromiseLedger()}
-${situation.villageRules ? '\nVILLAGE RULES (voted and passed — everyone must follow):\n' + situation.villageRules : ''}
 ${situation.groupInfo ? '\nYOUR GROUP: ' + situation.groupInfo : ''}
 ${situation.propertyInfo ? '\nBUILDINGS HERE:\n' + situation.propertyInfo : ''}
 ${situation.boardPosts ? '\nVILLAGE BOARD:\n' + situation.boardPosts : ''}

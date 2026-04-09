@@ -653,9 +653,11 @@ export interface Institution {
   founderId: string;
   members: InstitutionMember[];
   treasury: number;
+  treasuryItems?: Item[];  // actual items contributed by members
   rules: string[];       // Agent-written rules that members should follow
   createdAt: number;
   dissolved?: boolean;
+  violations?: Record<string, number>;  // agentId → count of rule violations
 }
 
 export interface InstitutionMember {
