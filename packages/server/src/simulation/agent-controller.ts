@@ -54,6 +54,8 @@ export class AgentController {
   conversationCooldown: number = 0; // ticks remaining before agent can converse again
   /** Per-pair conversation tracking: agentId → { count, day }. Max 2 per pair per day. */
   private conversationPairLog: Map<string, { count: number; day: number }> = new Map();
+  /** Per-target cooldown: agentId → last game-minute talked. Prevents same-person spam. */
+  private lastTalkedGameMinute: Map<string, number> = new Map();
   pendingConversationTarget: string | null = null;
   pendingConversationPurpose: string | null = null; // intention text that triggered the conversation
   private consecutiveApiFailures: number = 0;
@@ -868,9 +870,10 @@ export class AgentController {
       this.conversationCooldown = 60;
       this.postConversationPending = true;
       this.postConvWaitTimer = 0;
-      // Record per-pair conversation count
+      // Record per-pair conversation count + per-target cooldown
       if (partnerId) {
         this.recordConversationWith(partnerId);
+        this.lastTalkedGameMinute.set(partnerId, this.world.time.totalMinutes);
       }
       // DON'T call decideAndAct() — wait for post-processing to finish
       this.world.updateAgentState(this.agent.id, 'idle', '');
@@ -888,12 +891,15 @@ export class AgentController {
     }
   }
 
-  /** Check if this agent can still talk to a specific partner today (max 2/day) */
+  /** Check if this agent can still talk to a specific partner (max 2/day + 60 game-min cooldown) */
   canTalkTo(partnerId: string): boolean {
     const day = this.world.time.day;
     const entry = this.conversationPairLog.get(partnerId);
-    if (!entry || entry.day !== day) return true;
-    return entry.count < 2;
+    if (entry && entry.day === day && entry.count >= 2) return false;
+    // Per-target cooldown: 60 game-minutes between conversations with same person
+    const lastTalked = this.lastTalkedGameMinute.get(partnerId);
+    if (lastTalked !== undefined && (this.world.time.totalMinutes - lastTalked) < 60) return false;
+    return true;
   }
 
   /** Called by ConversationManager after post-processing completes */
@@ -2406,10 +2412,25 @@ State your vote and explain your reasoning.`;
     if (this.cognition.fourStream) {
       const allRecent = this.cognition.fourStream.getRecentTimeline(20);
       if (allRecent.length > 0) {
-        todaySummary = allRecent
-          .slice(-10) // last 10 events
-          .map(m => m.content)
-          .join('. ');
+        const last10 = allRecent.slice(-10);
+        // Dedup conversation entries by target to prevent reinforcement loops.
+        // "I talked with Aurelius. ..." appearing 3x → "Talked to Aurelius (3x today)"
+        const talkPattern = /^I talked with (.+?)\./;
+        const talkCounts = new Map<string, number>();
+        const nonTalkEntries: string[] = [];
+        for (const m of last10) {
+          const match = m.content.match(talkPattern);
+          if (match) {
+            talkCounts.set(match[1], (talkCounts.get(match[1]) ?? 0) + 1);
+          } else {
+            nonTalkEntries.push(m.content);
+          }
+        }
+        const talkSummaries: string[] = [];
+        for (const [name, count] of talkCounts) {
+          talkSummaries.push(count > 1 ? `Talked to ${name} (${count}x today)` : `Talked to ${name}`);
+        }
+        todaySummary = [...talkSummaries, ...nonTalkEntries].join('. ');
       }
     }
 

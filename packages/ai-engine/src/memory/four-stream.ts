@@ -1145,7 +1145,29 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     const base = WEIGHT[c.category] ?? 0.3;
     if (c.permanent) return base;
     const hoursOld = Math.max(0, (now - c.createdAt) / 3_600_000);
-    return base * Math.pow(p.concernDecay, hoursOld);
+    let score = base * Math.pow(p.concernDecay, hoursOld);
+    // Acted-on decay: 50% penalty if concern was addressed recently (~2 game-hours).
+    // Prevents the same concern from dominating retrieval after a conversation about it.
+    if (c.lastActedOn) {
+      const msSinceActed = now - c.lastActedOn;
+      if (msSinceActed < 20_000) { // ~2 game-hours at standard tick rate
+        score *= 0.5;
+      }
+    }
+    return score;
+  }
+
+  /** Mark concerns involving any of the given agents as recently acted on */
+  markConcernsActedOn(agentIds: string[]): void {
+    const idSet = new Set(agentIds);
+    const now = Date.now();
+    for (const c of this.concerns) {
+      if (c.resolved) continue;
+      if (c.relatedAgentIds.some(id => idSet.has(id))) {
+        c.lastActedOn = now;
+      }
+    }
+    this.syncConcernsToAgent();
   }
 
   // --- WORKING MEMORY ASSEMBLY ---

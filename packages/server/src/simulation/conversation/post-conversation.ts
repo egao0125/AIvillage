@@ -365,6 +365,9 @@ export class PostConversationProcessor {
           });
         }
 
+        // Mark concerns involving conversation partners as acted-on (anti-loop)
+        cognition.fourStream.markConcernsActedOn(otherIds);
+
         // Commitments are now tracked in agent.commitments[], not as concerns.
         // Only add non-commitment concerns (tension, unresolved issues).
 

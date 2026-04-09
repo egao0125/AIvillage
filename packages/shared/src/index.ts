@@ -447,6 +447,7 @@ export interface ActiveConcern {
   expiresAt?: number;
   resolved?: boolean;
   permanent?: boolean;    // rules and commitments don't expire
+  lastActedOn?: number;   // wall-clock ms when concern was last addressed via conversation
 }
 
 // --- Items & Materials ---
