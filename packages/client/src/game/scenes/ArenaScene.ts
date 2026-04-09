@@ -28,6 +28,9 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Arena uses top-down orthogonal projection, not isometric
+    AgentSprite.tileToWorld = (tx, ty) => ({ x: tx * TILE_SIZE + TILE_SIZE / 2, y: ty * TILE_SIZE + TILE_SIZE / 2 });
+
     this.createTilemap();
     this.drawLocationLabels();
 

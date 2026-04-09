@@ -79,6 +79,9 @@ export class VillageScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Ensure isometric projection (may have been changed by ArenaScene)
+    AgentSprite.tileToWorld = tileToScreen;
+
     this.drawTileMap();
     this.drawBuildingShadows();
     this.drawBuildingLabels();

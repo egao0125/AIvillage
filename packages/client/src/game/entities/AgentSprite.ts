@@ -107,6 +107,9 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private currentDir5: number = 0;  // current 5-dir direction (0-4)
   private currentDir8: number = 8;  // current 8-dir direction (1-8)
 
+  /** Override tile→pixel projection (default: isometric). Set before constructing for orthogonal maps. */
+  static tileToWorld: (tx: number, ty: number) => { x: number; y: number } = tileToScreen;
+
   private static readonly MOOD_COLORS: Record<string, number> = {
     neutral: 0x9ca3af, happy: 0x4ade80, angry: 0xef4444, sad: 0x60a5fa,
     anxious: 0xfbbf24, excited: 0xf97316, scheming: 0xa855f7, afraid: 0x94a3b8,
@@ -122,7 +125,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     charModel: CharacterModel,
     _tintColor?: number,
   ) {
-    const { x: worldX, y: worldY } = tileToScreen(tileX, tileY);
+    const { x: worldX, y: worldY } = AgentSprite.tileToWorld(tileX, tileY);
     super(scene, worldX, worldY);
     scene.add.existing(this);
 
@@ -317,7 +320,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.sourceTileX = this.targetTileX;
     this.sourceTileY = this.targetTileY;
 
-    const { x: sx, y: sy } = tileToScreen(tileX, tileY);
+    const { x: sx, y: sy } = AgentSprite.tileToWorld(tileX, tileY);
     this.targetX = sx;
     this.targetY = sy;
     this.targetTileX = tileX;
