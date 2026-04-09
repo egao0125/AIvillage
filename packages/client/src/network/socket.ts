@@ -30,6 +30,7 @@ let socket: Socket | null = null;
 // Expose dev tools on window for admin console access
 (window as any).__devResume = () => socket?.emit('dev:resume', '');
 (window as any).__devPause = () => socket?.emit('dev:pause', '');
+(window as any).__devFreshStart = () => socket?.emit('dev:fresh-start', '');
 let lastSeenDayTimer: ReturnType<typeof setInterval> | null = null;
 
 export function connectSocket(): Socket {
