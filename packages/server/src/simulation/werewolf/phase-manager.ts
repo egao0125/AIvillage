@@ -136,6 +136,7 @@ export class WerewolfPhaseManager {
         : undefined;
       const perRoleRules = buildWerewolfRules(role, fellowWolfName, agentIds.length);
       cognition.setGameRules(perRoleRules);
+      cognition.gameMode = 'werewolf';
     }
 
     console.log(`[Werewolf] Game started with ${agentIds.length} agents. Roles: ${[...roles.entries()].map(([id, r]) => `${this.agentNames.get(id)}=${r}`).join(', ')}`);
@@ -405,6 +406,8 @@ export class WerewolfPhaseManager {
               type: 'observation',
               content: `Night ${this.state.round}: I investigated ${this.agentNames.get(targetId)}. Result: ${isWolf ? 'WEREWOLF!' : 'NOT a werewolf'}.`,
               importance: 10,
+              isCore: true,
+              keywords: ['investigation', 'sheriff', 'werewolf', 'evidence', this.agentNames.get(targetId)?.split(' ')[0]?.toLowerCase() ?? 'target'],
               timestamp: Date.now(),
               relatedAgentIds: [targetId],
             }).catch(() => {});
@@ -475,6 +478,14 @@ export class WerewolfPhaseManager {
         if (ctrl) ctrl.leaveConversation();
       }
       this.state.meetingConversationId = null;
+    }
+
+    // Compress timeline noise before vote — deduplicate accusations, preserve deaths/investigations
+    for (const id of this.state.alive) {
+      const cognition = this.cognitions.get(id);
+      if (cognition?.fourStream) {
+        cognition.fourStream.compressWerewolfTimeline();
+      }
     }
 
     this.state.voteCalled = true;
@@ -671,6 +682,8 @@ export class WerewolfPhaseManager {
               type: 'observation',
               content: `Night ${this.state.round}: Your attack on ${this.agentNames.get(wolfTarget)} was blocked. Someone was guarding them.`,
               importance: 9,
+              isCore: true,
+              keywords: ['attack', 'blocked', 'healer', 'night', 'strategy'],
               timestamp: Date.now(),
               relatedAgentIds: [wolfTarget],
             }).catch(() => {});
@@ -763,6 +776,8 @@ export class WerewolfPhaseManager {
         type: 'observation',
         content: `Dawn of day ${this.state.round}. ${announcement}`,
         importance: 9,
+        isCore: true,
+        keywords: ['death', 'kill', 'night', 'dawn', 'werewolf'],
         timestamp: Date.now(),
         relatedAgentIds: this.state.lastNightResult?.killed ? [this.state.lastNightResult.killed] : [],
       }).catch(() => {});
@@ -805,6 +820,14 @@ export class WerewolfPhaseManager {
   }
 
   private advanceToNextNight(): void {
+    // Compress timeline noise before next round — keeps deaths/votes, merges accusations
+    for (const id of this.state.alive) {
+      const cognition = this.cognitions.get(id);
+      if (cognition?.fourStream) {
+        cognition.fourStream.compressWerewolfTimeline();
+      }
+    }
+
     this.state.round++;
     this.state.phase = 'night';
     this.state.phaseTimer = 0;
@@ -931,6 +954,8 @@ MEETING ACTIONS:
           type: 'observation',
           content: `The vote has concluded: ${name} is condemned. They will be executed at dusk (17:00).`,
           importance: 10,
+          isCore: true,
+          keywords: ['vote', 'exile', 'condemned', name.split(' ')[0].toLowerCase()],
           timestamp: Date.now(),
           relatedAgentIds: [result.exiledId],
         }).catch(() => {});
@@ -1014,6 +1039,8 @@ MEETING ACTIONS:
         type: 'observation',
         content: `${name} was exiled. Their role was revealed: ${role.toUpperCase()}.`,
         importance: 10,
+        isCore: true,
+        keywords: ['exile', 'role', 'reveal', role.toLowerCase(), name.split(' ')[0].toLowerCase()],
         timestamp: Date.now(),
         relatedAgentIds: [agentId],
       }).catch(() => {});

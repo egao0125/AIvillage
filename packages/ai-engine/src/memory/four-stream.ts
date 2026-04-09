@@ -319,7 +319,26 @@ export class FourStreamMemory {
     )) {
       this.timeline.push(memory);
       if (this.timeline.length > FourStreamMemory.TIMELINE_MAX) {
-        this.timeline.shift();
+        // Smart eviction: remove lowest-importance non-core item instead of blindly FIFO.
+        // This keeps critical game events (deaths, votes, investigations) in the timeline
+        // even as routine observations accumulate.
+        let worstIdx = -1;
+        let worstScore = Infinity;
+        for (let i = 0; i < this.timeline.length - 1; i++) { // never evict the just-added item
+          const m = this.timeline[i];
+          if (m.isCore) continue; // never evict core memories
+          const score = m.importance + (m.isCore ? 100 : 0);
+          if (score < worstScore) {
+            worstScore = score;
+            worstIdx = i;
+          }
+        }
+        if (worstIdx >= 0) {
+          this.timeline.splice(worstIdx, 1);
+        } else {
+          // All items are core (unlikely) — fall back to FIFO
+          this.timeline.shift();
+        }
       }
     }
 
@@ -379,6 +398,61 @@ export class FourStreamMemory {
   /** Get the last N events for working memory */
   getRecentTimeline(n: number = 5): Memory[] {
     return this.timeline.slice(-n);
+  }
+
+  /**
+   * Compress werewolf timeline noise — call at phase transitions.
+   * Deduplicates similar observations (keep highest importance per target),
+   * merges routine 'observe'/'think' entries, always preserves isCore items.
+   */
+  compressWerewolfTimeline(): void {
+    if (this.timeline.length < 10) return;
+
+    const keep: Memory[] = [];
+    // Track accusations per target — keep only the strongest
+    const accusationsByTarget = new Map<string, Memory>();
+    // Track generic observations — keep at most 2
+    let observeCount = 0;
+
+    for (const m of this.timeline) {
+      // Always keep core memories (deaths, votes, investigations)
+      if (m.isCore) { keep.push(m); continue; }
+
+      // Deduplicate accusations about the same person
+      const isAccusation = m.keywords?.includes('accuse') ||
+        m.content.toLowerCase().includes('accused') ||
+        m.content.toLowerCase().includes('accuse');
+      if (isAccusation && m.relatedAgentIds?.length) {
+        const targetKey = m.relatedAgentIds[0];
+        const existing = accusationsByTarget.get(targetKey);
+        if (!existing || m.importance > existing.importance) {
+          accusationsByTarget.set(targetKey, m);
+        }
+        continue;
+      }
+
+      // Limit generic observations and thoughts
+      const isRoutine = m.content.toLowerCase().includes('you observe nearby') ||
+        m.content.toLowerCase().includes('you take a moment to think') ||
+        m.content.toLowerCase().includes('you look around');
+      if (isRoutine) {
+        observeCount++;
+        if (observeCount <= 2) keep.push(m);
+        continue;
+      }
+
+      // Keep everything else (conversations, action outcomes, high-importance observations)
+      keep.push(m);
+    }
+
+    // Add deduplicated accusations
+    for (const m of accusationsByTarget.values()) {
+      keep.push(m);
+    }
+
+    // Sort chronologically
+    keep.sort((a, b) => a.timestamp - b.timestamp);
+    this.timeline = keep;
   }
 
   // --- STREAM 2: DOSSIERS ---
@@ -981,6 +1055,13 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
       rewardBiasWeight: 0.20,  // reflection needs both wins and losses in view
       budgets: { concerns: 250, dossiers: 300, beliefs: 300, timeline: 250, strategies: 150 },
     },
+    werewolf: {
+      importanceWeight: 0.75,    // Deaths/votes/investigations dominate over recent noise
+      recencyDecay: 0.995,       // Slow decay — night kills from 2 rounds ago still critical
+      concernDecay: 0.998,
+      rewardBiasWeight: 0.10,
+      budgets: { concerns: 200, dossiers: 300, beliefs: 200, timeline: 400, strategies: 100 },
+    },
     default: {
       importanceWeight: 0.6,
       recencyDecay: 0.99,
@@ -1006,6 +1087,8 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
         return 0.6 * v.social + 0.2 * v.narrative + 0.2 * v.strategic;
       case 'reflect':
         return 0.4 * v.narrative + 0.3 * v.strategic + 0.2 * v.social + 0.1 * v.survival;
+      case 'werewolf':
+        return 0.5 * v.strategic + 0.3 * v.social + 0.2 * v.narrative;
       default:
         // Balanced: average across axes with a slight narrative tilt
         return 0.25 * (v.survival + v.social + v.strategic + v.narrative) + 0.1 * v.narrative;
@@ -1182,7 +1265,7 @@ Update your mental model of <person_name>${safeTargetName}</person_name>. Reply 
     nearbyAgentIds?: string[],
     agentLocations?: Map<string, string>,
     reputations?: Map<string, number>,
-    retrievalContext?: 'plan' | 'conversation' | 'reflect' | 'default',
+    retrievalContext?: 'plan' | 'conversation' | 'reflect' | 'werewolf' | 'default',
     triggerQuery?: string,
   ): {
     concerns: string;

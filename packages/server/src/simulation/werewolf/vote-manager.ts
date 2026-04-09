@@ -206,6 +206,8 @@ export class WerewolfVoteManager {
         type: 'observation',
         content,
         importance: 9,
+        isCore: true,
+        keywords: ['vote', 'discussion', 'exile', 'suspicion', 'meeting'],
         timestamp: Date.now(),
         relatedAgentIds: [],
       }).catch(() => {});

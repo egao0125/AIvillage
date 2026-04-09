@@ -174,6 +174,9 @@ ${placesLines}`;
     this.gameRulesOverride = rules;
   }
 
+  /** Game mode — controls memory retrieval profile. Set by engine on map switch. */
+  gameMode: 'village' | 'werewolf' | 'battle_royale' = 'village';
+
   /** Public accessor for the LLM provider (used by FourStreamMemory for dossier/belief generation) */
   get llmProvider(): LLMProvider { return this.llm; }
 
@@ -1096,11 +1099,12 @@ ${jsonInstruction}`;
       const triggerQuery = [situation.trigger, situation.recentOutcome]
         .filter(Boolean)
         .join(' ');
+      const decideProfile = this.gameMode === 'werewolf' ? 'werewolf' : 'default';
       const wm = this.fourStream.buildWorkingMemory(
         nearbyIds.length > 0 ? nearbyIds : undefined,
         locationMap.size > 0 ? locationMap : undefined,
         repMap.size > 0 ? repMap : undefined,
-        'default', // decide() uses balanced retrieval
+        decideProfile,
         triggerQuery || undefined,
       );
       const sections: string[] = [];
@@ -1562,7 +1566,8 @@ You have existed for ${this.currentTime.day} day(s). If you don't remember somet
       // H3: use conversation agenda + most recent history turn as query context
       const lastTurn = conversationHistory[conversationHistory.length - 1] ?? '';
       const talkQuery = [agenda, lastTurn].filter(Boolean).join(' ');
-      const wm = this.fourStream.buildWorkingMemory(otherIds, undefined, undefined, 'conversation', talkQuery || undefined);
+      const talkProfile = this.gameMode === 'werewolf' ? 'werewolf' : 'conversation';
+      const wm = this.fourStream.buildWorkingMemory(otherIds, undefined, undefined, talkProfile, talkQuery || undefined);
       const sections: string[] = [];
       if (wm.concerns) sections.push('WHAT\'S ON YOUR MIND:\n' + wm.concerns);
       if (wm.dossiers) sections.push('PEOPLE:\n' + wm.dossiers);
