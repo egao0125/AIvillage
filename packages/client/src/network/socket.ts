@@ -285,6 +285,11 @@ export function connectSocket(): Socket {
     eventBus.emit('agent:death', data);
   });
 
+  socket.on('agent:revive', (data: { agentId: string }) => {
+    gameStore.reviveAgent(data.agentId);
+    eventBus.emit('agent:revive', data);
+  });
+
   socket.on('agent:leave', (data: { agentId: string }) => {
     gameStore.removeAgent(data.agentId);
     eventBus.emit('agent:leave', data);

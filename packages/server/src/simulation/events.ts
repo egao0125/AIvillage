@@ -280,6 +280,10 @@ export class EventBroadcaster {
     this.io.emit('werewolf:meetingTranscript', { round, transcript });
   }
 
+  agentRevive(agentId: string): void {
+    this.io.emit('agent:revive', { agentId });
+  }
+
   werewolfNewGame(): void {
     this.io.emit('werewolf:newGame', {});
   }

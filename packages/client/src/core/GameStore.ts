@@ -435,6 +435,15 @@ class GameStore {
     this.notify();
   }
 
+  reviveAgent(agentId: string): void {
+    const agent = this.state.agents.get(agentId);
+    if (!agent) return;
+    const newAgents = new Map(this.state.agents);
+    newAgents.set(agentId, { ...agent, alive: true, causeOfDeath: undefined, state: 'idle' });
+    this.state = { ...this.state, agents: newAgents };
+    this.notify();
+  }
+
   // --- Agent leave ---
 
   removeAgent(agentId: string): void {
