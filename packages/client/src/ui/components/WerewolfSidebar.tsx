@@ -512,28 +512,27 @@ export const WerewolfSidebar: React.FC = () => {
       zIndex: 12,
       pointerEvents: 'auto',
     }}>
-      {/* ── Header ── */}
-      <SidebarHeader
-        phase={phase}
-        round={round}
-        godMode={godMode}
-        totalCount={totalCount}
-        aliveCount={aliveCount}
-        deadCount={deadCount}
-        roles={roles}
-        agentsMap={agentsMap}
-      />
+      {/* ── Upper section (header + roster + votes + meetings) — capped height, scrollable ── */}
+      <div style={{ maxHeight: '40vh', overflowY: 'auto', flexShrink: 0, overscrollBehavior: 'contain' }}>
+        <SidebarHeader
+          phase={phase}
+          round={round}
+          godMode={godMode}
+          totalCount={totalCount}
+          aliveCount={aliveCount}
+          deadCount={deadCount}
+          roles={roles}
+          agentsMap={agentsMap}
+        />
 
-      {/* ── Villager Roster ── */}
-      {agents.length > 0 && (
-        <VillagerRoster agents={agents} roles={roles} godMode={godMode} />
-      )}
+        {agents.length > 0 && (
+          <VillagerRoster agents={agents} roles={roles} godMode={godMode} />
+        )}
 
-      {/* ── Vote Tracker ── */}
-      <VoteTracker votes={votes} getName={getName} currentRound={round} phase={phase} />
+        <VoteTracker votes={votes} getName={getName} currentRound={round} phase={phase} />
 
-      {/* ── Meeting Log ── */}
-      <MeetingLog transcripts={meetingTranscripts} />
+        <MeetingLog transcripts={meetingTranscripts} />
+      </div>
 
       {/* ── Filter chips (always visible) ── */}
       <div style={{
