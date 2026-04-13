@@ -298,6 +298,14 @@ export const WerewolfSidebar: React.FC = () => {
   const [filterType, setFilterType] = useState<WerewolfEventType | null>(null);
 
   const isMobile = useIsMobile();
+
+  // Sync sidebar width so camera offset centers agent in visible area
+  const sidebarWidth = isMobile ? 0 : 420;
+  useEffect(() => {
+    gameStore.setSidebarWidth(sidebarWidth);
+    return () => { gameStore.setSidebarWidth(0); };
+  }, [sidebarWidth]);
+
   const chatLog = useChatLog();
   const agentsMap = useAgentsMap();
   const agents = useAgents();

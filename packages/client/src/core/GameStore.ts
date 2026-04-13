@@ -31,6 +31,7 @@ export interface ActionLogEntry {
 interface GameState {
   agents: Map<string, Agent>;
   selectedAgentId: string | null;
+  focusedAgentIndex: number;
   time: GameTime;
   chatLog: ChatEntry[];
   connected: boolean;
@@ -63,6 +64,7 @@ interface GameState {
   werewolfNightActions: Array<{ round: number; type: string; agentId: string; targetId: string; result?: string }>;
   werewolfMeetingTranscripts: Array<{ round: number; transcript: Array<{ name: string; message: string }> }>;
   isAdmin: boolean;
+  sidebarWidth: number;
 }
 
 export interface InspectTarget {
@@ -95,6 +97,7 @@ class GameStore {
   private state: GameState = {
     agents: new Map(),
     selectedAgentId: null,
+    focusedAgentIndex: 0,
     time: { day: 1, hour: 5, minute: 0, totalMinutes: 300 },
     chatLog: [],
     connected: false,
@@ -127,6 +130,7 @@ class GameStore {
     werewolfNightActions: [],
     werewolfMeetingTranscripts: [],
     isAdmin: false,
+    sidebarWidth: 0,
   };
   private subscribers: Set<() => void> = new Set();
 
@@ -187,7 +191,46 @@ class GameStore {
   }
 
   selectAgent(agentId: string | null): void {
-    this.state = { ...this.state, selectedAgentId: agentId };
+    let focusedAgentIndex = this.state.focusedAgentIndex;
+    if (agentId) {
+      const sorted = this.getSortedAgents();
+      const idx = sorted.findIndex(a => a.id === agentId);
+      if (idx >= 0) focusedAgentIndex = idx;
+    }
+    this.state = { ...this.state, selectedAgentId: agentId, focusedAgentIndex };
+    this.notify();
+  }
+
+  private getSortedAgents(): Agent[] {
+    return Array.from(this.state.agents.values())
+      .sort((a, b) => a.config.name.localeCompare(b.config.name));
+  }
+
+  focusNextAgent(): void {
+    const sorted = this.getSortedAgents();
+    if (sorted.length === 0) return;
+    const newIndex = (this.state.focusedAgentIndex + 1) % sorted.length;
+    const agent = sorted[newIndex];
+    this.state = {
+      ...this.state,
+      focusedAgentIndex: newIndex,
+      selectedAgentId: agent.id,
+      inspectTarget: { type: 'agent', id: agent.id },
+    };
+    this.notify();
+  }
+
+  focusPrevAgent(): void {
+    const sorted = this.getSortedAgents();
+    if (sorted.length === 0) return;
+    const newIndex = (this.state.focusedAgentIndex - 1 + sorted.length) % sorted.length;
+    const agent = sorted[newIndex];
+    this.state = {
+      ...this.state,
+      focusedAgentIndex: newIndex,
+      selectedAgentId: agent.id,
+      inspectTarget: { type: 'agent', id: agent.id },
+    };
     this.notify();
   }
 
@@ -201,6 +244,11 @@ class GameStore {
       ...this.state,
       chatLog: [...this.state.chatLog.slice(-200), entry],
     };
+    this.notify();
+  }
+
+  clearChatLog(): void {
+    this.state = { ...this.state, chatLog: [] };
     this.notify();
   }
 
@@ -220,6 +268,12 @@ class GameStore {
 
   setAdmin(isAdmin: boolean): void {
     this.state = { ...this.state, isAdmin };
+    this.notify();
+  }
+
+  setSidebarWidth(sidebarWidth: number): void {
+    if (this.state.sidebarWidth === sidebarWidth) return;
+    this.state = { ...this.state, sidebarWidth };
     this.notify();
   }
 

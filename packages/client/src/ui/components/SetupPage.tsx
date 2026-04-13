@@ -20,6 +20,7 @@ interface CreatedAgent {
 }
 
 interface SetupPageProps {
+  mapId?: string;
   onEnter: () => void;
   onBack?: () => void;
 }
@@ -45,7 +46,7 @@ Example:
 // Component
 // ---------------------------------------------------------------------------
 
-export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
+export const SetupPage: React.FC<SetupPageProps> = ({ mapId, onEnter, onBack }) => {
   const { colors } = useTheme();
   const isMobile = useIsMobile();
 
@@ -81,8 +82,9 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
   // --- Config state ---
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [model, setModel] = useState('claude-sonnet-4-6');
+  const [model, setModel] = useState('claude-haiku-4-5-20251001');
   const [error, setError] = useState('');
+  const [authError, setAuthError] = useState('');
   const [checking, setChecking] = useState(true);
 
   // --- Agent creator state ---
@@ -174,11 +176,11 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
 
   const handleAuth = async () => {
     if (!authEmail.trim() || !authPassword) {
-      setError('Email and password required');
+      setAuthError('Email and password required');
       return;
     }
     setAuthLoading(true);
-    setError('');
+    setAuthError('');
     try {
       const endpoint = authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login';
       const res = await fetch(endpoint, {
@@ -191,7 +193,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
       let data: { token?: string; user?: { id: string; email: string }; error?: string } = {};
       try { data = await res.json(); } catch { /* non-JSON body — fall through */ }
       if (!res.ok) {
-        setError(data.error || `Authentication failed (${res.status})`);
+        setAuthError(data.error || `Authentication failed (${res.status})`);
         setAuthLoading(false);
         return;
       }
@@ -203,10 +205,10 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
       } else {
         // Signup succeeded but no token — switch to login
         setAuthMode('login');
-        setError('Account created. Please log in.');
+        setAuthError('Account created. Please log in.');
       }
     } catch {
-      setError('Cannot reach server');
+      setAuthError('Cannot reach server');
     } finally {
       setAuthLoading(false);
     }
@@ -480,7 +482,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               animation: 'glow 4s ease-in-out infinite',
             }}
           >
-            AI VILLAGE
+            {mapId === 'werewolf' ? 'WEREWOLF VILLAGE' : 'AI VILLAGE'}
           </h1>
           <div
             style={{
@@ -500,7 +502,10 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               lineHeight: 2.2,
             }}
           >
-            Write a soul. Watch it live.
+            {mapId === 'werewolf'
+              ? <>Write a soul. Watch it <span style={{ color: '#ef4444' }}>deceive</span>.</>
+              : 'Write a soul. Watch it live.'
+            }
           </p>
         </div>
 
@@ -550,7 +555,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
                 <button
                   type="button"
-                  onClick={() => { setAuthMode('signup'); setError(''); }}
+                  onClick={() => { setAuthMode('signup'); setAuthError(''); }}
                   style={{
                     fontFamily: FONTS.pixel,
                     fontSize: 7,
@@ -566,7 +571,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setAuthMode('login'); setError(''); }}
+                  onClick={() => { setAuthMode('login'); setAuthError(''); }}
                   style={{
                     fontFamily: FONTS.pixel,
                     fontSize: 7,
@@ -622,6 +627,22 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onEnter, onBack }) => {
               >
                 {authLoading ? '...' : authMode === 'signup' ? 'CREATE ACCOUNT' : 'LOG IN'}
               </button>
+              {authError && (
+                <div
+                  style={{
+                    fontFamily: FONTS.pixel,
+                    fontSize: 7,
+                    color: colors.warning,
+                    marginTop: 10,
+                    padding: '8px 10px',
+                    background: 'rgba(255,80,80,0.06)',
+                    border: '1px solid rgba(255,80,80,0.15)',
+                    borderRadius: 4,
+                  }}
+                >
+                  {authError}
+                </div>
+              )}
             </div>
           )}
         </div>

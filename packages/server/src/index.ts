@@ -513,6 +513,7 @@ io.on('connection', (socket) => {
   // --- Werewolf ---
   socket.on('werewolf:start', () => {
     engine.startWerewolfGame();
+    if (!engine.isRunning) engine.start();
   });
 
   socket.on('werewolf:playAgain', () => {

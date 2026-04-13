@@ -41,6 +41,28 @@ export function useSelectedAgent(): Agent | null {
   );
 }
 
+// Cached snapshot for useFocusedAgent — same pattern as _phaseCache below.
+let _focusedCache: { agent: Agent | null; index: number; total: number } = { agent: null, index: 0, total: 0 };
+
+export function useFocusedAgent(): { agent: Agent | null; index: number; total: number } {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => {
+      const s = gameStore.getState();
+      const sorted = Array.from(s.agents.values())
+        .sort((a, b) => a.config.name.localeCompare(b.config.name));
+      const total = sorted.length;
+      const index = Math.min(s.focusedAgentIndex, Math.max(0, total - 1));
+      const agent = sorted[index] ?? null;
+
+      if (agent !== _focusedCache.agent || index !== _focusedCache.index || total !== _focusedCache.total) {
+        _focusedCache = { agent, index, total };
+      }
+      return _focusedCache;
+    }
+  );
+}
+
 export function useChatLog(): ChatEntry[] {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
@@ -66,6 +88,13 @@ export function useIsAdmin(): boolean {
   return useSyncExternalStore(
     (cb) => gameStore.subscribe(cb),
     () => gameStore.getState().isAdmin
+  );
+}
+
+export function useSidebarWidth(): number {
+  return useSyncExternalStore(
+    (cb) => gameStore.subscribe(cb),
+    () => gameStore.getState().sidebarWidth
   );
 }
 

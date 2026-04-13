@@ -88,10 +88,10 @@ export const WEREWOLF_CONFIG: MapConfig = {
   id: 'werewolf',
   name: 'Werewolf Village',
   description: 'Hidden roles. Night hunts. Day deduction. Find the werewolves before they eliminate everyone.',
-  mapSize: { width: 96, height: 96 },
+  mapSize: { width: 30, height: 30 },
   spawnAreas: [
-    'clearing', 'ruins', 'bamboo_grove', 'spring',
-    'summit', 'lagoon', 'mangroves', 'ravine',
+    'clearing', 'north_camp', 'south_camp', 'east_camp',
+    'west_camp', 'ne_grove', 'nw_grove', 'se_grove', 'sw_grove',
   ],
   systems: {
     hunger: false,

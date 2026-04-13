@@ -1,177 +1,26 @@
+// Werewolf arena — simple isometric plane (30×30 tiles) with campfire at center
+
+export const ARENA_MAP_WIDTH = 30;
+export const ARENA_MAP_HEIGHT = 30;
+
+// Legacy tile types — kept for arena-tiles.ts compat (unused)
 export const ARENA_TILE_TYPES = {
-  WATER: 0,      // deep ocean
-  SAND: 1,       // beach
-  OPEN: 2,       // open ground/clearing
-  JUNGLE: 3,     // dense jungle canopy
-  HIGH_GROUND: 4, // rocky elevated terrain
-  WALL: 5,       // ruin walls
-  SHALLOW_WATER: 6, // lagoon/shore
-  RUIN_FLOOR: 7, // broken stone floor inside ruins
-  MANGROVE: 8,   // swampy jungle-water mix
-  CAVE: 9,       // dark cave interior
+  WATER: 0, SAND: 1, OPEN: 2, JUNGLE: 3, HIGH_GROUND: 4,
+  WALL: 5, SHALLOW_WATER: 6, RUIN_FLOOR: 7, MANGROVE: 8, CAVE: 9,
 } as const;
 
-export const ARENA_MAP_WIDTH = 96;
-export const ARENA_MAP_HEIGHT = 96;
-
-// Arena area metadata for labels
+// Spawn areas clustered around the campfire (center = tile 15,15)
 export const ARENA_LOCATIONS: {
   id: string; name: string;
   x: number; y: number; width: number; height: number;
 }[] = [
-  { id: 'summit', name: 'Summit', x: 44, y: 22, width: 8, height: 8 },
-  { id: 'watchtower', name: 'Watchtower', x: 40, y: 8, width: 10, height: 6 },
-  { id: 'cliffs', name: 'Cliffs', x: 12, y: 16, width: 8, height: 8 },
-  { id: 'ruins', name: 'Ruins', x: 68, y: 20, width: 10, height: 8 },
-  { id: 'shipwreck', name: 'Shipwreck', x: 6, y: 40, width: 10, height: 8 },
-  { id: 'bamboo_grove', name: 'Bamboo Grove', x: 16, y: 40, width: 12, height: 10 },
-  { id: 'clearing', name: 'Clearing', x: 40, y: 40, width: 10, height: 8 },
-  { id: 'spring', name: 'Spring', x: 46, y: 32, width: 6, height: 6 },
-  { id: 'ravine', name: 'Ravine', x: 56, y: 16, width: 8, height: 6 },
-  { id: 'lagoon', name: 'Lagoon', x: 64, y: 54, width: 12, height: 10 },
-  { id: 'mangroves', name: 'Mangroves', x: 38, y: 66, width: 14, height: 10 },
-  { id: 'tidal_caves', name: 'Tidal Caves', x: 16, y: 58, width: 10, height: 8 },
+  { id: 'clearing', name: 'Clearing', x: 12, y: 12, width: 6, height: 6 },
+  { id: 'north_camp', name: 'North Camp', x: 13, y: 7, width: 4, height: 4 },
+  { id: 'south_camp', name: 'South Camp', x: 13, y: 19, width: 4, height: 4 },
+  { id: 'east_camp', name: 'East Camp', x: 20, y: 13, width: 4, height: 4 },
+  { id: 'west_camp', name: 'West Camp', x: 6, y: 13, width: 4, height: 4 },
+  { id: 'ne_grove', name: 'Northeast Grove', x: 20, y: 7, width: 4, height: 4 },
+  { id: 'nw_grove', name: 'Northwest Grove', x: 6, y: 7, width: 4, height: 4 },
+  { id: 'se_grove', name: 'Southeast Grove', x: 20, y: 19, width: 4, height: 4 },
+  { id: 'sw_grove', name: 'Southwest Grove', x: 6, y: 19, width: 4, height: 4 },
 ];
-
-// ── Seeded PRNG (must match server exactly) ─────────────────
-
-function seededRng(seed: number): () => number {
-  let s = seed;
-  return () => {
-    s = (s * 16807 + 0) % 2147483647;
-    return (s & 0x7fffffff) / 0x7fffffff;
-  };
-}
-
-// ── Generate tilemap (identical algorithm to server) ────────
-
-function generateArenaTilemap(): number[][] {
-  const W = ARENA_MAP_WIDTH;
-  const H = ARENA_MAP_HEIGHT;
-  const rng = seededRng(42);
-  const map: number[][] = Array.from({ length: H }, () => Array(W).fill(0));
-
-  const CX = 48, CY = 48;
-  const BASE_RADIUS = 40;
-
-  const angleNoise: number[] = [];
-  for (let i = 0; i < 360; i++) {
-    angleNoise.push((rng() - 0.5) * 8);
-  }
-
-  // Step 1: Island shape
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const dx = x - CX;
-      const dy = y - CY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const angle = Math.atan2(dy, dx);
-      const angleDeg = ((angle * 180 / Math.PI) + 360) % 360;
-      const idx = Math.floor(angleDeg) % 360;
-      const idx2 = (idx + 1) % 360;
-      const frac = angleDeg - Math.floor(angleDeg);
-      const noise = angleNoise[idx] * (1 - frac) + angleNoise[idx2] * frac;
-      const edgeRadius = BASE_RADIUS + noise;
-
-      if (dist < edgeRadius - 3) {
-        map[y][x] = 2;
-      } else if (dist < edgeRadius) {
-        map[y][x] = 1;
-      }
-    }
-  }
-
-  // Step 2: Jungle zones
-  const jungleZones = [
-    { cx: 30, cy: 45, rx: 14, ry: 10 },
-    { cx: 55, cy: 50, rx: 12, ry: 8 },
-    { cx: 40, cy: 60, rx: 18, ry: 10 },
-    { cx: 25, cy: 55, rx: 10, ry: 8 },
-    { cx: 60, cy: 40, rx: 8, ry: 6 },
-  ];
-
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (map[y][x] !== 2) continue;
-      for (const zone of jungleZones) {
-        const ddx = (x - zone.cx) / zone.rx;
-        const ddy = (y - zone.cy) / zone.ry;
-        if (ddx * ddx + ddy * ddy < 1.0) {
-          map[y][x] = 3;
-          break;
-        }
-      }
-    }
-  }
-
-  // Step 3: Named location terrain
-  const areas = [
-    { x: 44, y: 22, w: 8, h: 8, terrain: 'high_ground' },
-    { x: 40, y: 8, w: 10, h: 6, terrain: 'high_ground' },
-    { x: 12, y: 16, w: 8, h: 8, terrain: 'high_ground' },
-    { x: 68, y: 20, w: 10, h: 8, terrain: 'wall' },
-    { x: 6, y: 40, w: 10, h: 8, terrain: 'open' },
-    { x: 16, y: 40, w: 12, h: 10, terrain: 'bush' },
-    { x: 40, y: 40, w: 10, h: 8, terrain: 'open' },
-    { x: 46, y: 32, w: 6, h: 6, terrain: 'open' },
-    { x: 56, y: 16, w: 8, h: 6, terrain: 'open' },
-    { x: 64, y: 54, w: 12, h: 10, terrain: 'water' },
-    { x: 38, y: 66, w: 14, h: 10, terrain: 'mangrove' },
-    { x: 16, y: 58, w: 10, h: 8, terrain: 'cave' },
-  ];
-
-  for (const area of areas) {
-    let tileType: number;
-    switch (area.terrain) {
-      case 'high_ground': tileType = 4; break;
-      case 'bush': tileType = 3; break;
-      case 'water': tileType = 6; break;
-      case 'wall': tileType = 2; break;
-      case 'open': tileType = 2; break;
-      case 'mangrove': tileType = 8; break;
-      case 'cave': tileType = 9; break;
-      default: tileType = 2;
-    }
-    for (let y = area.y; y < area.y + area.h; y++) {
-      for (let x = area.x; x < area.x + area.w; x++) {
-        if (x >= 0 && x < W && y >= 0 && y < H && map[y][x] !== 0) {
-          map[y][x] = tileType;
-        }
-      }
-    }
-  }
-
-  // Step 4: Ruins walls
-  const ruins = areas[3]; // index 3 = ruins
-  for (let y = ruins.y; y < ruins.y + ruins.h; y++) {
-    for (let x = ruins.x; x < ruins.x + ruins.w; x++) {
-      if (x >= 0 && x < W && y >= 0 && y < H) {
-        const isEdge = x === ruins.x || x === ruins.x + ruins.w - 1 ||
-                       y === ruins.y || y === ruins.y + ruins.h - 1;
-        const isInteriorWall = (x === ruins.x + 4 && y >= ruins.y + 1 && y <= ruins.y + 5) ||
-                               (y === ruins.y + 4 && x >= ruins.x + 1 && x <= ruins.x + 3);
-        if (isEdge || isInteriorWall) {
-          map[y][x] = 5;
-        } else {
-          map[y][x] = 7; // RUIN_FLOOR
-        }
-      }
-    }
-  }
-  // Doorways
-  const ruinsDoors = [
-    [ruins.x, ruins.y + 2],
-    [ruins.x + ruins.w - 1, ruins.y + 2],
-    [ruins.x + 4, ruins.y + 6],
-    [ruins.x + 5, ruins.y],
-  ];
-  for (const [dx, dy] of ruinsDoors) {
-    if (dx >= 0 && dx < W && dy >= 0 && dy < H) {
-      map[dy][dx] = 7; // RUIN_FLOOR doorways
-    }
-  }
-
-  return map;
-}
-
-export const ARENA_TILE_MAP: number[][] = generateArenaTilemap();

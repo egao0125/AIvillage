@@ -361,6 +361,10 @@ export function connectSocket(): Socket {
 
   // --- Werewolf events ---
   socket.on('werewolf:phase', (data: { phase: string; round: number }) => {
+    // Clear pre-game chat when werewolf game starts (round 1, first phase)
+    if (data.round === 1 && data.phase === 'night') {
+      gameStore.clearChatLog();
+    }
     gameStore.setWerewolfPhase(data.phase, data.round);
     eventBus.emit('werewolf:phase', data);
   });

@@ -257,25 +257,19 @@ export class BootScene extends Phaser.Scene {
     const activeMap = this.registry.get('activeMap');
     console.log('[BootScene] preload — activeMap:', activeMap);
 
-    // Load arena Tiled JSON map + tileset images for battle_royale/werewolf
+    // Load campfire + environment assets for werewolf/battle_royale
     if (activeMap === 'battle_royale' || activeMap === 'werewolf') {
-      this.load.on('loaderror', (file: { key: string; url: string }) => {
-        console.error('[BootScene] Failed to load asset:', file.key, file.url);
+      for (let i = 0; i < 13; i++) {
+        const num = String(71 + i).padStart(4, '0');
+        this.load.image(`campfire_${i}`, `/campfire/Image Sequence_004_${num}.png`);
+      }
+      this.load.spritesheet('env_trees', '/objectsandtrees/256x512 Trees.png', {
+        frameWidth: 256,
+        frameHeight: 512,
       });
-      this.load.tilemapTiledJSON('arena-map', ARENA_MAP_URL);
-      this.load.image('Tileset_Ground', TILESET_GROUND_URL);
-      this.load.image('Tileset_Sand', TILESET_SAND_URL);
-      this.load.image('Tileset_Road', TILESET_ROAD_URL);
-      this.load.image('Atlas_Trees_Bushes', ATLAS_TREES_URL);
-      this.load.image('Atlas_Rocks', ATLAS_ROCKS_URL);
-      this.load.image('Tileset_Shadow', TILESET_SHADOW_URL);
-      this.load.image('Atlas_Buildings_Blue', ATLAS_BUILDINGS_BLUE_URL);
-      this.load.image('Atlas_Buildings_Orange', ATLAS_BUILDINGS_ORANGE_URL);
-      this.load.image('Atlas_Buildings_Green', ATLAS_BUILDINGS_GREEN_URL);
-      this.load.image('Atlas_Buildings_Hay', ATLAS_BUILDINGS_HAY_URL);
-      this.load.image('Atlas_Buildings_Red', ATLAS_BUILDINGS_RED_URL);
-      this.load.on('complete', () => {
-        console.log('[BootScene] Arena tilemap + tilesets loaded');
+      this.load.spritesheet('env_objects', '/objectsandtrees/256x256 Objects.png', {
+        frameWidth: 256,
+        frameHeight: 256,
       });
     }
 

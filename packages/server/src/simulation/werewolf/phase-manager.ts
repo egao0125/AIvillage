@@ -887,12 +887,21 @@ export class WerewolfPhaseManager {
       }).catch(() => {});
     }
 
-    // Start a forced group conversation with ALL alive agents
+    // Walk all alive agents toward the campfire in a ring
     const aliveIds = [...this.state.alive];
+    const campX = 15, campY = 15;
+    aliveIds.forEach((id, i) => {
+      const angle = (i / aliveIds.length) * Math.PI * 2;
+      const radius = 3;
+      const tx = Math.round(campX + Math.cos(angle) * radius);
+      const ty = Math.round(campY + Math.sin(angle) * radius);
+      const ctrl = this.controllers.get(id);
+      if (ctrl) ctrl.startMoveTo({ x: tx, y: ty });
+    });
+
+    // Start a forced group conversation with ALL alive agents at campfire
     if (aliveIds.length >= 2) {
-      // Use first alive agent's position as meeting location (plaza)
-      const firstAgent = this.world.getAgent(aliveIds[0]);
-      const meetingLoc = firstAgent ? { ...firstAgent.position } : { x: 512, y: 512 };
+      const meetingLoc = { x: campX, y: campY };
       const convId = this.conversationManager.startConversation(
         aliveIds,
         undefined,
@@ -911,7 +920,7 @@ export class WerewolfPhaseManager {
     this.state.eventLog.push({
       day: this.state.round,
       phase: 'day',
-      event: 'Town meeting called at the plaza',
+      event: 'Town meeting called at the campfire',
       agentIds: [],
     });
 
@@ -924,6 +933,19 @@ export class WerewolfPhaseManager {
     this.state.phaseTimer = 0;
     this.state.voteCalled = false;
     this.broadcaster.werewolfPhase('day', this.state.round);
+
+    // Scatter agents away from campfire after meeting
+    const campX = 15, campY = 15;
+    const aliveIds = [...this.state.alive];
+    aliveIds.forEach((id, i) => {
+      const angle = (i / aliveIds.length) * Math.PI * 2;
+      const radius = 5 + Math.floor(Math.random() * 3);
+      const tx = Math.round(campX + Math.cos(angle) * radius);
+      const ty = Math.round(campY + Math.sin(angle) * radius);
+      const ctrl = this.controllers.get(id);
+      if (ctrl) ctrl.startMoveTo({ x: tx, y: ty });
+    });
+
     console.log(`[Werewolf] Afternoon — free time until nightfall`);
   }
 

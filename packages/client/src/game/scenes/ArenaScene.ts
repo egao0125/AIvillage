@@ -1,9 +1,6 @@
 import Phaser from 'phaser';
-import {
-  ARENA_MAP_WIDTH,
-  ARENA_MAP_HEIGHT,
-  ARENA_LOCATIONS,
-} from '../data/arena-map';
+import { ARENA_MAP_WIDTH, ARENA_MAP_HEIGHT } from '../data/arena-map';
+import { tileToScreen, isoDepth, isoWorldBounds } from '../iso';
 import { AgentSprite, resolveCharacterModel } from '../entities/AgentSprite';
 import { eventBus } from '../../core/EventBus';
 import { gameStore } from '../../core/GameStore';
@@ -12,7 +9,10 @@ import { generateAgentTexture, agentColorsFromName } from './BootScene';
 import { devPause } from '../../network/socket';
 import type { Agent, GameTime } from '@ai-village/shared';
 
-const TILE_SIZE = 32; // display size (16px source tiles scaled 2x)
+const KENNEY_SCALE = 0.25;
+const KENNEY_ORIGIN_Y = 0.875;
+const DEPTH_MUL = 10;
+const CAMPFIRE_FRAMES = 13;
 
 export class ArenaScene extends Phaser.Scene {
   private agentSprites: Map<string, AgentSprite> = new Map();
@@ -23,30 +23,29 @@ export class ArenaScene extends Phaser.Scene {
   private cleanupFns: (() => void)[] = [];
   private lastViewportKey: string = '';
   private viewportThrottleTime: number = 0;
+  private cameraLerpTargetId: string | null = null;
+  private nightAlpha: number = 0;
+  private targetNightAlpha: number = 0;
 
   constructor() {
     super({ key: 'ArenaScene' });
   }
 
   create(): void {
-    // Arena uses top-down orthogonal projection, not isometric
-    AgentSprite.tileToWorld = (tx, ty) => ({ x: tx * TILE_SIZE + TILE_SIZE / 2, y: ty * TILE_SIZE + TILE_SIZE / 2 });
+    // Use isometric projection (same as VillageScene)
+    AgentSprite.tileToWorld = tileToScreen;
 
-    this.createTilemap();
-    this.drawLocationLabels();
+    this.drawIsometricPlane();
+    this.spawnForest();
+    this.spawnCampfire();
 
     this.conversationGraphics = this.add.graphics();
     this.conversationGraphics.setDepth(9);
 
+    // Day/night overlay — covers isometric diamond
+    const wb = isoWorldBounds(ARENA_MAP_WIDTH, ARENA_MAP_HEIGHT);
     this.dayNightOverlay = this.add
-      .rectangle(
-        (ARENA_MAP_WIDTH * TILE_SIZE) / 2,
-        (ARENA_MAP_HEIGHT * TILE_SIZE) / 2,
-        ARENA_MAP_WIDTH * TILE_SIZE,
-        ARENA_MAP_HEIGHT * TILE_SIZE,
-        0x000033,
-        0
-      )
+      .rectangle(wb.centerX, wb.centerY, wb.width + 400, wb.height + 400, 0x000033, 0)
       .setDepth(5000);
 
     this.setupCamera();
@@ -58,41 +57,125 @@ export class ArenaScene extends Phaser.Scene {
     devPause();
   }
 
-  // ── Tilemap — Tiled JSON loaded in BootScene ──────────────
-  private createTilemap(): void {
-    const map = this.make.tilemap({ key: 'arena-map' });
-
-    const tilesets = [
-      map.addTilesetImage('Tileset_Ground', 'Tileset_Ground'),
-      map.addTilesetImage('Tileset_Sand', 'Tileset_Sand'),
-      map.addTilesetImage('Tileset_Road', 'Tileset_Road'),
-      map.addTilesetImage('Atlas_Trees_Bushes', 'Atlas_Trees_Bushes'),
-      map.addTilesetImage('Atlas_Rocks', 'Atlas_Rocks'),
-      map.addTilesetImage('Tileset_Shadow', 'Tileset_Shadow'),
-      map.addTilesetImage('Atlas_Buildings_Blue', 'Atlas_Buildings_Blue'),
-      map.addTilesetImage('Atlas_Buildings_Orange', 'Atlas_Buildings_Orange'),
-      map.addTilesetImage('Atlas_Buildings_Green', 'Atlas_Buildings_Green'),
-      map.addTilesetImage('Atlas_Buildings_Hay', 'Atlas_Buildings_Hay'),
-      map.addTilesetImage('Atlas_Buildings_Red', 'Atlas_Buildings_Red'),
-    ].filter((ts): ts is Phaser.Tilemaps.Tileset => ts !== null);
-
-    if (tilesets.length === 0) {
-      console.error('[ArenaScene] No tilesets loaded — map will be blank');
-      return;
-    }
-
-    // Create all layers from the TMJ dynamically (user may add more in Tiled)
-    // Depth: Ground=0, Vegetation=1, Structures=2 (agents at 10, labels at 2000+)
-    for (let i = 0; i < map.layers.length; i++) {
-      const layerData = map.layers[i];
-      const layer = map.createLayer(layerData.name, tilesets);
-      if (layer) {
-        layer.setScale(2); // 16px tiles → 32px display
-        layer.setDepth(i);
+  // ── Isometric grass plane ─────────────────────────────────
+  private drawIsometricPlane(): void {
+    const cx = ARENA_MAP_WIDTH / 2;
+    const cy = ARENA_MAP_HEIGHT / 2;
+    for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
+      for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
+        const { x: sx, y: sy } = tileToScreen(x, y);
+        // Darken grass near edges for forest floor feel
+        const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+        const tint = dist > 10 ? 0x88bb88 : dist > 7 ? 0x99cc99 : 0xbbeebb;
+        this.add.image(sx, sy, 'kenney_floor')
+          .setScale(KENNEY_SCALE)
+          .setOrigin(0.5, KENNEY_ORIGIN_Y)
+          .setDepth(isoDepth(x, y) * DEPTH_MUL)
+          .setTint(tint);
       }
     }
+  }
 
-    console.log(`[ArenaScene] Tilemap created: ${map.layers.length} layer(s), ${tilesets.length} tileset(s)`);
+  // ── Forest ring + scattered objects ──────────────────────
+  private spawnForest(): void {
+    const cx = ARENA_MAP_WIDTH / 2;
+    const cy = ARENA_MAP_HEIGHT / 2;
+    // Seeded RNG for deterministic placement
+    let seed = 12345;
+    const rng = () => { seed = (seed * 16807 + 0) % 2147483647; return (seed & 0x7fffffff) / 0x7fffffff; };
+
+    // Tree frame indices: 0-11 (6 cols x 2 rows).
+    // Excluded: 1=willow, 2=palm, 8=yellow/autumn, 10=birch2 (don't match forest vibe)
+    const forestTrees = [0, 3, 6, 7, 9]; // pine, birch, pine2, round bush, bonsai
+    // Object frame indices: 0-23 (8 cols x 3 rows)
+    // Row 0: crates(0-3), chests(4-5), barrels(6-7)
+    // Row 1: fences(8-12), bushes(13-14)
+    // Row 2: rocks(16-23)
+    const scatterObjects = [6, 7, 13, 14, 16, 17, 18, 19, 20]; // barrels, bushes, rocks
+
+    // Dense tree ring: outer zone (dist > 9 from center)
+    for (let y = 0; y < ARENA_MAP_HEIGHT; y++) {
+      for (let x = 0; x < ARENA_MAP_WIDTH; x++) {
+        const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+
+        if (dist > 9 && rng() < 0.4) {
+          // Dense forest
+          const frame = forestTrees[Math.floor(rng() * forestTrees.length)];
+          const { x: sx, y: sy } = tileToScreen(x, y);
+          this.add.image(sx, sy, 'env_trees', frame)
+            .setScale(0.18 + rng() * 0.06)
+            .setOrigin(0.5, 0.9)
+            .setDepth(isoDepth(x, y) * DEPTH_MUL + 3);
+        } else if (dist > 7 && dist <= 9 && rng() < 0.25) {
+          // Sparse tree border
+          const frame = forestTrees[Math.floor(rng() * forestTrees.length)];
+          const { x: sx, y: sy } = tileToScreen(x, y);
+          this.add.image(sx, sy, 'env_trees', frame)
+            .setScale(0.15 + rng() * 0.05)
+            .setOrigin(0.5, 0.9)
+            .setDepth(isoDepth(x, y) * DEPTH_MUL + 3);
+        } else if (dist > 4 && dist <= 7 && rng() < 0.08) {
+          // Scattered objects in mid zone (rocks, bushes, barrels)
+          const frame = scatterObjects[Math.floor(rng() * scatterObjects.length)];
+          const { x: sx, y: sy } = tileToScreen(x, y);
+          this.add.image(sx, sy, 'env_objects', frame)
+            .setScale(0.10 + rng() * 0.04)
+            .setOrigin(0.5, 0.85)
+            .setDepth(isoDepth(x, y) * DEPTH_MUL + 2);
+        }
+      }
+    }
+  }
+
+  // ── Animated campfire at map center ──────────────────────
+  private spawnCampfire(): void {
+    const cx = Math.floor(ARENA_MAP_WIDTH / 2);
+    const cy = Math.floor(ARENA_MAP_HEIGHT / 2);
+    const { x: sx, y: sy } = tileToScreen(cx, cy);
+
+    this.anims.create({
+      key: 'campfire_burn',
+      frames: Array.from({ length: CAMPFIRE_FRAMES }, (_, i) => ({ key: `campfire_${i}` })),
+      frameRate: 8,
+      repeat: -1,
+    });
+
+    // Orange glow — soft radial gradient, renders above night overlay as light
+    const glowGfx = this.add.graphics();
+    const glowRadius = 180;
+    const steps = 60;
+    for (let i = 0; i < steps; i++) {
+      const t = i / steps; // 0 = outer, 1 = center
+      const r = glowRadius * (1 - t);
+      // Exponential falloff — soft outer edge, warm center
+      const alpha = 0.15 * (t * t * t);
+      glowGfx.fillStyle(0xff6600, alpha);
+      glowGfx.fillCircle(glowRadius, glowRadius, r);
+    }
+    glowGfx.generateTexture('campfire_glow', glowRadius * 2, glowRadius * 2);
+    glowGfx.destroy();
+
+    // Campfire sprite — anchored to tile like other isometric objects
+    const campfire = this.add.sprite(sx, sy, 'campfire_0')
+      .play('campfire_burn')
+      .setScale(0.25)
+      .setOrigin(0.5, 0.6) // base of fire sits on tile
+      .setDepth(isoDepth(cx, cy) * DEPTH_MUL + 3);
+
+    // Glow centered on the campfire
+    const glow = this.add.image(campfire.x, campfire.y, 'campfire_glow')
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(5500)
+      .setAlpha(0.8);
+
+    this.tweens.add({
+      targets: glow,
+      alpha: { from: 0.5, to: 0.75 },
+      duration: 1500,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
   }
 
 
@@ -100,17 +183,44 @@ export class ArenaScene extends Phaser.Scene {
     for (const sprite of this.agentSprites.values()) {
       sprite.update(time, delta);
     }
+    this.lerpNightAlpha();
     this.drawConversationLines();
+    // Smooth camera lerp toward focused agent, then hand off to startFollow
+    if (this.cameraLerpTargetId) {
+      const sprite = this.agentSprites.get(this.cameraLerpTargetId);
+      const cam = this.cameras.main;
+      if (!sprite) {
+        this.cameraLerpTargetId = null;
+      } else {
+        const sidebarPx = gameStore.getState().sidebarWidth;
+        const sidebarOffset = (sidebarPx / 2) / cam.zoom;
+        const verticalOffset = 80 / cam.zoom;
+        const halfW = cam.width / 2;
+        const halfH = cam.height / 2;
+        const targetScrollX = sprite.x + sidebarOffset - halfW;
+        const targetScrollY = sprite.y - verticalOffset - halfH;
+        const dx = targetScrollX - cam.scrollX;
+        const dy = targetScrollY - cam.scrollY;
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
+          this.cameraLerpTargetId = null;
+          cam.startFollow(sprite, true, 0.06, 0.06, -sidebarOffset, verticalOffset);
+        } else {
+          cam.scrollX = Phaser.Math.Linear(cam.scrollX, targetScrollX, 0.08);
+          cam.scrollY = Phaser.Math.Linear(cam.scrollY, targetScrollY, 0.08);
+        }
+      }
+    }
     this.emitViewportUpdate(time);
   }
 
   private emitViewportUpdate(time: number): void {
     if (time - this.viewportThrottleTime < 500) return;
     const cam = this.cameras.main;
-    const x = Math.floor(cam.scrollX / TILE_SIZE);
-    const y = Math.floor(cam.scrollY / TILE_SIZE);
-    const width = Math.ceil(cam.width / (TILE_SIZE * cam.zoom));
-    const height = Math.ceil(cam.height / (TILE_SIZE * cam.zoom));
+    // Approximate tile viewport for server-side spatial filtering
+    const x = Math.floor(cam.scrollX / 32);
+    const y = Math.floor(cam.scrollY / 32);
+    const width = Math.ceil(cam.width / (32 * cam.zoom));
+    const height = Math.ceil(cam.height / (32 * cam.zoom));
     const key = `${x},${y},${width},${height}`;
     if (key === this.lastViewportKey) return;
     this.lastViewportKey = key;
@@ -151,41 +261,14 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   // ── Location labels ─────────────────────────────────────────
-  private drawLocationLabels(): void {
-    for (const loc of ARENA_LOCATIONS) {
-      const cx = (loc.x + loc.width / 2) * TILE_SIZE;
-      const cy = (loc.y + loc.height / 2) * TILE_SIZE;
-
-      const label = this.add.text(cx, cy, loc.name, {
-        fontSize: '10px',
-        fontFamily: '"Press Start 2P", monospace',
-        color: '#ffffff',
-        resolution: 2,
-      });
-      label.setOrigin(0.5, 0.5);
-      label.setDepth(2001);
-
-      const pad = 4;
-      const bg = this.add.rectangle(
-        cx, cy,
-        label.width + pad * 2,
-        label.height + pad * 2,
-        0x000000, 0.55
-      );
-      bg.setOrigin(0.5, 0.5);
-      bg.setDepth(2000);
-    }
-  }
-
   // ── Camera ──────────────────────────────────────────────────
   private setupCamera(): void {
-    const worldW = ARENA_MAP_WIDTH * TILE_SIZE;
-    const worldH = ARENA_MAP_HEIGHT * TILE_SIZE;
+    const wb = isoWorldBounds(ARENA_MAP_WIDTH, ARENA_MAP_HEIGHT);
     const cam = this.cameras.main;
 
-    const fitZoom = Math.min(cam.width / worldW, cam.height / worldH);
+    const fitZoom = Math.min(cam.width / wb.width, cam.height / wb.height);
     cam.setZoom(Math.max(fitZoom, 0.5));
-    cam.centerOn(worldW / 2, worldH / 2);
+    cam.centerOn(wb.centerX, wb.centerY);
 
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (pointer.isDown && pointer.button === 0 && !pointer.event.shiftKey) {
@@ -193,6 +276,7 @@ export class ArenaScene extends Phaser.Scene {
         const dy = pointer.y - pointer.prevPosition.y;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
           cam.stopFollow();
+          this.cameraLerpTargetId = null;
         }
         cam.scrollX -= dx / cam.zoom;
         cam.scrollY -= dy / cam.zoom;
@@ -207,8 +291,20 @@ export class ArenaScene extends Phaser.Scene {
         _deltaX: number,
         deltaY: number
       ) => {
-        const newZoom = Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.5, 5);
-        cam.setZoom(newZoom);
+        const oldZoom = cam.zoom;
+        const newZoom = Phaser.Math.Clamp(oldZoom - deltaY * 0.001, 0.5, 5);
+        if (newZoom === oldZoom) return;
+
+        const sprite = this.selectedAgentId ? this.agentSprites.get(this.selectedAgentId) : null;
+        if (sprite) {
+          cam.setZoom(newZoom);
+        } else {
+          const midX = cam.scrollX + cam.width / 2;
+          const midY = cam.scrollY + cam.height / 2;
+          cam.setZoom(newZoom);
+          cam.scrollX = midX - cam.width / 2;
+          cam.scrollY = midY - cam.height / 2;
+        }
       }
     );
   }
@@ -262,7 +358,12 @@ export class ArenaScene extends Phaser.Scene {
       }),
 
       eventBus.on('agent:death', (data: { agentId: string; cause: string }) => {
-        this.despawnAgent(data.agentId);
+        // Werewolf: keep dead agents visible in death pose (don't destroy)
+        const sprite = this.agentSprites.get(data.agentId);
+        if (sprite) {
+          sprite.setDead(true);
+          this.deadAgentIds.add(data.agentId);
+        }
       }),
 
       eventBus.on('agent:leave', (data: { agentId: string }) => {
@@ -274,12 +375,27 @@ export class ArenaScene extends Phaser.Scene {
       }),
 
       eventBus.on('agent:thought', (data: { agentId: string; thought: string }) => {
+        if (data.agentId !== this.selectedAgentId) return;
         const sprite = this.agentSprites.get(data.agentId);
         if (sprite) sprite.think(data.thought);
       }),
 
       eventBus.on('agent:select', (agentId: string) => {
         this.selectAgent(agentId);
+      }),
+
+      eventBus.on('agent:focus', (agentId: string) => {
+        if (this.selectedAgentId) {
+          const prev = this.agentSprites.get(this.selectedAgentId);
+          if (prev) prev.setSelected(false);
+        }
+        this.selectedAgentId = agentId;
+        const sprite = this.agentSprites.get(agentId);
+        if (sprite) {
+          sprite.setSelected(true);
+          this.cameras.main.stopFollow();
+          this.cameraLerpTargetId = agentId;
+        }
       }),
 
       eventBus.on('werewolf:phase', (data: { phase: string; round: number }) => {
@@ -298,6 +414,11 @@ export class ArenaScene extends Phaser.Scene {
       }),
 
       eventBus.on('werewolf:newGame', () => {
+        // Revive all dead agents for the new game
+        for (const sprite of this.agentSprites.values()) {
+          sprite.setDead(false);
+        }
+        this.deadAgentIds.clear();
         this.updateWerewolfRoleLabels();
       })
     );
@@ -338,19 +459,19 @@ export class ArenaScene extends Phaser.Scene {
     if (this.selectedAgentId === agentId) {
       this.selectedAgentId = null;
       gameStore.selectAgent(null);
+      gameStore.closeDetail();
       this.cameras.main.stopFollow();
+      this.cameraLerpTargetId = null;
       return;
     }
     this.selectedAgentId = agentId;
     gameStore.selectAgent(agentId);
+    gameStore.openAgentDetail(agentId);
     const sprite = this.agentSprites.get(agentId);
     if (sprite) {
       sprite.setSelected(true);
-      const cam = this.cameras.main;
-      const sidebarHalf = 210 / cam.zoom;
-      cam.stopFollow();
-      cam.startFollow(sprite, true, 0.06, 0.06);
-      cam.followOffset.set(-sidebarHalf, 0);
+      this.cameras.main.stopFollow();
+      this.cameraLerpTargetId = agentId;
     }
   }
 
@@ -371,17 +492,23 @@ export class ArenaScene extends Phaser.Scene {
   // ── Day/night ───────────────────────────────────────────────
   private updateDayNight(time: GameTime): void {
     const h = time.hour + time.minute / 60;
-    let alpha = 0;
-    if (h < 5) alpha = 0.3;
-    else if (h < 7) alpha = 0.3 - ((h - 5) / 2) * 0.3;
-    else if (h < 18) alpha = 0;
-    else if (h < 20) alpha = ((h - 18) / 2) * 0.2;
-    else alpha = 0.2 + ((h - 20) / 4) * 0.1;
+    if (h < 5) this.targetNightAlpha = 0.9;
+    else if (h < 6.5) this.targetNightAlpha = 0.9 * (1 - (h - 5) / 1.5);
+    else if (h < 19) this.targetNightAlpha = 0;
+    else if (h < 21) this.targetNightAlpha = 0.9 * ((h - 19) / 2) * 0.6;
+    else if (h < 22.5) this.targetNightAlpha = 0.9 * 0.6 + 0.7 * 0.4 * ((h - 21) / 1.5);
+    else this.targetNightAlpha = 0.9;
+  }
 
-    this.dayNightOverlay.setAlpha(alpha);
-    if (h < 5 || h >= 20) this.dayNightOverlay.setFillStyle(0x000033, alpha);
-    else if (h < 7) this.dayNightOverlay.setFillStyle(0x331a00, alpha);
-    else if (h >= 18) this.dayNightOverlay.setFillStyle(0x1a0033, alpha);
+  private lerpNightAlpha(): void {
+    const diff = this.targetNightAlpha - this.nightAlpha;
+    if (Math.abs(diff) > 0.002) {
+      this.nightAlpha += diff * 0.03;
+    } else {
+      this.nightAlpha = this.targetNightAlpha;
+    }
+    this.dayNightOverlay.setFillStyle(0x000033, this.nightAlpha);
+    this.dayNightOverlay.setAlpha(this.nightAlpha);
   }
 
   // ── Initial sync ────────────────────────────────────────────

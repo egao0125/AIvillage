@@ -441,6 +441,9 @@ export class AgentController {
     // Dead agents don't tick
     if (this.agent.alive === false) return;
 
+    // Werewolf: freeze agents until game starts (prevents pre-game village behavior)
+    if (this.werewolfManager && this.werewolfManager.phase === 'setup') return;
+
     // Werewolf: enforce sleep for villagers during night phase
     // This catches agents whose async LLM call completed after sleep was set
     if (this.werewolfManager?.shouldAgentSleep(this.agent.id) && this.state !== 'sleeping') {
@@ -651,6 +654,7 @@ export class AgentController {
     this.state = 'planning';
     this.world.updateAgentState(this.agent.id, 'active', '');
     this.broadcaster.agentAction(this.agent.id, 'waking up', '\u{1F31E}');
+    this.broadcaster.agentThought(this.agent.id, 'Time to start the day');
     this.sleepTriggered = false; // reset for next night
     console.log(`[Agent] ${this.agent.config.name} wakes up`);
 
@@ -847,9 +851,11 @@ export class AgentController {
         const areaName = area?.name ?? 'your destination';
         if (this.pendingArrivalIntent) {
           this.lastTrigger = `You arrived at ${areaName}. You came here because: ${this.pendingArrivalIntent}`;
+          this.broadcaster.agentThought(this.agent.id, `Arrived at ${areaName}: ${this.pendingArrivalIntent}`);
           this.pendingArrivalIntent = null;
         } else {
           this.lastTrigger = `You arrived at ${areaName}. Look around and decide what to do.`;
+          this.broadcaster.agentThought(this.agent.id, `Arrived at ${areaName}`);
         }
         this.state = 'idle';
         this.world.updateAgentState(this.agent.id, 'idle', '');
@@ -934,6 +940,7 @@ export class AgentController {
     this.postConversationPending = false;
     this.postConvWaitTimer = 0;
     this.lastTrigger = `You just finished a conversation. ${summary}`;
+    if (summary) this.broadcaster.agentThought(this.agent.id, summary);
     if (!this.decidingInProgress && !this.apiExhausted) {
       void this.decideAndAct();
     }

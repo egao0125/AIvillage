@@ -41,7 +41,7 @@ export class SpeechBubble extends Phaser.GameObjects.Container {
     this.add(this.label);
 
     this.setAlpha(0);
-    this.setDepth(1000);
+    this.setDepth(6001);
 
     if (message) {
       this.show(message);

@@ -116,6 +116,9 @@ const COGNITO_CLIENT_ID = process.env.COGNITO_CLIENT_ID!;
 // In production, absence means auth will fail — fatal exit.
 const COGNITO_CLIENT_SECRET = process.env.COGNITO_CLIENT_SECRET;
 const isProduction = process.env.NODE_ENV === 'production';
+// Dev mode: Cognito vars missing or set to placeholder values like "local-dev"
+const isDevAuth = !COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID
+  || COGNITO_USER_POOL_ID === 'local-dev' || COGNITO_CLIENT_ID === 'local-dev';
 if (isProduction && !COGNITO_CLIENT_SECRET) {
   console.error('[Security] FATAL: COGNITO_CLIENT_SECRET is not set in production. ' +
     'Required when Cognito app client has generate_secret=true.');
@@ -202,7 +205,7 @@ export async function verifyTokenFull(token: string): Promise<{ userId: string; 
 export function optionalAuth(_config?: unknown) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     // Dev mode: skip JWT verification when Cognito is not configured
-    if (!COGNITO_USER_POOL_ID || !COGNITO_CLIENT_ID) {
+    if (isDevAuth) {
       req.userId = 'dev-user';
       return next();
     }
@@ -513,6 +516,12 @@ export function createAuthRouter(_url?: string, _serviceRoleKey?: string): Route
 
   // GET /api/auth/me
   router.get('/api/auth/me', async (req: Request, res: Response) => {
+    // Dev mode: skip JWT verification when Cognito is not configured
+    if (isDevAuth) {
+      res.json({ user: { id: 'dev-user', email: 'dev@localhost' } });
+      return;
+    }
+
     const authHdr = req.headers.authorization;
     const token = authHdr?.toLowerCase().startsWith('bearer ') ? authHdr.slice(7) : undefined;
     if (!token) {

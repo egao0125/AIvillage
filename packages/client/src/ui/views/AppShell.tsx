@@ -14,6 +14,8 @@ import { AnalyzeView } from './AnalyzeView';
 import { useTheme } from '../ThemeContext';
 import { WerewolfGameOver } from '../components/WerewolfGameOver';
 import { WerewolfSidebar } from '../components/WerewolfSidebar';
+import { AgentNavArrows } from '../components/AgentNavArrows';
+import { AgentHUD } from '../components/AgentHUD';
 
 export const AppShell: React.FC = () => {
   const [selectedMap, setSelectedMap] = useState<string | null>(() => sessionStorage.getItem('ai-village-map'));
@@ -107,7 +109,7 @@ export const AppShell: React.FC = () => {
 
   // Setup/agent creation screen
   if (!entered) {
-    return <SetupPage onEnter={handleEnter} onBack={() => { sessionStorage.removeItem('ai-village-map'); setSelectedMap(null); }} />;
+    return <SetupPage mapId={selectedMap} onEnter={handleEnter} onBack={() => { sessionStorage.removeItem('ai-village-map'); setSelectedMap(null); }} />;
   }
 
   return (
@@ -138,7 +140,13 @@ export const AppShell: React.FC = () => {
           zIndex: 2,
         }}
       />
-      {activeMode === 'watch' && (selectedMap === 'werewolf' ? <WerewolfSidebar /> : <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />)}
+      {activeMode === 'watch' && (selectedMap === 'werewolf' ? (
+        <>
+          <WerewolfSidebar />
+          <AgentHUD />
+          <AgentNavArrows />
+        </>
+      ) : <WatchView onAddAgent={() => setAgentCreatorOpen(true)} />)}
       {activeMode === 'analyze' && <AnalyzeView />}
       <TopNav
         onChangeMap={handleChangeMap}

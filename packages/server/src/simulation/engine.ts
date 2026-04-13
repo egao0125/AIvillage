@@ -251,12 +251,15 @@ export class SimulationEngine {
       return;
     }
 
-    // 1. End all active conversations from previous game
+    // 1. Pause engine — agents should be frozen until "Start Game" is clicked again
+    this.pause();
+
+    // 2. End all active conversations from previous game
     for (const conv of this.world.getActiveConversations()) {
       this.conversationManager!.forceEndConversation(conv.id);
     }
 
-    // 2. Reset all agents to alive + reset controller states
+    // 3. Reset all agents to alive + reset controller states
     for (const agent of this.world.agents.values()) {
       agent.alive = true;
       agent.state = 'idle';
@@ -266,37 +269,25 @@ export class SimulationEngine {
       agent.lastGuarded = undefined;
       agent.votingHistory = undefined;
       this.world.updateAgentState(agent.id, 'active', '');
-      // Reset controller state — agents may be stuck in conversing/sleeping/deciding from last game
       const ctrl = this.controllers.get(agent.id);
       if (ctrl) {
         ctrl.state = 'idle';
       }
     }
 
-    // 3. Create new WerewolfPhaseManager
+    // 4. Create new WerewolfPhaseManager (starts in 'setup' phase — agents frozen)
     this.werewolfManager.dispose();
     this.werewolfManager = new WerewolfPhaseManager(
       this.bus, this.world, this.broadcaster, this.controllers, this.cognitions, this.conversationManager!,
     );
-    // Re-link controllers to new manager
     for (const ctrl of this.controllers.values()) {
       ctrl.werewolfManager = this.werewolfManager;
     }
 
-    // 4. Reset world clock to Day 1, 21:00 — first night starts immediately
-    this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
-    this.broadcaster.worldTime(this.world.time);
-
-    // 5. Start fresh game — filter out away agents (same as startWerewolfGame)
-    const agentIds = Array.from(this.world.agents.values())
-      .filter(a => a.state !== 'away')
-      .map(a => a.id);
-    this.werewolfManager.startGame(agentIds);
-
-    // 6. Broadcast new game starting
+    // 5. Broadcast new game — client revives sprites and clears state
     this.broadcaster.werewolfNewGame();
 
-    console.log('[Engine] Werewolf game reset — new game started');
+    console.log('[Engine] Werewolf game reset — waiting for Start Game');
   }
 
   async initialize(): Promise<void> {
@@ -1071,11 +1062,22 @@ export class SimulationEngine {
   addAgent(config: AgentConfig, wakeHour: number = 7, sleepHour: number = 23, startingCurrency: number = 0, apiKey?: string, model?: string, ownerId?: string): Agent {
     const id = crypto.randomUUID();
 
-    // Pick a random spawn position from public areas
-    const spawnArea = this.mapConfig.spawnAreas[
-      Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
-    ];
-    const spawnPos = getAreaEntrance(spawnArea);
+    // Pick spawn position — werewolf: clustered around campfire; village: random area
+    let spawnArea: string;
+    let spawnPos: { x: number; y: number };
+    if (this.mapConfig.systems?.werewolf) {
+      spawnArea = 'clearing';
+      // Spread agents in a ring around campfire center (15,15)
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 2 + Math.random() * 2; // 2-4 tiles from center
+      spawnPos = {
+        x: Math.round(15 + Math.cos(angle) * radius),
+        y: Math.round(15 + Math.sin(angle) * radius),
+      };
+    } else {
+      spawnArea = this.mapConfig.spawnAreas[Math.floor(Math.random() * this.mapConfig.spawnAreas.length)];
+      spawnPos = getAreaEntrance(spawnArea);
+    }
 
     const agent: Agent = {
       id,

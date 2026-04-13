@@ -73,6 +73,8 @@ export class VillageScene extends Phaser.Scene {
   // Infra 6: Viewport tracking — throttled to avoid spamming server
   private lastViewportKey: string = '';
   private viewportThrottleTime: number = 0;
+  /** Agent ID the camera is lerping toward (smooth pan before follow) */
+  private cameraLerpTargetId: string | null = null;
 
   constructor() {
     super({ key: 'VillageScene' });
@@ -153,6 +155,34 @@ export class VillageScene extends Phaser.Scene {
       uiCam.setZoom(main.zoom);
     }
     this.drawConversationLines();
+    // Smooth camera lerp toward focused agent, then hand off to startFollow.
+    // Phaser subtracts followOffset: scrollX = target.x - followOffset.x - halfWidth
+    // So followOffset.x = -offset makes target appear left of center (clearing right sidebar).
+    // The manual lerp target must match: scrollX = sprite.x + offset - halfWidth.
+    if (this.cameraLerpTargetId) {
+      const sprite = this.agentSprites.get(this.cameraLerpTargetId);
+      const cam = this.cameras.main;
+      if (!sprite) {
+        this.cameraLerpTargetId = null;
+      } else {
+        const sidebarPx = gameStore.getState().sidebarWidth;
+        const sidebarOffset = (sidebarPx / 2) / cam.zoom;
+        const verticalOffset = 80 / cam.zoom;
+        const halfW = cam.width / 2;
+        const halfH = cam.height / 2;
+        const targetScrollX = sprite.x + sidebarOffset - halfW;
+        const targetScrollY = sprite.y - verticalOffset - halfH;
+        const dx = targetScrollX - cam.scrollX;
+        const dy = targetScrollY - cam.scrollY;
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
+          this.cameraLerpTargetId = null;
+          cam.startFollow(sprite, true, 0.06, 0.06, -sidebarOffset, verticalOffset);
+        } else {
+          cam.scrollX = Phaser.Math.Linear(cam.scrollX, targetScrollX, 0.08);
+          cam.scrollY = Phaser.Math.Linear(cam.scrollY, targetScrollY, 0.08);
+        }
+      }
+    }
     this.emitViewportUpdate(time);
   }
 
@@ -403,6 +433,7 @@ export class VillageScene extends Phaser.Scene {
         const dy = pointer.y - pointer.prevPosition.y;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
           cam.stopFollow();
+          this.cameraLerpTargetId = null;
         }
         cam.scrollX -= dx / cam.zoom;
         cam.scrollY -= dy / cam.zoom;
@@ -432,6 +463,7 @@ export class VillageScene extends Phaser.Scene {
     });
 
     // Scroll to zoom — free range from 0.5x to 5x
+    // When following an agent, zoom toward the agent (not the offset camera center).
     this.input.on(
       'wheel',
       (
@@ -440,8 +472,22 @@ export class VillageScene extends Phaser.Scene {
         _deltaX: number,
         deltaY: number
       ) => {
-        const newZoom = Phaser.Math.Clamp(cam.zoom - deltaY * 0.001, 0.5, 5);
-        cam.setZoom(newZoom);
+        const oldZoom = cam.zoom;
+        const newZoom = Phaser.Math.Clamp(oldZoom - deltaY * 0.001, 0.5, 5);
+        if (newZoom === oldZoom) return;
+
+        // Zoom toward the selected agent so they stay centered in the visible area
+        const sprite = this.selectedAgentId ? this.agentSprites.get(this.selectedAgentId) : null;
+        if (sprite) {
+          cam.setZoom(newZoom);
+        } else {
+          // No agent selected — zoom toward viewport center (preserve midPoint)
+          const midX = cam.scrollX + cam.width / 2;
+          const midY = cam.scrollY + cam.height / 2;
+          cam.setZoom(newZoom);
+          cam.scrollX = midX - cam.width / 2;
+          cam.scrollY = midY - cam.height / 2;
+        }
       }
     );
   }
@@ -450,9 +496,12 @@ export class VillageScene extends Phaser.Scene {
   private setupEventListeners(): void {
     this.cleanupFns.push(
       eventBus.on('world:snapshot', (snapshot: { agents: Agent[]; time?: GameTime }) => {
+        // Build set of alive agent IDs from snapshot
+        const aliveIds = new Set<string>();
         for (const agent of snapshot.agents) {
-          // Skip dead agents
-          if (agent.alive === false) continue;
+          if (agent.alive === false || agent.state === 'dead') continue;
+          aliveIds.add(agent.id);
+
           if (!this.agentSprites.has(agent.id)) {
             this.spawnAgent(agent);
           }
@@ -464,6 +513,12 @@ export class VillageScene extends Phaser.Scene {
             sprite.moveToTile(agent.position.x, agent.position.y);
           }
           if (agent.currentAction) sprite.setAction(agent.currentAction);
+        }
+        // Despawn sprites for agents that are no longer alive (handles missed death events)
+        for (const [id] of this.agentSprites) {
+          if (!aliveIds.has(id)) {
+            this.despawnAgent(id);
+          }
         }
         if (snapshot.time) this.updateDayNight(snapshot.time);
       }),
@@ -500,12 +555,28 @@ export class VillageScene extends Phaser.Scene {
       }),
 
       eventBus.on('agent:thought', (data: { agentId: string; thought: string }) => {
+        if (data.agentId !== this.selectedAgentId) return;
         const sprite = this.agentSprites.get(data.agentId);
         if (sprite) sprite.think(data.thought);
       }),
 
       eventBus.on('agent:select', (agentId: string) => {
         this.selectAgent(agentId);
+      }),
+
+      eventBus.on('agent:focus', (agentId: string) => {
+        // Deselect previous sprite without toggle logic
+        if (this.selectedAgentId) {
+          const prev = this.agentSprites.get(this.selectedAgentId);
+          if (prev) prev.setSelected(false);
+        }
+        this.selectedAgentId = agentId;
+        const sprite = this.agentSprites.get(agentId);
+        if (sprite) {
+          sprite.setSelected(true);
+          this.cameras.main.stopFollow();
+          this.cameraLerpTargetId = agentId;
+        }
       })
     );
   }
@@ -588,12 +659,9 @@ export class VillageScene extends Phaser.Scene {
     const sprite = this.agentSprites.get(agentId);
     if (sprite) {
       sprite.setSelected(true);
-      const cam = this.cameras.main;
-      // Offset to center agent in visible area (right of sidebar)
-      const sidebarHalf = 210 / cam.zoom;
-      cam.stopFollow();
-      cam.startFollow(sprite, true, 0.06, 0.06);
-      cam.followOffset.set(-sidebarHalf, 0);
+      // Smooth pan to agent via lerp, then hand off to startFollow in update()
+      this.cameras.main.stopFollow();
+      this.cameraLerpTargetId = agentId;
     }
   }
 

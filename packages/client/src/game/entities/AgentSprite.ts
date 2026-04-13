@@ -103,6 +103,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   private charModel: CharacterModel;
   private prefix: string;        // texture prefix (e.g. 'astro', 'fox')
   private useAnimated: boolean;   // whether animated sprite is available
+  private isDead: boolean = false; // dead agents ignore movement/action updates
   private uses8Dir: boolean;      // 8-dir system (fox, dog) vs 5-dir+flip
   private currentDir5: number = 0;  // current 5-dir direction (0-4)
   private currentDir8: number = 8;  // current 8-dir direction (1-8)
@@ -199,13 +200,11 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.actionLabel.setOrigin(0.5, 0);
     this.actionLabel.setDepth(9000);
 
-    // Thought bubble
-    this.thoughtBubble = new ThoughtBubble(scene, -10, -55);
-    this.add(this.thoughtBubble);
+    // Thought bubble — standalone scene object (not Container child) so depth renders above night overlay
+    this.thoughtBubble = new ThoughtBubble(scene, worldX - 10, worldY - 55);
 
-    // Speech bubble
-    this.speechBubble = new SpeechBubble(scene, 0, -50);
-    this.add(this.speechBubble);
+    // Speech bubble — standalone scene object for same reason
+    this.speechBubble = new SpeechBubble(scene, worldX, worldY - 52);
 
     // Interactive
     this.setSize(TILE_SIZE, TILE_SIZE);
@@ -215,9 +214,9 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.setDepth(this.computeDepth(isoDepth(tileX, tileY)));
   }
 
-  /** Returns standalone UI objects (labels) that need camera registration. */
+  /** Returns standalone UI objects (labels + bubbles) that need camera registration. */
   getUIObjects(): Phaser.GameObjects.GameObject[] {
-    const objs: Phaser.GameObjects.GameObject[] = [this.nameLabel, this.actionLabel];
+    const objs: Phaser.GameObjects.GameObject[] = [this.nameLabel, this.actionLabel, this.thoughtBubble, this.speechBubble];
     if (this.roleLabel) objs.push(this.roleLabel);
     return objs;
   }
@@ -225,6 +224,8 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   destroy(fromScene?: boolean): void {
     this.nameLabel.destroy();
     this.actionLabel.destroy();
+    this.thoughtBubble.destroy();
+    this.speechBubble.destroy();
     if (this.roleLabel) this.roleLabel.destroy();
     super.destroy(fromScene);
   }
@@ -314,6 +315,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   setMood(mood: string): void { this.drawMoodRing(mood); }
 
   moveToTile(tileX: number, tileY: number): void {
+    if (this.isDead) return;
     if (this.isSleeping) this.wake();
 
     // Capture source tile for depth interpolation
@@ -342,6 +344,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   }
 
   setAction(action: string): void {
+    if (this.isDead) return;
     const display = action.length > 20 ? action.substring(0, 18) + '..' : action;
     this.actionLabel.setText(display);
   }
@@ -362,10 +365,16 @@ export class AgentSprite extends Phaser.GameObjects.Container {
         scaleX: 1.1, scaleY: 1.1,
         duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
       });
+      this.scene.tweens.add({
+        targets: this.selectionRing,
+        alpha: { from: 0.7, to: 1 },
+        duration: 800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      });
     } else {
       this.setDepth(this.computeDepth(isoDepth(this.targetTileX, this.targetTileY)));
       this.scene.tweens.killTweensOf(this.selectionRing);
       this.selectionRing.setScale(1);
+      this.selectionRing.setAlpha(1);
     }
   }
 
@@ -377,50 +386,47 @@ export class AgentSprite extends Phaser.GameObjects.Container {
   };
 
   setRole(role: string | null, visible: boolean): void {
-    if (!visible || !role) {
-      if (this.roleLabel) {
-        this.roleLabel.setVisible(false);
-      }
-      return;
+    // Destroy old label to avoid text overlap artifacts
+    if (this.roleLabel) {
+      this.roleLabel.destroy();
+      this.roleLabel = null;
     }
+    if (!visible || !role) return;
+
     const color = AgentSprite.ROLE_COLORS[role] ?? '#9ca3af';
-    if (!this.roleLabel) {
-      this.roleLabel = this.scene.add.text(this.x, this.y - 28, '', {
-        fontSize: '5px',
-        fontFamily: '"Press Start 2P", monospace',
-        color,
-        stroke: '#000000',
-        strokeThickness: 2,
-        resolution: 2,
-      });
-      this.roleLabel.setOrigin(0.5, 0.5);
-      this.roleLabel.setDepth(9000);
-    }
-    this.roleLabel.setText(role.toUpperCase());
-    this.roleLabel.setColor(color);
-    this.roleLabel.setVisible(true);
+    this.roleLabel = this.scene.add.text(this.x, this.y - 54, role.toUpperCase(), {
+      fontSize: '5px',
+      fontFamily: '"Press Start 2P", monospace',
+      color,
+      stroke: '#000000',
+      strokeThickness: 2,
+      resolution: 2,
+    });
+    this.roleLabel.setOrigin(0.5, 0.5);
+    this.roleLabel.setDepth(9000);
     this.labelsDirty = true;
   }
 
   setDead(dead: boolean): void {
+    this.isDead = dead;
     if (dead) {
       this.isLerping = false;
       this.nameLabel.setColor('#666666');
       this.actionLabel.setText('');
       this.moodRing.setVisible(false);
 
+      // Keep tile-based depth but at agent level (+5) so body renders
+      // above ground/deco at same position, and living agents walk over it naturally
+      this.setDepth(isoDepth(this.targetTileX, this.targetTileY) * 10 + 5);
+
       // Play death animation to show lying on the ground
       if (this.useAnimated && this.sprite instanceof Phaser.GameObjects.Sprite) {
         const dieKey = `${this.prefix}_die_${this.dirSuffix()}`;
         if (this.scene.anims.exists(dieKey)) {
           this.sprite.play(dieKey);
-          this.sprite.once('animationcomplete', () => {
-            this.setAlpha(0.3);
-          });
           return;
         }
       }
-      this.setAlpha(0.3);
     } else {
       this.setAlpha(1);
       this.nameLabel.setColor('#222222');
@@ -434,7 +440,7 @@ export class AgentSprite extends Phaser.GameObjects.Container {
 
   /** Play sleep animation — uses death animation to show lying down, then pulses. */
   sleep(): void {
-    if (this.isSleeping) return;
+    if (this.isSleeping || this.isDead) return;
     this.isSleeping = true;
     this.isLerping = false;
 
@@ -511,8 +517,10 @@ export class AgentSprite extends Phaser.GameObjects.Container {
     this.nameLabel.setPosition(this.x, this.y - 45);
     this.actionLabel.setPosition(this.x, this.y - 36);
     if (this.roleLabel) {
-      this.roleLabel.setPosition(this.x, this.y - 28);
+      this.roleLabel.setPosition(this.x, this.y - 54);
     }
+    this.thoughtBubble.setPosition(this.x - 10, this.y - 55);
+    this.speechBubble.setPosition(this.x, this.y - 52);
   }
 
   /** Current tile position (for wall occlusion checks by the scene). */

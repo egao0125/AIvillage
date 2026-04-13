@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
 
-const PADDING = 5;
-const MAX_WIDTH = 120;
-const FONT_SIZE = 6;
+const PADDING = 6;
+const MAX_WIDTH = 220;
+const FONT_SIZE = 7;
 const BG_COLOR = 0x6b21a8;
 const BG_ALPHA = 0.85;
 const TEXT_COLOR = '#f3e8ff';
@@ -32,18 +32,16 @@ export class ThoughtBubble extends Phaser.GameObjects.Container {
     this.add(this.label);
 
     this.setAlpha(0);
-    this.setDepth(999);
+    this.setDepth(6000);
   }
 
-  show(message: string, duration: number = 6000): void {
+  show(message: string, duration: number = 12000): void {
     if (this.fadeTimer) {
       this.fadeTimer.destroy();
       this.fadeTimer = undefined;
     }
 
-    // Truncate
-    const truncated = message.length > 60 ? message.substring(0, 57) + '...' : message;
-    this.label.setText(truncated);
+    this.label.setText(message);
 
     const textWidth = this.label.width;
     const textHeight = this.label.height;
@@ -52,7 +50,8 @@ export class ThoughtBubble extends Phaser.GameObjects.Container {
     const bubbleHeight = textHeight + PADDING * 2;
 
     // Position text centered above the thought dots
-    this.label.setPosition(0, -14 - PADDING);
+    const DOT_GAP = 8; // space between dots and bubble body
+    this.label.setPosition(0, -DOT_GAP - PADDING);
 
     // Draw background
     this.bg.clear();
@@ -61,7 +60,7 @@ export class ThoughtBubble extends Phaser.GameObjects.Container {
     this.bg.fillStyle(0x000000, 0.2);
     this.bg.fillRoundedRect(
       -bubbleWidth / 2 + 1,
-      -bubbleHeight - 14 + 1,
+      -bubbleHeight - DOT_GAP + 1,
       bubbleWidth,
       bubbleHeight,
       CORNER_RADIUS,
@@ -71,7 +70,7 @@ export class ThoughtBubble extends Phaser.GameObjects.Container {
     this.bg.fillStyle(BG_COLOR, BG_ALPHA);
     this.bg.fillRoundedRect(
       -bubbleWidth / 2,
-      -bubbleHeight - 14,
+      -bubbleHeight - DOT_GAP,
       bubbleWidth,
       bubbleHeight,
       CORNER_RADIUS,
@@ -81,17 +80,17 @@ export class ThoughtBubble extends Phaser.GameObjects.Container {
     this.bg.lineStyle(1, 0x9333ea, 0.6);
     this.bg.strokeRoundedRect(
       -bubbleWidth / 2,
-      -bubbleHeight - 14,
+      -bubbleHeight - DOT_GAP,
       bubbleWidth,
       bubbleHeight,
       CORNER_RADIUS,
     );
 
-    // Three ascending thought dots (instead of pointer triangle)
+    // Three ascending thought dots — tight connection to bubble
     this.bg.fillStyle(BG_COLOR, BG_ALPHA);
-    this.bg.fillCircle(0, -6, 3);   // largest, closest to bubble
+    this.bg.fillCircle(0, -5, 3);   // largest, closest to bubble
     this.bg.fillCircle(2, -2, 2);   // medium
-    this.bg.fillCircle(3, 1, 1.5);  // smallest, closest to head
+    this.bg.fillCircle(3, 0, 1.5);  // smallest, closest to head
 
     // Dreamy fade in (400ms)
     this.setAlpha(0);

@@ -1,15 +1,18 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FONTS } from '../styles';
 import { useTheme } from '../ThemeContext';
 import { SpectatorChat } from '../components/SpectatorChat';
 import { NarrativeBar } from '../components/NarrativeBar';
 import { OverlayPanel } from '../components/OverlayPanel';
 import { RecapOverlay } from '../components/RecapOverlay';
+import { AgentNavArrows } from '../components/AgentNavArrows';
+import { AgentHUD } from '../components/AgentHUD';
+import { AgentHistoryOverlay } from '../components/AgentHistoryOverlay';
 import { DevPanel } from '../components/DevPanel';
 import { EventFeed } from '../feed/EventFeed';
 import { SidePanel } from '../shared/SidePanel';
 import { ContextPanel } from '../inspect/ContextPanel';
-import { useActiveRecap, useInspectTarget, useIsAdmin } from '../../core/hooks';
+import { useActiveRecap, useInspectTarget, useIsAdmin, useSelectedAgent } from '../../core/hooks';
 import { gameStore } from '../../core/GameStore';
 const PANEL_WIDTH = 420;
 
@@ -20,11 +23,22 @@ interface WatchViewProps {
 export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
   const { colors } = useTheme();
   const [eventFeedOpen, setEventFeedOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const activeRecap = useActiveRecap();
   const inspectTarget = useInspectTarget();
   const isAdmin = useIsAdmin();
+  const selectedAgent = useSelectedAgent();
 
   const sidebarWidth = (eventFeedOpen ? PANEL_WIDTH : 0) + (inspectTarget ? PANEL_WIDTH : 0);
+
+  useEffect(() => {
+    gameStore.setSidebarWidth(sidebarWidth);
+  }, [sidebarWidth]);
+
+  // Close history overlay when agent changes
+  useEffect(() => {
+    setHistoryOpen(false);
+  }, [selectedAgent?.id]);
 
   return (
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -104,11 +118,22 @@ export const WatchView: React.FC<WatchViewProps> = ({ onAddAgent }) => {
         </button>
       )}
 
+      {/* Agent HUD — bottom-left stats overlay */}
+      <AgentHUD onHistoryToggle={() => setHistoryOpen(v => !v)} />
+
+      {/* Agent History Overlay — opens from HUD */}
+      {historyOpen && selectedAgent && (
+        <AgentHistoryOverlay agentId={selectedAgent.id} onClose={() => setHistoryOpen(false)} />
+      )}
+
+      {/* Agent nav arrows — bottom center, above narrative bar */}
+      <AgentNavArrows />
+
       {/* Narrative bar — bottom overlay, avoids feed panel */}
       <NarrativeBar sidebarWidth={sidebarWidth} />
 
-      {/* Spectator chat — floating bottom-left */}
-      <SpectatorChat />
+      {/* Spectator chat — temporarily hidden for documentary mode */}
+      {/* <SpectatorChat /> */}
 
       {/* Overlays — kept as-is */}
       {activeRecap && <RecapOverlay />}
