@@ -1,64 +1,48 @@
 /**
  * Map-agnostic function provider.
- * All simulation code imports from here instead of village.ts or arena.ts directly.
- * The engine calls setActiveMap() to switch between implementations.
+ *
+ * Instance-based: each SimulationEngine creates its own MapFunctions via
+ * createMapProvider(mapId). There is no module-level "active map" — that
+ * would prevent two maps from coexisting in one process.
  */
 import type { MapArea, Position } from '@ai-village/shared';
 import * as village from './village.js';
 import * as arena from './arena.js';
 
 export interface MapFunctions {
+  readonly mapId: string;
   getAreaAt: (pos: Position) => MapArea | undefined;
   getAreaEntrance: (areaId: string) => Position;
   getRandomPositionInArea: (areaId: string) => Position;
   getWalkable: (x: number, y: number) => boolean;
-  areas: MapArea[];
-  mapWidth: number;
-  mapHeight: number;
+  getAreas: () => MapArea[];
+  getMapWidth: () => number;
+  getMapHeight: () => number;
 }
 
-const villageFunctions: MapFunctions = {
+const villageFunctions: Omit<MapFunctions, 'mapId'> = {
   getAreaAt: village.getAreaAt,
   getAreaEntrance: village.getAreaEntrance,
   getRandomPositionInArea: village.getRandomPositionInArea,
   getWalkable: village.getWalkable,
-  areas: village.AREAS,
-  mapWidth: village.MAP_WIDTH,
-  mapHeight: village.MAP_HEIGHT,
+  getAreas: () => village.AREAS,
+  getMapWidth: () => village.MAP_WIDTH,
+  getMapHeight: () => village.MAP_HEIGHT,
 };
 
-const arenaFunctions: MapFunctions = {
+const arenaFunctions: Omit<MapFunctions, 'mapId'> = {
   getAreaAt: arena.getArenaAreaAt,
   getAreaEntrance: arena.getArenaAreaEntrance,
   getRandomPositionInArea: arena.getArenaRandomPositionInArea,
   getWalkable: arena.getArenaWalkable,
-  areas: arena.ARENA_MAP_AREAS,
-  mapWidth: arena.ARENA_MAP_WIDTH,
-  mapHeight: arena.ARENA_MAP_HEIGHT,
+  getAreas: () => arena.ARENA_MAP_AREAS,
+  getMapWidth: () => arena.ARENA_MAP_WIDTH,
+  getMapHeight: () => arena.ARENA_MAP_HEIGHT,
 };
 
-let active: MapFunctions = villageFunctions;
-
-export function setActiveMap(mapId: string): void {
+export function createMapProvider(mapId: string): MapFunctions {
   if (mapId === 'battle_royale' || mapId === 'werewolf') {
-    active = arenaFunctions;
-    console.log('[MapProvider] Switched to arena map');
-  } else {
-    active = villageFunctions;
-    console.log('[MapProvider] Switched to village map');
+    return { mapId, ...arenaFunctions };
   }
+  return { mapId, ...villageFunctions };
 }
-
-// Re-export current active map functions as module-level bindings
-// These delegate to `active` so they respect setActiveMap() calls
-export function getAreaAt(pos: Position): MapArea | undefined { return active.getAreaAt(pos); }
-export function getAreaEntrance(areaId: string): Position { return active.getAreaEntrance(areaId); }
-export function getRandomPositionInArea(areaId: string): Position { return active.getRandomPositionInArea(areaId); }
-export function getWalkable(x: number, y: number): boolean { return active.getWalkable(x, y); }
-export function getAreas(): MapArea[] { return active.areas; }
-export function getMapWidth(): number { return active.mapWidth; }
-export function getMapHeight(): number { return active.mapHeight; }
-
-// For backward compatibility — constants that delegate
-export const MAP_WIDTH_FN = () => active.mapWidth;
-export const MAP_HEIGHT_FN = () => active.mapHeight;

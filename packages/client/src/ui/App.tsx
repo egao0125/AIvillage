@@ -24,16 +24,8 @@ export const App: React.FC = () => {
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
 
-  const handleMapSelect = async (mapId: string) => {
-    try {
-      await fetch('/api/config/map', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mapId }),
-      });
-    } catch (e) {
-      console.warn('[MapSelect] Failed to set map config:', e);
-    }
+  const handleMapSelect = (mapId: string) => {
+    sessionStorage.setItem('ai-village-map', mapId);
     setSelectedMap(mapId);
   };
 

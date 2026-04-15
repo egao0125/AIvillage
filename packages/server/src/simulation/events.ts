@@ -11,8 +11,24 @@ export class EventBroadcaster {
   private viewportManager?: ViewportManager;
   /** Callback to look up an agent's current position by ID */
   private positionLookup?: (agentId: string) => Position | undefined;
+  /** Socket.IO room name — every emit is scoped to this room so events for one map
+   *  can't bleed to spectators of another. Set once at construction and never reassigned. */
+  private readonly room: string;
 
-  constructor(private io: Server) {}
+  /**
+   * @param io     shared Socket.IO server
+   * @param roomId room name (e.g. "map:village") — every emit from this broadcaster
+   *               targets exactly this room. Spatial/per-agent emits also intersect
+   *               viewers with this room's members so they can't reach other maps.
+   */
+  constructor(private io: Server, roomId: string) {
+    this.room = roomId;
+  }
+
+  /** Broadcast to every socket currently joined to this map's room. */
+  private roomEmit(event: string, data: any): void {
+    this.io.to(this.room).emit(event, data);
+  }
 
   setViewportManager(vm: ViewportManager): void {
     this.viewportManager = vm;
@@ -23,12 +39,12 @@ export class EventBroadcaster {
   }
 
   /**
-   * Emit to viewers who can see the given position.
-   * Falls back to broadcast-all if no viewports are registered.
+   * Emit to viewers who can see the given position. Falls back to a room-wide
+   * broadcast if no viewports are registered — never a global `io.emit`.
    */
   private emitSpatial(event: string, data: any, pos: Position): void {
     if (!this.viewportManager || !this.viewportManager.hasViewports) {
-      this.io.emit(event, data);
+      this.roomEmit(event, data);
       return;
     }
     const viewers = this.viewportManager.getViewersAt(pos);
@@ -38,13 +54,13 @@ export class EventBroadcaster {
   }
 
   /**
-   * Emit to viewers who can see an agent's current position.
-   * Falls back to broadcast-all if position unknown or no viewports.
+   * Emit to viewers who can see an agent's current position. Falls back to a
+   * room-wide broadcast if position unknown or no viewports are registered.
    */
   private emitForAgent(event: string, data: any, agentId: string): void {
     const pos = this.positionLookup?.(agentId);
     if (!pos || !this.viewportManager || !this.viewportManager.hasViewports) {
-      this.io.emit(event, data);
+      this.roomEmit(event, data);
       return;
     }
     const viewers = this.viewportManager.getViewersAt(pos);
@@ -70,20 +86,20 @@ export class EventBroadcaster {
   }
 
   narrativeUpdate(narrative: NarrativeEntry): void {
-    this.io.emit('narrative:update', narrative);
+    this.io.to(this.room).emit('narrative:update', narrative);
   }
 
   storylineNew(storyline: any): void {
-    this.io.emit('storyline:new', storyline);
+    this.io.to(this.room).emit('storyline:new', storyline);
   }
 
   storylineUpdate(storyline: any): void {
-    this.io.emit('storyline:update', storyline);
+    this.io.to(this.room).emit('storyline:update', storyline);
   }
 
   agentMove(agentId: string, from: Position, to: Position): void {
     if (!this.viewportManager || !this.viewportManager.hasViewports) {
-      this.io.emit('agent:move', { agentId, from, to });
+      this.io.to(this.room).emit('agent:move', { agentId, from, to });
       return;
     }
     // Send to viewers of both departure and arrival positions
@@ -118,75 +134,75 @@ export class EventBroadcaster {
   }
 
   agentSpawn(agent: Agent): void {
-    this.io.emit('agent:spawn', { agent });
+    this.io.to(this.room).emit('agent:spawn', { agent });
   }
 
   agentLeave(agentId: string): void {
-    this.io.emit('agent:leave', { agentId });
+    this.io.to(this.room).emit('agent:leave', { agentId });
   }
 
   agentCurrency(agentId: string, currency: number, delta: number, reason: string): void {
-    this.io.emit('agent:currency', { agentId, currency, delta, reason });
+    this.io.to(this.room).emit('agent:currency', { agentId, currency, delta, reason });
   }
 
   conversationStart(conversationId: string, participants: string[]): void {
-    this.io.emit('conversation:start', { conversationId, participants });
+    this.io.to(this.room).emit('conversation:start', { conversationId, participants });
   }
 
   conversationEnd(conversationId: string): void {
-    this.io.emit('conversation:end', { conversationId });
+    this.io.to(this.room).emit('conversation:end', { conversationId });
     this.narrator?.logEvent(`A conversation ended`);
   }
 
   worldTime(time: GameTime): void {
-    this.io.emit('world:time', time);
+    this.io.to(this.room).emit('world:time', time);
   }
 
   boardPost(post: BoardPost): void {
-    this.io.emit('board:post', post);
+    this.io.to(this.room).emit('board:post', post);
     this.narrator?.logEvent(`${post.authorName} posted a ${post.type}: "${post.content.substring(0, 60)}"`);
     this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId: post.authorId, type: 'board_post', description: `Posted ${post.type}: ${post.content.substring(0, 80)}`, relatedAgentIds: post.targetIds ?? [], timestamp: Date.now(), day: post.day });
   }
 
   boardPostUpdate(post: BoardPost): void {
-    this.io.emit('board:update', post);
+    this.io.to(this.room).emit('board:update', post);
   }
 
   worldSnapshot(snapshot: WorldSnapshot): void {
-    this.io.emit('world:snapshot', snapshot);
+    this.io.to(this.room).emit('world:snapshot', snapshot);
   }
 
   agentWorldView(agentId: string, worldView: string): void {
-    this.io.emit('agent:worldView', { agentId, worldView });
+    this.io.to(this.room).emit('agent:worldView', { agentId, worldView });
   }
 
   agentMood(agentId: string, mood: string): void {
     // Mood is UI-only. No persistence, no memory, no timeline.
-    this.io.emit('agent:mood', { agentId, mood });
+    this.io.to(this.room).emit('agent:mood', { agentId, mood });
   }
 
   agentInventory(agentId: string, inventory: Item[]): void {
-    this.io.emit('agent:inventory', { agentId, inventory });
+    this.io.to(this.room).emit('agent:inventory', { agentId, inventory });
   }
 
   agentSkill(agentId: string, skill: Skill): void {
-    this.io.emit('agent:skill', { agentId, skill });
+    this.io.to(this.room).emit('agent:skill', { agentId, skill });
   }
 
   secretShared(fromId: string, toId: string): void {
-    this.io.emit('secret:shared', { fromId, toId });
+    this.io.to(this.room).emit('secret:shared', { fromId, toId });
   }
 
   electionUpdate(election: Election): void {
-    this.io.emit('election:update', election);
+    this.io.to(this.room).emit('election:update', election);
   }
 
   propertyChange(property: Property): void {
-    this.io.emit('property:change', property);
+    this.io.to(this.room).emit('property:change', property);
   }
 
   reputationChange(fromId: string, toId: string, score: number): void {
-    this.io.emit('reputation:change', { fromId, toId, score });
+    this.io.to(this.room).emit('reputation:change', { fromId, toId, score });
   }
 
   agentThought(agentId: string, thought: string): void {
@@ -195,45 +211,45 @@ export class EventBroadcaster {
   }
 
   agentDeath(agentId: string, cause: string): void {
-    this.io.emit('agent:death', { agentId, cause });
+    this.io.to(this.room).emit('agent:death', { agentId, cause });
     this.narrator?.logEvent(`An agent has died: ${cause}`);
     this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId, type: 'death', description: `Died: ${cause}`, relatedAgentIds: [], timestamp: Date.now(), day: this.currentDay });
   }
 
   agentDrives(agentId: string, drives: DriveState): void {
-    this.io.emit('agent:drives', { agentId, drives });
+    this.io.to(this.room).emit('agent:drives', { agentId, drives });
   }
 
   agentVitals(agentId: string, vitals: VitalState): void {
-    this.io.emit('agent:vitals', { agentId, vitals });
+    this.io.to(this.room).emit('agent:vitals', { agentId, vitals });
   }
 
   weatherChange(weather: Weather): void {
-    this.io.emit('world:weather', weather);
+    this.io.to(this.room).emit('world:weather', weather);
   }
 
   institutionUpdate(institution: Institution): void {
-    this.io.emit('institution:update', institution);
+    this.io.to(this.room).emit('institution:update', institution);
     this.narrator?.logEvent(`Institution "${institution.name}" (${institution.type}) was updated — ${institution.members.length} members`);
   }
 
   artifactCreated(artifact: Artifact): void {
-    this.io.emit('artifact:created', artifact);
+    this.io.to(this.room).emit('artifact:created', artifact);
     this.narrator?.logEvent(`${artifact.creatorName} created a ${artifact.type}: "${artifact.title}"`);
     this.timeline?.recordEvent({ id: crypto.randomUUID(), agentId: artifact.creatorId, type: 'artifact', description: `Created ${artifact.type}: "${artifact.title}"`, relatedAgentIds: artifact.addressedTo ?? [], timestamp: Date.now(), day: artifact.day });
   }
 
   buildingUpdate(building: Building): void {
-    this.io.emit('building:update', building);
+    this.io.to(this.room).emit('building:update', building);
   }
 
   technologyDiscovered(technology: Technology): void {
-    this.io.emit('technology:discovered', technology);
+    this.io.to(this.room).emit('technology:discovered', technology);
     this.narrator?.logEvent(`${technology.inventorName} discovered a new technology: "${technology.name}" — ${technology.description}`);
   }
 
   ledgerUpdate(agentId: string, entry: SocialLedgerEntry): void {
-    this.io.emit('ledger:update', { agentId, entry });
+    this.io.to(this.room).emit('ledger:update', { agentId, entry });
   }
 
   // --- Werewolf Game Mode ---
@@ -243,48 +259,57 @@ export class EventBroadcaster {
 
   werewolfPhase(phase: string, round: number): void {
     this.currentWerewolfPhase = phase;
-    this.io.emit('werewolf:phase', { phase, round });
+    this.io.to(this.room).emit('werewolf:phase', { phase, round });
     this.narrator?.logEvent(`Werewolf game: ${phase} phase (round ${round})`);
   }
 
   werewolfKill(agentId: string, saved: boolean): void {
-    this.io.emit('werewolf:kill', { agentId, saved });
+    this.io.to(this.room).emit('werewolf:kill', { agentId, saved });
   }
 
   werewolfVote(exiled: string | null, role: string | null): void {
-    this.io.emit('werewolf:vote', { exiled, role });
+    this.io.to(this.room).emit('werewolf:vote', { exiled, role });
   }
 
   werewolfNightAction(type: string, agentId: string, targetId: string, result?: string): void {
-    this.io.emit('werewolf:nightAction', { type, agentId, targetId, result });
+    this.io.to(this.room).emit('werewolf:nightAction', { type, agentId, targetId, result });
   }
 
   werewolfVoteDetail(round: number, votes: Record<string, string>, result: 'exiled' | 'no_exile', exiledId: string | null): void {
-    this.io.emit('werewolf:voteDetail', { round, votes, result, exiledId });
+    this.io.to(this.room).emit('werewolf:voteDetail', { round, votes, result, exiledId });
   }
 
   werewolfReveal(agentId: string, role: string): void {
-    this.io.emit('werewolf:reveal', { agentId, role });
+    this.io.to(this.room).emit('werewolf:reveal', { agentId, role });
   }
 
   werewolfEnd(winner: string): void {
-    this.io.emit('werewolf:end', { winner });
+    this.io.to(this.room).emit('werewolf:end', { winner });
     this.narrator?.logEvent(`Werewolf game over: ${winner} win!`);
   }
 
   werewolfGameOver(payload: WerewolfGameOverPayload): void {
-    this.io.emit('werewolf:gameOver', payload);
+    this.io.to(this.room).emit('werewolf:gameOver', payload);
   }
 
   werewolfMeetingTranscript(round: number, transcript: Array<{ name: string; message: string }>): void {
-    this.io.emit('werewolf:meetingTranscript', { round, transcript });
+    this.io.to(this.room).emit('werewolf:meetingTranscript', { round, transcript });
   }
 
   agentRevive(agentId: string): void {
-    this.io.emit('agent:revive', { agentId });
+    this.io.to(this.room).emit('agent:revive', { agentId });
   }
 
   werewolfNewGame(): void {
-    this.io.emit('werewolf:newGame', {});
+    this.io.to(this.room).emit('werewolf:newGame', {});
+  }
+
+  /**
+   * Escape hatch for engine-level events that don't map to a dedicated method
+   * (engine:error, weekly-summary:ready, …). Kept explicit so callers can't
+   * accidentally reintroduce a global `io.emit()` that bleeds across maps.
+   */
+  raw(event: string, data: unknown): void {
+    this.io.to(this.room).emit(event, data);
   }
 }

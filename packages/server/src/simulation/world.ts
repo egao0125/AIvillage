@@ -1,7 +1,7 @@
 import type { Agent, AgentState, Artifact, ArtifactReaction, BoardPost, BoardPostType, Building, Conversation, Election, GameTime, Institution, InstitutionMember, Item, MapArea, MaterialSpawn, Mood, Position, Property, ReputationEntry, Season, Secret, Skill, Technology, VillageMemoryEntry, VillageNorm, Weather, WorldObject, WorldSnapshot } from '@ai-village/shared';
 import type { TradeProposal } from '@ai-village/ai-engine';
 import { RESOURCES, SKILLS, BUILDINGS } from '@ai-village/ai-engine';
-import { getAreas, getAreaAt as mapGetAreaAt } from '../map/map-provider.js';
+import type { MapFunctions } from '../map/map-provider.js';
 import { SpatialGrid } from './spatial-grid.js';
 
 export class World {
@@ -40,7 +40,7 @@ export class World {
   // in reward calculation and soft bias in decision prompts.
   villageNorms: Map<string, VillageNorm> = new Map();
 
-  constructor() {
+  constructor(private map: MapFunctions) {
     this.time = {
       day: 1,
       hour: 5,
@@ -122,8 +122,45 @@ export class World {
     return nearby;
   }
 
+  /**
+   * Swap the map this World is bound to. Used by SimulationEngine.setMapConfig()
+   * when the legacy single-map swap path is taken. Once every call site uses
+   * per-map engines, this can be removed.
+   */
+  setMap(map: MapFunctions): void {
+    this.map = map;
+  }
+
+  get mapId(): string {
+    return this.map.mapId;
+  }
+
   getAreaAt(pos: Position): MapArea | undefined {
-    return mapGetAreaAt(pos);
+    return this.map.getAreaAt(pos);
+  }
+
+  getAreaEntrance(areaId: string): Position {
+    return this.map.getAreaEntrance(areaId);
+  }
+
+  getRandomPositionInArea(areaId: string): Position {
+    return this.map.getRandomPositionInArea(areaId);
+  }
+
+  getWalkable(x: number, y: number): boolean {
+    return this.map.getWalkable(x, y);
+  }
+
+  getAreas(): MapArea[] {
+    return this.map.getAreas();
+  }
+
+  getMapWidth(): number {
+    return this.map.getMapWidth();
+  }
+
+  getMapHeight(): number {
+    return this.map.getMapHeight();
   }
 
   getAgentsInArea(areaId: string): Agent[] {
@@ -570,7 +607,7 @@ export class World {
       time: { ...this.time },
       agents: Array.from(this.agents.values()),
       conversations: Array.from(this.conversations.values()).filter(c => !c.endedAt),
-      areas: getAreas(),
+      areas: this.map.getAreas(),
       board: this.getActiveBoard(),
       elections: Array.from(this.elections.values()),
       properties: Array.from(this.properties.values()),

@@ -145,6 +145,8 @@ export class WerewolfPhaseManager {
       const perRoleRules = buildWerewolfRules(role, fellowWolfName, agentIds.length);
       cognition.setGameRules(perRoleRules);
       cognition.gameMode = 'werewolf';
+      // Clear village-mode known places so farm/market/bakery don't leak into prompts
+      cognition.knownPlaces.clear();
     }
 
     console.log(`[Werewolf] Game started with ${agentIds.length} agents. Roles: ${[...roles.entries()].map(([id, r]) => `${this.agentNames.get(id)}=${r}`).join(', ')}`);

@@ -1,5 +1,4 @@
 import type { Position } from '@ai-village/shared';
-import { getAreas, getAreaEntrance } from '../map/map-provider.js';
 import type { World } from './world.js';
 
 export interface ParsedAction {
@@ -62,11 +61,11 @@ const LOCATION_ALIASES: Record<string, string> = {
   house: '', // resolved per-agent
 };
 
-function resolveAreaId(name: string): string | undefined {
+function resolveAreaId(name: string, world: World): string | undefined {
   const lower = name.toLowerCase().trim();
 
   // Direct match by area ID
-  const areas = getAreas();
+  const areas = world.getAreas();
   const directMatch = areas.find(a => a.id === lower);
   if (directMatch) return directMatch.id;
 
@@ -110,9 +109,9 @@ export function parseAction(raw: string, world: World): ParsedAction {
   switch (action) {
     case 'move':
     case 'move_to': {
-      const areaId = resolveAreaId(target);
+      const areaId = resolveAreaId(target, world);
       if (areaId) {
-        const pos = getAreaEntrance(areaId);
+        const pos = world.getAreaEntrance(areaId);
         return {
           type: 'move',
           target: areaId,

@@ -187,6 +187,10 @@ export class FourStreamMemory {
     this.agent.activeConcerns = [];
     this.agent.learnedStrategies = [];
     this.agent.learnedAversions = [];
+    // Also wipe persisted DB memories to prevent cross-game contamination
+    if (this.backingStore.clearByAgent) {
+      void this.backingStore.clearByAgent(this.agent.id);
+    }
   }
 
   // --- STREAM 1: TIMELINE ---
@@ -322,13 +326,12 @@ export class FourStreamMemory {
     await this.backingStore.add(memory);
 
     // FILTER (AgeMem): selective storage prevents memory bloat
-    // Block duplicate low-importance outcomes ("Gathered wheat" won't appear 5x in a row)
-    const isDuplicate = memory.type === 'action_outcome' &&
-      memory.importance <= 4 &&
-      this.timeline.slice(-3).some(m =>
-        m.type === 'action_outcome' &&
-        m.content.split(' ').slice(0, 3).join(' ') ===
-        memory.content.split(' ').slice(0, 3).join(' ')
+    // Block duplicate low-importance memories of ANY type in last 10 items (first 5 words match)
+    const isDuplicate = memory.importance <= 4 &&
+      this.timeline.slice(-10).some(m =>
+        m.type === memory.type &&
+        m.content.split(' ').slice(0, 5).join(' ') ===
+        memory.content.split(' ').slice(0, 5).join(' ')
       );
 
     if (!isDuplicate && (

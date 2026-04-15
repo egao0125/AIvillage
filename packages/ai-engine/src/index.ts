@@ -40,6 +40,7 @@ export interface MemoryStore {
   getOlderThan(agentId: string, timestamp: number): Promise<Memory[]>;
   removeBatch(ids: string[]): Promise<void>;
   getById(agentId: string, memoryId: string): Promise<Memory | undefined>;  // Fix 2: causal chain linking
+  clearByAgent?(agentId: string): Promise<void>;
 }
 
 // --- LLM Provider ---
@@ -673,7 +674,7 @@ If nothing notable was exchanged, return []`;
     // Soul + backstory (800 char limit — enough for rich original characters)
     const soulRaw = config.soul || config.backstory || '';
     const soulText = soulRaw.length > 800 ? soulRaw.slice(0, 800) + '...' : soulRaw;
-    const occStr = config.occupation ? `, the village ${config.occupation}` : '';
+    const occStr = this.gameMode === 'werewolf' ? '' : (config.occupation ? `, the village ${config.occupation}` : '');
     parts.push(`You are ${sanitizeForPrompt(config.name)}, age ${config.age}${occStr}. ${soulText}`);
     // Use explicit goal, or first desire as fallback
     const effectiveGoal = config.goal || (config.desires?.length ? config.desires[0] : '');
@@ -743,19 +744,23 @@ If nothing notable was exchanged, return []`;
    */
   private buildContextBlock(): string {
     const parts: string[] = [];
+    const isWW = this.gameMode === 'werewolf';
 
     parts.push('YOUR STATE:');
-    if (this.agent.inventory?.length) {
+    // Village mode: show inventory and skills. Werewolf mode: irrelevant
+    if (!isWW && this.agent.inventory?.length) {
       parts.push(`- Inventory: ${this.agent.inventory.map(i => `${i.name} (${i.type})`).join(', ')}`);
     }
-    if (this.agent.skills?.length) {
+    if (!isWW && this.agent.skills?.length) {
       parts.push(`- Skills: ${this.agent.skills.map(s => `${s.name} Lv${s.level}`).join(', ')}`);
     }
 
-    const vitals = this.getVitalsNote();
-    if (vitals) parts.push(vitals);
-    const situational = this.getSituationalObservations();
-    if (situational) parts.push(situational);
+    if (!isWW) {
+      const vitals = this.getVitalsNote();
+      if (vitals) parts.push(vitals);
+      const situational = this.getSituationalObservations();
+      if (situational) parts.push(situational);
+    }
 
     // Mental models
     if (this.agent.mentalModels?.length) {
@@ -771,14 +776,14 @@ If nothing notable was exchanged, return []`;
     const knownPeople = (this.agent.mentalModels || []).map(m => this.resolveName(m.targetId));
 
     if (allAgentNames.length > 0) {
-      parts.push(`\nThere are EXACTLY ${allAgentNames.length} people in this entire village: ${allAgentNames.join(', ')}. Nobody else exists.`);
+      parts.push(`\nThere are EXACTLY ${allAgentNames.length} people in this ${isWW ? 'game' : 'entire village'}: ${allAgentNames.join(', ')}. Nobody else exists.`);
     }
     if (knownPeople.length > 0) {
       parts.push(`You personally know: ${knownPeople.join(', ')}`);
     } else {
       parts.push(`You haven't met anyone yet.`);
     }
-    parts.push('RULE: Do NOT invent, imagine, or reference anyone not in the list above. There are no shopkeepers, bartenders, bakers, or background NPCs. If a location seems empty, it IS empty.');
+    parts.push(`RULE: Do NOT invent, imagine, or reference anyone not in the list above. There are no shopkeepers, bartenders, ${isWW ? 'or unnamed characters' : 'bakers, or background NPCs'}. If a location seems empty, it IS empty.`);
 
     return parts.join('\n');
   }
@@ -788,6 +793,9 @@ If nothing notable was exchanged, return []`;
    * Max 100 chars per spec. Injected into every LLM call that produces agent output.
    */
   private buildRealityBlock(): string {
+    // Werewolf mode: no inventory/food/population — agents focus on social deduction
+    if (this.gameMode === 'werewolf') return '';
+
     const inv = this.agent.inventory;
     const foodCount = inv?.filter(i => i.type === 'food').length ?? 0;
     const invStr = inv?.length
@@ -810,6 +818,9 @@ If nothing notable was exchanged, return []`;
 
   /** Build a promise ledger showing current commitments + reliability rate */
   private buildPromiseLedger(): string {
+    // Werewolf mode: no village commitments
+    if (this.gameMode === 'werewolf') return '';
+
     const all = this.agent.commitments ?? [];
     const active = all.filter(c => !c.fulfilled && !c.broken);
     if (active.length === 0 && all.length === 0) return '';
@@ -857,6 +868,8 @@ If nothing notable was exchanged, return []`;
    * Replaces the prose → translate → parse pipeline.
    */
   async decide(situation: AgentSituation): Promise<AgentDecision> {
+    const isWerewolf = this.gameMode === 'werewolf';
+
     const invGroups: Record<string, number> = {};
     for (const item of situation.inventory) {
       invGroups[item.name] = (invGroups[item.name] || 0) + item.qty;
@@ -864,7 +877,8 @@ If nothing notable was exchanged, return []`;
     const invStr = Object.entries(invGroups).map(([n, q]) => q > 1 ? `${n} x${q}` : n).join(', ') || 'nothing';
 
     // Attention reordering: when in survival crisis, put survival actions first
-    const survivalCrisis = situation.vitals.hunger >= 50 || situation.vitals.health <= 30;
+    // (never triggers in werewolf — hunger is always 0)
+    const survivalCrisis = !isWerewolf && (situation.vitals.hunger >= 50 || situation.vitals.health <= 30);
 
     // Build sectioned action menu
     const physicalActions = situation.availableActions.filter(a => a.category === 'physical');
@@ -876,7 +890,7 @@ If nothing notable was exchanged, return []`;
     // When starving with no food, remove pure social actions from the menu.
     // Keep trade/give (can acquire food) but filter out talk/ally/confront etc.
     // Don't ask the LLM to resist temptation — remove the temptation.
-    const starving = situation.vitals.hunger >= 70 && !situation.inventory.some(i => i.type === 'food');
+    const starving = !isWerewolf && situation.vitals.hunger >= 70 && !situation.inventory.some(i => i.type === 'food');
     const socialActions = situation.availableActions.filter(a => {
       if (a.category !== 'social') return false;
       if (!starving) return true;
@@ -935,7 +949,8 @@ If nothing notable was exchanged, return []`;
     const energy = Math.round(situation.vitals.energy);
     const hasFood = situation.inventory.some(i => i.type === 'food');
 
-    let vitalsSection = `YOUR BODY:
+    // Werewolf mode: no survival vitals — agents focus on social deduction, not hunger/health
+    let vitalsSection = isWerewolf ? '' : `YOUR BODY:
 Health: ${health}/100
 Hunger: ${hunger}/100
 Energy: ${energy}/100
@@ -964,12 +979,17 @@ Inventory: ${invStr}`;
     }
 
     // Attention reordering: in survival crisis, put vitals FIRST (before identity, before world rules)
+    const thenDoExamples = isWerewolf
+      ? `- go_to clearing then talk_sable (walk to someone then start a conversation)
+- share_info then accuse_aurelius (reveal what you know then make your case)`
+      : `- gather_wheat then eat_wheat (gather food then eat it)
+- go_farm then gather_wheat (walk somewhere then gather)
+- craft_bread then eat_bread (make food then eat it)`;
+
     const jsonInstruction = `Your actionId MUST be one of the IDs listed above (for social actions, replace NAME with the person's first name in lowercase).
 
 You may optionally include a "thenDo" array with 1-2 follow-up actions that should execute immediately after your primary action, without waiting. Use this for natural sequences like:
-- gather_wheat then eat_wheat (gather food then eat it)
-- go_farm then gather_wheat (walk somewhere then gather)
-- craft_bread then eat_bread (make food then eat it)
+${thenDoExamples}
 Only include thenDo when the follow-up is the obvious next step. Don't plan more than 2 steps ahead.
 
 Reply with ONLY valid JSON:
@@ -1075,11 +1095,11 @@ ${situation.trigger ? '\nRIGHT NOW: ' + situation.trigger : ''}${failurePatternB
 
 ${actionMenu}
 
-What does YOUR CHARACTER do next?
+${isWerewolf ? `What do you do? Trust your instincts. Every conversation is a clue. Every silence is suspicious. Find the wolves — or hide among the sheep.` : `What does YOUR CHARACTER do next?
 
 The honest choice — what would THIS person, with THIS personality, in THIS situation, actually do? Sometimes that's bold or defiant; sometimes it's cautious, polite, or kind. Let the character decide.
 
-Consider: what you need right now, who's nearby and what they have, what you've been doing today, what your relationships look like, and whether it's time to build something bigger — an alliance, a rule, a plan.
+Consider: what you need right now, who's nearby and what they have, what you've been doing today, what your relationships look like, and whether it's time to build something bigger — an alliance, a rule, a plan.`}
 
 ${jsonInstruction}`;
 
@@ -1144,6 +1164,18 @@ ${jsonInstruction}`;
     ];
     if (META_PATTERNS.some(p => p.test(response))) {
       console.warn(`[Sanitize] Meta-contamination in ${this.agent.config.name}'s decide: "${response.substring(0, 80)}..."`);
+      // If vote actions available, still cast a vote — don't let meta-confusion block the game
+      const metaVoteActions = situation.availableActions.filter(a => a.id.startsWith('vote_'));
+      if (metaVoteActions.length > 0) {
+        const pick = metaVoteActions[Math.floor(Math.random() * metaVoteActions.length)];
+        console.log(`[Sanitize] ${this.agent.config.name} vote fallback → ${pick.id}`);
+        return {
+          actionId: pick.id,
+          reason: 'Something feels off, but I have to vote.',
+          mood: undefined,
+          sayAloud: undefined,
+        };
+      }
       return {
         actionId: situation.availableActions.find(a => a.category === 'physical')?.id || 'rest',
         reason: 'Something feels off.',
@@ -1190,6 +1222,21 @@ ${jsonInstruction}`;
     // falling back to a varied category based on current vitals.
     console.warn(`[AgentCognition] ${this.agent.config.name} decide() parse failure: "${response.substring(0, 100)}..."`);
     const availableIds = new Set(situation.availableActions.map(a => a.id));
+
+    // Werewolf vote fallback: if vote actions are available and LLM failed to parse,
+    // cast a random vote. Agents must always vote — parse failure shouldn't block it.
+    const voteActions = situation.availableActions.filter(a => a.id.startsWith('vote_'));
+    if (voteActions.length > 0) {
+      const randomVote = voteActions[Math.floor(Math.random() * voteActions.length)];
+      console.log(`[AgentCognition] ${this.agent.config.name} vote fallback → ${randomVote.id}`);
+      return {
+        actionId: randomVote.id,
+        reason: 'I have suspicions but nothing certain. Going with my gut.',
+        mood: undefined,
+        sayAloud: undefined,
+      };
+    }
+
     // Skip talk_ as fallback — it feeds the conversation loop. Prefer physical actions.
     const lastAction = this.lastSuccessfulActionId
       && availableIds.has(this.lastSuccessfulActionId)
@@ -1464,9 +1511,13 @@ ${memoryContext || 'No recent memories yet.'}
 
 IMPORTANT: Only plan interactions with real people listed above. There are no shopkeepers, bartenders, or unnamed villagers.
 
-What are your priorities today? Not specific actions — what MATTERS to you. Think about survival, relationships, unfinished business, fears, ambitions. 1-3 priorities, honest and personal.
+${this.gameMode === 'werewolf'
+  ? `What are your priorities right now? Think about who you suspect, who you trust, what information you need, and how to survive the next vote. 1-3 priorities.
 
-Examples: "Get food — I'm running out", "Figure out why Felix disappeared", "Build trust with someone", "Stay away from Egao".
+Examples: "Figure out if Sable is telling the truth about last night", "Build an alliance with Maeve before the vote", "Keep suspicion off myself — I've been too quiet".`
+  : `What are your priorities today? Not specific actions — what MATTERS to you. Think about survival, relationships, unfinished business, fears, ambitions. 1-3 priorities, honest and personal.
+
+Examples: "Get food — I'm running out", "Figure out why Felix disappeared", "Build trust with someone", "Stay away from Egao".`}
 
 JSON array of strings.`;
 
@@ -1508,33 +1559,26 @@ JSON array of strings.`;
     const worldSection = worldContext ? `\n\nWORLD CONTEXT:\n${worldContext}` : '';
     const tradeSection = tradeContext ? `\n\nPENDING TRADES:\n${tradeContext}` : '';
 
-    // Build "what you need" hint from vitals/inventory
-    const needs: string[] = [];
-    const v = this.agent.vitals;
-    if (v) {
-      if (v.hunger >= 60) needs.push('food');
-      if (v.energy <= 30) needs.push('rest');
-      if (v.health <= 30) needs.push('medicine');
+    // Build "what you need" hint from vitals/inventory (village mode only)
+    let needsLine = '';
+    if (this.gameMode !== 'werewolf') {
+      const needs: string[] = [];
+      const v = this.agent.vitals;
+      if (v) {
+        if (v.hunger >= 60) needs.push('food');
+        if (v.energy <= 30) needs.push('rest');
+        if (v.health <= 30) needs.push('medicine');
+      }
+      if (!this.agent.inventory?.length) needs.push('supplies');
+      needsLine = needs.length > 0 ? `\n- You need: ${needs.join(', ')}` : '';
     }
-    if (!this.agent.inventory?.length) needs.push('supplies');
-    const needsLine = needs.length > 0 ? `\n- You need: ${needs.join(', ')}` : '';
 
-    const systemPrompt = `${this.worldView}
+    const isWW = this.gameMode === 'werewolf';
 
-${this.buildIdentityBlock()}
-
-Day ${this.currentTime.day}, hour ${this.currentTime.hour}.
-
-You are talking to ${otherAgents.map(a => sanitizeForPrompt(a.config.name)).join(' and ')}.
-${boardSection}${worldSection}${tradeSection}
-
-${this.buildRealityBlock()}
-
-Everything you say will be remembered. Promises will be held against you. Lies may be discovered.
-
-${this.buildContextBlock()}${needsLine}${this.buildCommitmentContext()}
-
-You can act during conversation:
+    const conversationActions = isWW
+      ? `Focus on the social deduction game. Every word matters — accuse, defend, probe, deflect, reveal, or deceive.
+Try to achieve something concrete: build an alliance, test someone's story, get information, or shift suspicion.`
+      : `You can act during conversation:
   [ACTION: give ITEM to PERSON]
   [ACTION: trade ITEM for ITEM with PERSON]
   [ACTION: accept trade]
@@ -1550,11 +1594,28 @@ ONLY make a promise if you genuinely intend to follow through AND have the means
   (this.agent.commitments ?? []).filter(c => !c.fulfilled && !c.broken).reduce((s, c) => s + c.weight, 0) >= 10
     ? ' You already have many active promises — do NOT make new ones until you fulfill existing ones.'
     : ''
-} If you do commit, use day numbers: "on Day ${this.currentTime.day + 1}" not "tomorrow" or "at dawn".
+} If you do commit, use day numbers: "on Day ${this.currentTime.day + 1}" not "tomorrow" or "at dawn".`;
+
+    const systemPrompt = `${this.worldView}
+
+${this.buildIdentityBlock()}
+
+Day ${this.currentTime.day}, hour ${this.currentTime.hour}.
+
+You are talking to ${otherAgents.map(a => sanitizeForPrompt(a.config.name)).join(' and ')}.
+${boardSection}${worldSection}${tradeSection}
+
+${this.buildRealityBlock()}
+
+Everything you say will be remembered.${isWW ? ' Lies may be discovered. Truth can be weaponized.' : ' Promises will be held against you. Lies may be discovered.'}
+
+${this.buildContextBlock()}${needsLine}${isWW ? '' : this.buildCommitmentContext()}
+
+${conversationActions}
 
 Output ONLY spoken words in quotation marks. 1-3 sentences.
 
-Example: "You got any wheat? I need to eat."
+${isWW ? 'Example: "I was at the campfire all night. Where were YOU?"' : 'Example: "You got any wheat? I need to eat."'}
 
 Nothing outside the quotes will be heard.
 

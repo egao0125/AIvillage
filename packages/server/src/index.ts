@@ -6,7 +6,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-streams-adapter';
 import { timingSafeEqual, createHash } from 'crypto';
-import { SimulationEngine } from './simulation/engine.js';
+import { EngineRegistry } from './simulation/engine-registry.js';
 import { createRouter } from './routes.js';
 import { createAuthRouter, optionalAuth, verifyToken, verifyTokenFull, stopAuthRateLimitCleaner } from './auth.js';
 import { setupRedis, closeRedis, getRedis } from './redis.js';
@@ -136,7 +136,14 @@ app.use(cookieParser());
 // Limit request body size to prevent abuse
 app.use(express.json({ limit: '16kb' }));
 
-const engine = new SimulationEngine(io);
+// ACTIVE_MAPS: comma-separated list of map IDs to run concurrently in this process.
+// Each active map gets its own SimulationEngine with isolated world/persistence.
+// Default is `village,werewolf` — battle_royale is a stub and not started.
+const ACTIVE_MAPS = (process.env.ACTIVE_MAPS || 'village,werewolf')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const registry = new EngineRegistry(io, ACTIVE_MAPS);
 
 // Auth: Cognito is required in production — without these, JWT verification
 // produces invalid JWKS URLs and signup/login fail with cryptic errors at runtime.
@@ -163,8 +170,10 @@ app.use('/api', optionalAuth());
 // Auth endpoints (login, logout, refresh) are excluded — they use their own DB (Cognito)
 // and must remain available on all Pods.
 // GET requests are allowed on followers (they serve reads from their in-memory / Redis state).
+// Leader election is process-level (shared across all engines in the registry), so a
+// single check on `registry.isLeader` is sufficient.
 app.use('/api/agents', (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !engine.isLeader) {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !registry.isLeader) {
     res.status(503).json({
       error: 'Leader election in progress — please retry',
       retryAfterMs: 5_000,
@@ -174,7 +183,7 @@ app.use('/api/agents', (req: express.Request, res: express.Response, next: expre
   next();
 });
 
-app.use(createRouter(engine));
+app.use(createRouter(registry));
 
 // Catch unmatched /api/* routes before the SPA catch-all so they return JSON, not HTML.
 // Without this, undefined API endpoints return a 200 HTML response which breaks client error handling.
@@ -234,6 +243,23 @@ function isDevAuthorized(token: unknown): boolean {
 // (OWASP API4: Unrestricted Resource Consumption — unauthenticated LLM calls blocked)
 // ---------------------------------------------------------------------------
 io.use(async (socket, next) => {
+  // Each socket connects to exactly one map; the client sends its choice in the
+  // handshake auth payload. Reject unknown map IDs so spectators can't subscribe
+  // to a non-existent engine and receive nothing. Fall back to the first active
+  // map when the client sends nothing (legacy clients during deploy).
+  const rawMapId = socket.handshake.auth?.mapId;
+  const hasMapId = typeof rawMapId === 'string' && rawMapId.length > 0;
+  const mapId = hasMapId && registry.has(rawMapId)
+    ? rawMapId
+    : registry.mapIds()[0];
+  if (hasMapId && !registry.has(rawMapId)) {
+    return next(new Error(`Unknown mapId "${rawMapId}"`));
+  }
+  socket.data.mapId = mapId;
+  // Per-map Socket.IO room — EventBroadcaster emits scoped to this room in a
+  // later phase so events for one map can't leak to spectators of another.
+  await socket.join(`map:${mapId}`);
+
   // Dev mode: no Cognito configured — everyone is admin (matches optionalAuth behavior)
   if (!process.env.COGNITO_USER_POOL_ID || !process.env.COGNITO_CLIENT_ID) {
     socket.data.userId = 'dev-user';
@@ -243,7 +269,7 @@ io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
   if (typeof token === 'string' && token.length > 0) {
     const result = await verifyTokenFull(token);
-    console.log(`[Auth] Socket ${socket.id}: token=${token.length}chars, verifyResult=${result ? `userId=${result.userId},email=${result.email}` : 'null'}`);
+    console.log(`[Auth] Socket ${socket.id}: token=${token.length}chars, map=${mapId}, verifyResult=${result ? `userId=${result.userId},email=${result.email}` : 'null'}`);
     if (result) {
       socket.data.userId = result.userId;
       const emailLower = result.email?.toLowerCase() ?? '';
@@ -251,13 +277,15 @@ io.use(async (socket, next) => {
       console.log(`[Auth] Socket ${socket.id}: emailLower=${emailLower}, isAdmin=${socket.data.isAdmin}, adminEmails=[${[...ADMIN_EMAILS]}]`);
     }
   } else {
-    console.log(`[Auth] Socket ${socket.id}: no token provided (length=${typeof token === 'string' ? token.length : 'not-string'})`);
+    console.log(`[Auth] Socket ${socket.id}: no token provided (length=${typeof token === 'string' ? token.length : 'not-string'}), map=${mapId}`);
   }
   next(); // always allow connection — spectators are valid users
 });
 
 io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  const mapId = socket.data.mapId as string;
+  const engine = registry.getOrThrow(mapId);
+  console.log(`Client connected: ${socket.id} (map=${mapId})`);
 
   // Send initial snapshot
   socket.emit('world:snapshot', engine.getSnapshot());
@@ -412,7 +440,8 @@ io.on('connection', (socket) => {
       spectatorLastComment.set(socket.id, now);
     }
 
-    io.emit('spectator:comment', {
+    // Spectator chat is scoped per-map so viewers of one map don't see chat from another.
+    io.to(`map:${mapId}`).emit('spectator:comment', {
       name: `Spectator`,
       message: msg,
       timestamp: Date.now(),
@@ -420,45 +449,48 @@ io.on('connection', (socket) => {
   });
 
   // --- Dev tools (token-gated) ---
-  // Non-leader pods forward commands to the leader via serverSideEmit (Redis adapter).
+  // Dev commands are scoped to this socket's map. Non-leader pods forward commands
+  // to the leader via serverSideEmit (Redis adapter) — the forwarded payload carries
+  // the mapId so the leader pod routes it to the right engine.
+  const room = `map:${mapId}`;
   socket.on('dev:pause', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'pause' }); return; }
+    if (!registry.isLeader) { io.serverSideEmit('dev:forward', { type: 'pause', mapId }); return; }
     engine.pause();
-    io.emit('dev:status', { paused: !engine.isRunning });
+    io.to(room).emit('dev:status', { paused: !engine.isRunning });
   });
 
   socket.on('dev:resume', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'resume' }); return; }
+    if (!registry.isLeader) { io.serverSideEmit('dev:forward', { type: 'resume', mapId }); return; }
     engine.start();
-    io.emit('dev:status', { paused: !engine.isRunning });
+    io.to(room).emit('dev:status', { paused: !engine.isRunning });
   });
 
   socket.on('dev:step', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'step' }); return; }
+    if (!registry.isLeader) { io.serverSideEmit('dev:forward', { type: 'step', mapId }); return; }
     engine.singleTick();
-    io.emit('world:snapshot', engine.getSnapshot());
+    io.to(room).emit('world:snapshot', engine.getSnapshot());
   });
 
   socket.on('dev:reset-vitals', (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'reset-vitals' }); return; }
+    if (!registry.isLeader) { io.serverSideEmit('dev:forward', { type: 'reset-vitals', mapId }); return; }
     const snapshot = engine.getSnapshot();
     for (const agent of snapshot.agents) {
       engine.resetAgentVitals(agent.id);
     }
-    io.emit('world:snapshot', engine.getSnapshot());
+    io.to(room).emit('world:snapshot', engine.getSnapshot());
   });
 
   socket.on('dev:resurrect-all', async (token: unknown) => {
     if (!isDevAuthorized(token) && !socket.data.isAdmin) return;
-    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'resurrect-all' }); return; }
+    if (!registry.isLeader) { io.serverSideEmit('dev:forward', { type: 'resurrect-all', mapId }); return; }
     const resurrected = await engine.resurrectAllAgents();
-    io.emit('world:snapshot', engine.getSnapshot());
-    io.emit('dev:resurrect-all:result', { resurrected });
-    console.log(`[Server] Resurrected ${resurrected.length} agents: ${resurrected.join(', ')}`);
+    io.to(room).emit('world:snapshot', engine.getSnapshot());
+    io.to(room).emit('dev:resurrect-all:result', { resurrected });
+    console.log(`[Server] Resurrected ${resurrected.length} agents on map=${mapId}: ${resurrected.join(', ')}`);
   });
 
   socket.on('dev:fresh-start', async (token: unknown) => {
@@ -467,18 +499,18 @@ io.on('connection', (socket) => {
       socket.emit('dev:fresh-start:error', { error: 'Not authorized' });
       return;
     }
-    if (!engine.isLeader) { io.serverSideEmit('dev:forward', { type: 'fresh-start' }); return; }
-    console.log('[Server] Fresh start requested');
-    io.emit('dev:fresh-start:ack');
+    if (!registry.isLeader) { io.serverSideEmit('dev:forward', { type: 'fresh-start', mapId }); return; }
+    console.log(`[Server] Fresh start requested for map=${mapId}`);
+    io.to(room).emit('dev:fresh-start:ack');
     try {
       await engine.freshStart();
-      io.emit('world:snapshot', engine.getSnapshot());
-      io.emit('dev:status', { paused: !engine.isRunning });
-      io.emit('dev:fresh-start:done');
-      console.log('[Server] Fresh start complete — snapshot broadcast');
+      io.to(room).emit('world:snapshot', engine.getSnapshot());
+      io.to(room).emit('dev:status', { paused: !engine.isRunning });
+      io.to(room).emit('dev:fresh-start:done');
+      console.log(`[Server] Fresh start complete for map=${mapId} — snapshot broadcast`);
     } catch (err) {
       console.error('[Server] Fresh start failed:', (err as Error).message);
-      io.emit('dev:fresh-start:error', { error: (err as Error).message });
+      io.to(room).emit('dev:fresh-start:error', { error: (err as Error).message });
     }
   });
 
@@ -544,63 +576,67 @@ io.on('connection', (socket) => {
 // ---------------------------------------------------------------------------
 // Inter-pod dev command forwarding via serverSideEmit (Redis adapter).
 // When a non-leader pod receives an admin dev command, it forwards to all pods.
-// Only the leader executes the command; followers ignore.
+// Only the leader executes; it routes the command to the engine identified by
+// `mapId` in the forwarded payload and broadcasts results to that map's room.
 // ---------------------------------------------------------------------------
-io.on('dev:forward', (data: { type: string }) => {
-  if (!engine.isLeader) return;
-  console.log(`[Server] Leader received forwarded dev command: ${data.type}`);
+io.on('dev:forward', (data: { type: string; mapId?: string }) => {
+  if (!registry.isLeader) return;
+  const mapId = data.mapId;
+  if (!mapId || !registry.has(mapId)) {
+    console.warn(`[Server] Forwarded dev command dropped — unknown mapId "${mapId}"`);
+    return;
+  }
+  const engine = registry.getOrThrow(mapId);
+  const room = `map:${mapId}`;
+  console.log(`[Server] Leader received forwarded dev command: ${data.type} (map=${mapId})`);
   switch (data.type) {
     case 'pause':
       engine.pause();
-      io.emit('dev:status', { paused: !engine.isRunning });
+      io.to(room).emit('dev:status', { paused: !engine.isRunning });
       break;
     case 'resume':
       engine.start();
-      io.emit('dev:status', { paused: !engine.isRunning });
+      io.to(room).emit('dev:status', { paused: !engine.isRunning });
       break;
     case 'step':
       engine.singleTick();
-      io.emit('world:snapshot', engine.getSnapshot());
+      io.to(room).emit('world:snapshot', engine.getSnapshot());
       break;
     case 'reset-vitals': {
       const snapshot = engine.getSnapshot();
       for (const agent of snapshot.agents) engine.resetAgentVitals(agent.id);
-      io.emit('world:snapshot', engine.getSnapshot());
+      io.to(room).emit('world:snapshot', engine.getSnapshot());
       break;
     }
     case 'resurrect-all':
       void engine.resurrectAllAgents().then((resurrected) => {
-        io.emit('world:snapshot', engine.getSnapshot());
-        io.emit('dev:resurrect-all:result', { resurrected });
-        console.log(`[Server] Resurrected ${resurrected.length} agents via forwarded command`);
+        io.to(room).emit('world:snapshot', engine.getSnapshot());
+        io.to(room).emit('dev:resurrect-all:result', { resurrected });
+        console.log(`[Server] Resurrected ${resurrected.length} agents via forwarded command (map=${mapId})`);
       });
       break;
     case 'fresh-start':
-      io.emit('dev:fresh-start:ack');
+      io.to(room).emit('dev:fresh-start:ack');
       void engine.freshStart().then(() => {
-        io.emit('world:snapshot', engine.getSnapshot());
-        io.emit('dev:status', { paused: !engine.isRunning });
-        io.emit('dev:fresh-start:done');
-        console.log('[Server] Fresh start complete via forwarded command');
+        io.to(room).emit('world:snapshot', engine.getSnapshot());
+        io.to(room).emit('dev:status', { paused: !engine.isRunning });
+        io.to(room).emit('dev:fresh-start:done');
+        console.log(`[Server] Fresh start complete via forwarded command (map=${mapId})`);
       }).catch((err: unknown) => {
         console.error('[Server] Forwarded fresh start failed:', (err as Error).message);
-        io.emit('dev:fresh-start:error', { error: (err as Error).message });
+        io.to(room).emit('dev:fresh-start:error', { error: (err as Error).message });
       });
       break;
   }
 });
 
-engine.initialize().then(() => {
-  // Only the leader Pod runs the simulation tick loop.
-  // Follower Pods serve HTTP/WS reads and promote automatically via startRetrying()
-  // (wired in initialize()) when the leader lock becomes available.
-  if (engine.isLeader) {
-    engine.start();
-  } else {
-    console.log('[Server] Running as follower — simulation tick deferred until leadership acquired');
-  }
+registry.initializeAll().then(() => {
+  // Only the leader Pod runs the simulation tick loops. Followers serve HTTP/WS reads
+  // and promote automatically via the retry loop wired in registry.initializeAll()
+  // when the Redis leader lock becomes available.
+  registry.startAll();
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`AI Village server running on port ${PORT}`);
+    console.log(`AI Village server running on port ${PORT} (maps=[${registry.mapIds().join(',')}])`);
   });
 }).catch((err: unknown) => {
   console.error('[Server] Engine initialization failed — aborting:', (err as Error).message);
@@ -635,9 +671,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
   httpServer.closeAllConnections();
 
   try {
-    await engine.stop(); // saves state + closes DB pool
+    await registry.stopAll(); // stops every engine + releases shared leader lock
   } catch (err) {
-    console.error('[Server] Engine stop error:', (err as Error).message);
+    console.error('[Server] Registry stop error:', (err as Error).message);
   }
 
   try {

@@ -148,9 +148,14 @@ export const SetupPage: React.FC<SetupPageProps> = ({ mapId, onEnter, onBack }) 
         clearToken();
       }
 
-      // Load existing agents
+      // Load existing agents for the currently selected map
       try {
-        const res = await fetch('/api/config/status');
+        const mapId = sessionStorage.getItem('ai-village-map');
+        if (!mapId) {
+          setChecking(false);
+          return;
+        }
+        const res = await fetch(`/api/config/status?mapId=${encodeURIComponent(mapId)}`);
         if (!res.ok) throw new Error(`Server returned ${res.status}`);
         const data = await res.json();
         if (data.agents && data.agents.length > 0) {
@@ -245,6 +250,12 @@ export const SetupPage: React.FC<SetupPageProps> = ({ mapId, onEnter, onBack }) 
       return;
     }
 
+    const mapId = sessionStorage.getItem('ai-village-map');
+    if (!mapId) {
+      setError('No map selected — please go back and choose a map.');
+      return;
+    }
+
     setAddingAgent(true);
     setError('');
 
@@ -254,6 +265,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ mapId, onEnter, onBack }) 
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
+          mapId,
           name: name.trim(),
           spriteId,
           age,

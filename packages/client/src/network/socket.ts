@@ -33,6 +33,23 @@ let socket: Socket | null = null;
 (window as any).__devFreshStart = () => socket?.emit('dev:fresh-start', '');
 let lastSeenDayTimer: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * Tear down the current Socket.IO connection. Used when the user switches maps —
+ * each map has its own server-side engine + Socket.IO room, so we must reconnect
+ * with a fresh handshake that carries the new mapId in auth.
+ */
+export function disconnectSocket(): void {
+  if (!socket) return;
+  socket.disconnect();
+  socket = null;
+  gameStore.setConnected(false);
+  gameStore.setAdmin(false);
+  if (lastSeenDayTimer !== null) {
+    clearInterval(lastSeenDayTimer);
+    lastSeenDayTimer = null;
+  }
+}
+
 export function connectSocket(): Socket {
   if (socket) return socket;
 
@@ -43,8 +60,9 @@ export function connectSocket(): Socket {
     transports: ['websocket', 'polling'],
     auth: async (cb) => {
       const token = await getValidToken();
-      console.log('[Socket] auth: token=' + (token ? `${token.length}chars` : 'null'));
-      cb({ token: token ?? '' });
+      const mapId = sessionStorage.getItem('ai-village-map') ?? '';
+      console.log('[Socket] auth: token=' + (token ? `${token.length}chars` : 'null') + ' map=' + mapId);
+      cb({ token: token ?? '', mapId });
     },
     // Cap reconnection attempts to prevent a permanently-gone server from causing
     // an infinite background retry loop in the browser tab.

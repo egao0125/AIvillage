@@ -85,6 +85,11 @@ export class InMemoryStore implements MemoryStore {
     return this.embedders.get(agentId)!;
   }
 
+  async clearByAgent(agentId: string): Promise<void> {
+    this.memories.delete(agentId);
+    this.embedders.delete(agentId);
+  }
+
   async add(memory: Memory): Promise<void> {
     // Clamp importance to [1,10] to prevent NaN/-Inf in scoring formula (line ~71)
     memory.importance = Math.max(1, Math.min(10, Number(memory.importance) || 5));

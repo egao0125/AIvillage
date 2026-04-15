@@ -92,6 +92,16 @@ export class RdsMemoryStore implements MemoryStore {
     return embedder;
   }
 
+  async clearByAgent(agentId: string): Promise<void> {
+    try {
+      await this.pool.query('DELETE FROM memories WHERE agent_id = $1', [agentId]);
+      this.embedders.delete(agentId);
+      this.bootstrapped.delete(agentId);
+    } catch (err) {
+      console.error('[RdsMemoryStore] clearByAgent() failed:', (err as Error).message);
+    }
+  }
+
   async add(memory: Memory): Promise<void> {
     // Build TF-IDF embedding (not persisted — recomputed on load)
     const embedder = this.getEmbedder(memory.agentId);

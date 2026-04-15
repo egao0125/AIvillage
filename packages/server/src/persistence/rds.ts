@@ -458,18 +458,29 @@ export class RdsPersistence {
   // Additional methods to replace persistence.client direct references
   // ---------------------------------------------------------------------------
 
-  async deleteAllAgents(): Promise<void> {
+  /**
+   * Delete all agents belonging to a specific map. Requires mapId to prevent
+   * cross-map wipes when multiple engines share one RDS instance.
+   */
+  async deleteAllAgents(mapId: string): Promise<void> {
     try {
-      await this.pool.query(`DELETE FROM agents`);
+      await this.pool.query(`DELETE FROM agents WHERE map_id = $1`, [mapId]);
     } catch (err) {
       console.error('[RDS] deleteAllAgents failed:', (err as Error).message);
       throw err;
     }
   }
 
-  async deleteAllMemories(): Promise<void> {
+  /**
+   * Delete all memories for agents belonging to a specific map. Scoped via
+   * subquery on agents.map_id since the memories table has no map_id column.
+   */
+  async deleteAllMemories(mapId: string): Promise<void> {
     try {
-      await this.pool.query(`DELETE FROM memories`);
+      await this.pool.query(
+        `DELETE FROM memories WHERE agent_id IN (SELECT id FROM agents WHERE map_id = $1)`,
+        [mapId],
+      );
     } catch (err) {
       console.error('[RDS] deleteAllMemories failed:', (err as Error).message);
       throw err;
@@ -499,13 +510,9 @@ export class RdsPersistence {
     }
   }
 
-  async deleteAllControllers(mapId?: string): Promise<void> {
+  async deleteAllControllers(mapId: string): Promise<void> {
     try {
-      if (mapId) {
-        await this.pool.query(`DELETE FROM agent_controllers WHERE map_id = $1`, [mapId]);
-      } else {
-        await this.pool.query(`DELETE FROM agent_controllers`);
-      }
+      await this.pool.query(`DELETE FROM agent_controllers WHERE map_id = $1`, [mapId]);
     } catch (err) {
       console.error('[RDS] deleteAllControllers failed:', (err as Error).message);
       throw err;

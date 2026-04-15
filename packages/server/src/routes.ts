@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { timingSafeEqual, createHash } from 'crypto';
+import type { EngineRegistry } from './simulation/engine-registry.js';
 import type { SimulationEngine } from './simulation/engine.js';
 import { requireAuth } from './auth.js';
 import { getRedis } from './redis.js';
@@ -170,12 +171,46 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
 // Math.min caps at 500 to prevent runaway resource usage (OWASP API4).
 const MAX_AGENTS = Math.max(1, Math.min(parseInt(process.env.MAX_AGENTS || '50') || 50, 500));
 
-export function createRouter(engine: SimulationEngine): Router {
+export function createRouter(registry: EngineRegistry): Router {
   const router = Router();
+
+  /**
+   * Resolve which engine a request targets. HTTP routes pass `?mapId=xxx` in the
+   * query string (or `mapId` in the JSON body for POSTs). When missing or unknown
+   * we 400 — explicit is better than silently routing to a default.
+   */
+  function resolveEngine(req: Request, res: Response): SimulationEngine | null {
+    const raw = (req.query.mapId ?? req.body?.mapId) as unknown;
+    if (typeof raw !== 'string' || raw.length === 0) {
+      res.status(400).json({ error: 'mapId is required' });
+      return null;
+    }
+    const engine = registry.get(raw);
+    if (!engine) {
+      res.status(404).json({ error: `Unknown mapId "${raw}"` });
+      return null;
+    }
+    return engine;
+  }
+
+  /**
+   * Find the engine that owns a given agent ID. Returns null (and sends 404) when
+   * no engine has the agent — callers can `return` immediately.
+   */
+  function resolveEngineByAgent(agentId: string, res: Response): SimulationEngine | null {
+    const engine = registry.findByAgentId(agentId);
+    if (!engine) {
+      res.status(404).json({ error: 'Agent not found' });
+      return null;
+    }
+    return engine;
+  }
 
   // --- Read-only endpoints (no rate limit needed) ---
 
-  router.get('/api/agents', (_req, res) => {
+  router.get('/api/agents', (req, res) => {
+    const engine = resolveEngine(req, res);
+    if (!engine) return;
     const snapshot = engine.getSnapshot();
     // Never expose API keys or internal IDs to clients
     res.json(snapshot.agents.map(a => ({
@@ -198,7 +233,9 @@ export function createRouter(engine: SimulationEngine): Router {
     })));
   });
 
-  router.get('/api/world', (_req, res) => {
+  router.get('/api/world', (req, res) => {
+    const engine = resolveEngine(req, res);
+    if (!engine) return;
     res.json(engine.getSnapshot());
   });
 
@@ -207,10 +244,10 @@ export function createRouter(engine: SimulationEngine): Router {
     res.json({ status: 'ok', uptime: process.uptime() });
   });
 
-  // Readiness: can this Pod accept traffic? Returns 503 when DB is unreachable so k8s
-  // removes it from Service endpoints without triggering a Pod restart.
+  // Readiness: all engines must report a healthy DB. Returns 503 when any engine
+  // can't reach RDS so k8s removes the Pod from Service endpoints.
   router.get('/api/ready', async (_req, res) => {
-    const healthy = await engine.isDbHealthy();
+    const healthy = await registry.isReady();
     if (healthy) {
       res.json({ status: 'ready' });
     } else {
@@ -218,13 +255,16 @@ export function createRouter(engine: SimulationEngine): Router {
     }
   });
 
-  // GET /api/config/status — public summary for UI health display.
+  // GET /api/config/status — per-map summary for UI health display.
   // soul/backstory/fears/desires are private character data — never exposed here.
-  router.get('/api/config/status', (_req, res) => {
+  router.get('/api/config/status', (req, res) => {
+    const engine = resolveEngine(req, res);
+    if (!engine) return;
     const snapshot = engine.getSnapshot();
     res.json({
       configured: true, // BYOK — always ready, each agent carries its own key
       running: engine.isRunning,
+      mapId: engine.mapId,
       agentCount: snapshot.agents.length,
       agents: snapshot.agents.map(a => ({
         id: a.id,
@@ -242,6 +282,8 @@ export function createRouter(engine: SimulationEngine): Router {
   router.get('/api/agents/:id/timeline', (req, res) => {
     const id = req.params.id as string;
     if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
+    const engine = resolveEngineByAgent(id, res);
+    if (!engine) return;
     const limit = clampNumber(parseInt(req.query.limit as string), 1, 500, 50);
     const timeline = engine.getCharacterTimeline(id, limit);
     res.json(timeline);
@@ -250,6 +292,8 @@ export function createRouter(engine: SimulationEngine): Router {
   router.get('/api/agents/:id/arc-summary', async (req, res) => {
     const id = req.params.id as string;
     if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
+    const engine = resolveEngineByAgent(id, res);
+    if (!engine) return;
     const snapshot = engine.getSnapshot();
     const agent = snapshot.agents.find(a => a.id === id);
     if (!agent) {
@@ -317,6 +361,8 @@ export function createRouter(engine: SimulationEngine): Router {
     rateLimit(10, 10 * 60_000),
     requireAuth,
     (req, res) => {
+      const engine = resolveEngine(req, res);
+      if (!engine) return;
       const { name, age, occupation, soul, backstory, goal, wakeHour, sleepHour, startingGold, apiKey, model } = req.body;
 
       // Validate API key — required for agent to think
@@ -416,6 +462,35 @@ export function createRouter(engine: SimulationEngine): Router {
     },
   );
 
+  /**
+   * Per-agent ownership guard used by every mutating route below. Validates the
+   * id, locates the owning engine (linear scan across all active maps), and
+   * checks that the caller owns the agent. Returns the engine on success, or
+   * null after sending the appropriate error response.
+   */
+  function ownedEngineForAgent(req: Request, res: Response): SimulationEngine | null {
+    const id = req.params.id as string;
+    if (!id || !UUID_REGEX.test(id)) {
+      res.status(400).json({ error: 'Invalid agent ID' });
+      return null;
+    }
+    const engine = registry.findByAgentId(id);
+    if (!engine) {
+      res.status(404).json({ error: 'Agent not found' });
+      return null;
+    }
+    const agent = engine.getSnapshot().agents.find(a => a.id === id);
+    if (!agent) {
+      res.status(404).json({ error: 'Agent not found' });
+      return null;
+    }
+    if (agent.ownerId !== req.userId) {
+      res.status(403).json({ error: 'You do not own this agent' });
+      return null;
+    }
+    return engine;
+  }
+
   // DELETE /api/agents/:id — remove an agent (requires ownership)
   // Rate limit: 5 deletes per minute per IP
   router.delete(
@@ -423,30 +498,13 @@ export function createRouter(engine: SimulationEngine): Router {
     rateLimit(5, 60_000),
     requireAuth,
     (req, res) => {
-      const id = req.params.id as string;
-      if (!id || !UUID_REGEX.test(id)) {
-        res.status(400).json({ error: 'Invalid agent ID' });
-        return;
-      }
-
-      // Check ownership
-      const snapshot = engine.getSnapshot();
-      const agent = snapshot.agents.find(a => a.id === id);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
-      if (agent.ownerId !== req.userId) {
-        res.status(403).json({ error: 'You can only delete your own agents' });
-        return;
-      }
-
-      const removed = engine.removeAgent(id);
+      const engine = ownedEngineForAgent(req, res);
+      if (!engine) return;
+      const removed = engine.removeAgent(req.params.id as string);
       if (!removed) {
         res.status(404).json({ error: 'Agent not found' });
         return;
       }
-
       res.json({ success: true });
     },
   );
@@ -457,19 +515,9 @@ export function createRouter(engine: SimulationEngine): Router {
     rateLimit(10, 60_000),
     requireAuth,
     (req, res) => {
-      const id = req.params.id as string;
-      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
-      const snapshot = engine.getSnapshot();
-      const agent = snapshot.agents.find(a => a.id === id);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
-      if (agent.ownerId !== req.userId) {
-        res.status(403).json({ error: 'You can only suspend your own agents' });
-        return;
-      }
-      const success = engine.suspendAgent(id);
+      const engine = ownedEngineForAgent(req, res);
+      if (!engine) return;
+      const success = engine.suspendAgent(req.params.id as string);
       if (!success) {
         res.status(400).json({ error: 'Agent cannot be suspended (dead or already away)' });
         return;
@@ -484,36 +532,23 @@ export function createRouter(engine: SimulationEngine): Router {
     rateLimit(10, 60_000),
     requireAuth,
     (req, res) => {
-      const id = req.params.id as string;
-      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
       const { apiKey, model } = req.body;
-
       if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
         res.status(400).json({ error: 'Valid API key required' });
         return;
       }
-
-      const snapshot = engine.getSnapshot();
-      const agent = snapshot.agents.find(a => a.id === id);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
-      if (agent.ownerId !== req.userId) {
-        res.status(403).json({ error: 'You can only update your own agents' });
-        return;
-      }
+      const engine = ownedEngineForAgent(req, res);
+      if (!engine) return;
 
       const safeModel = typeof model === 'string'
         ? model.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 100)
         : process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 
-      const success = engine.updateAgentApiKey(id, apiKey.trim(), safeModel);
+      const success = engine.updateAgentApiKey(req.params.id as string, apiKey.trim(), safeModel);
       if (!success) {
         res.status(400).json({ error: 'Failed to update API key' });
         return;
       }
-
       res.json({ success: true });
     },
   );
@@ -524,19 +559,9 @@ export function createRouter(engine: SimulationEngine): Router {
     rateLimit(10, 60_000),
     requireAuth,
     (req, res) => {
-      const id = req.params.id as string;
-      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
-      const snapshot = engine.getSnapshot();
-      const agent = snapshot.agents.find(a => a.id === id);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
-      if (agent.ownerId !== req.userId) {
-        res.status(403).json({ error: 'You can only reset your own agents' });
-        return;
-      }
-      const success = engine.resetAgentVitals(id);
+      const engine = ownedEngineForAgent(req, res);
+      if (!engine) return;
+      const success = engine.resetAgentVitals(req.params.id as string);
       if (!success) {
         res.status(400).json({ error: 'Agent vitals cannot be reset (agent is dead)' });
         return;
@@ -551,19 +576,9 @@ export function createRouter(engine: SimulationEngine): Router {
     rateLimit(10, 60_000),
     requireAuth,
     (req, res) => {
-      const id = req.params.id as string;
-      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
-      const snapshot = engine.getSnapshot();
-      const agent = snapshot.agents.find(a => a.id === id);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
-      if (agent.ownerId !== req.userId) {
-        res.status(403).json({ error: 'You can only resume your own agents' });
-        return;
-      }
-      const success = engine.resumeAgent(id);
+      const engine = ownedEngineForAgent(req, res);
+      if (!engine) return;
+      const success = engine.resumeAgent(req.params.id as string);
       if (!success) {
         res.status(400).json({ error: 'Agent cannot be resumed (not away)' });
         return;
@@ -578,19 +593,9 @@ export function createRouter(engine: SimulationEngine): Router {
     rateLimit(10, 60_000),
     requireAuth,
     async (req, res) => {
-      const id = req.params.id as string;
-      if (!UUID_REGEX.test(id)) { res.status(400).json({ error: 'Invalid agent ID' }); return; }
-      const snapshot = engine.getSnapshot();
-      const agent = snapshot.agents.find(a => a.id === id);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
-      if (agent.ownerId !== req.userId) {
-        res.status(403).json({ error: 'You can only resurrect your own agents' });
-        return;
-      }
-      const success = await engine.resurrectAgent(id);
+      const engine = ownedEngineForAgent(req, res);
+      if (!engine) return;
+      const success = await engine.resurrectAgent(req.params.id as string);
       if (!success) {
         res.status(400).json({ error: 'Agent is not dead' });
         return;
@@ -599,53 +604,45 @@ export function createRouter(engine: SimulationEngine): Router {
     },
   );
 
-  // POST /api/admin/resurrect-all — bring ALL dead agents back to life
-  // Requires X-Admin-Token header matching DEV_ADMIN_TOKEN (prevents any logged-in
-  // user from nuking global agent state; consistent with Socket.IO dev:* gating).
+  // POST /api/admin/resurrect-all — bring ALL dead agents on a single map back to life.
+  // Requires X-Admin-Token (or admin Cognito) and targets the map given by ?mapId=.
   router.post(
     '/api/admin/resurrect-all',
     rateLimit(3, 60_000),
     requireAdmin,
-    async (_req, res) => {
+    async (req, res) => {
       // Only the leader Pod holds authoritative world state; follower-guard middleware
       // covers /api/agents but not /api/admin, so we guard explicitly here.
-      if (!engine.isLeader) {
+      if (!registry.isLeader) {
         res.status(503).json({ error: 'Leader election in progress — please retry', retryAfterMs: 5_000 });
         return;
       }
+      const engine = resolveEngine(req, res);
+      if (!engine) return;
       const resurrected = await engine.resurrectAllAgents();
-      res.json({ success: true, resurrected });
+      res.json({ success: true, mapId: engine.mapId, resurrected });
     },
   );
 
   // =============================================================================
-  // Map Selection
+  // Map Discovery
   // =============================================================================
 
+  // GET /api/config/maps — returns the subset of MAP_REGISTRY that this process is
+  // actually hosting (ACTIVE_MAPS). Clients use this to render the map picker;
+  // listing maps without live engines would produce broken connections.
   router.get('/api/config/maps', (_req, res) => {
-    const maps = Object.values(MAP_REGISTRY).map(m => ({
-      id: m.id,
-      name: m.name,
-      description: m.description,
-      systems: m.systems,
-      winCondition: m.winCondition,
-    }));
+    const maps = registry.mapIds().map(id => {
+      const cfg = MAP_REGISTRY[id];
+      return {
+        id: cfg.id,
+        name: cfg.name,
+        description: cfg.description,
+        systems: cfg.systems,
+        winCondition: cfg.winCondition,
+      };
+    });
     res.json({ maps });
-  });
-
-  router.post('/api/config/map', async (req, res) => {
-    const { mapId } = req.body;
-    if (!mapId || !MAP_REGISTRY[mapId]) {
-      res.status(400).json({ error: 'Unknown map' });
-      return;
-    }
-    await engine.setMapConfig(mapId);
-    res.json({ ok: true, mapId });
-  });
-
-  router.get('/api/config/map', (_req, res) => {
-    const config = engine.getMapConfig();
-    res.json({ mapId: config.id });
   });
 
   return router;

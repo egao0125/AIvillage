@@ -30,7 +30,9 @@ export const AgentCreator: React.FC<AgentCreatorProps> = ({ open, onClose }) => 
     setError('');
     const loadAgents = async () => {
       try {
-        const res = await fetch('/api/config/status', { headers: authHeaders() });
+        const mapId = sessionStorage.getItem('ai-village-map');
+        if (!mapId) return;
+        const res = await fetch(`/api/config/status?mapId=${encodeURIComponent(mapId)}`, { headers: authHeaders() });
         if (res.ok) {
           const data = await res.json() as { agents?: AgentEntry[] };
           if (Array.isArray(data.agents)) {

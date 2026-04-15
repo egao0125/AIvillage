@@ -118,9 +118,15 @@ export const AgentForm: React.FC<AgentFormProps> = ({
       onError('Name and Soul are required.');
       return;
     }
+    const mapId = sessionStorage.getItem('ai-village-map');
+    if (!mapId) {
+      onError('No map selected — please go back and choose a map.');
+      return;
+    }
     setAddingAgent(true);
     try {
       const body = {
+        mapId,
         name: name.trim(),
         spriteId,
         age,

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Phaser from 'phaser';
 import { createGameConfig } from '../../game/config';
 import { useActiveMode, useWorldTime, useWerewolfGameOver } from '../../core/hooks';
-import { connectSocket, werewolfPlayAgain } from '../../network/socket';
+import { connectSocket, disconnectSocket, werewolfPlayAgain } from '../../network/socket';
 import { clearToken } from '../../utils/auth';
 import { gameStore } from '../../core/GameStore';
 import { TopNav } from './TopNav';
@@ -31,16 +31,7 @@ export const AppShell: React.FC = () => {
   const gameContainerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
 
-  const handleMapSelect = async (mapId: string) => {
-    try {
-      await fetch('/api/config/map', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mapId }),
-      });
-    } catch (e) {
-      console.warn('[MapSelect] Failed to set map config:', e);
-    }
+  const handleMapSelect = (mapId: string) => {
     sessionStorage.setItem('ai-village-map', mapId);
     setSelectedMap(mapId);
   };
@@ -52,6 +43,7 @@ export const AppShell: React.FC = () => {
   };
 
   const handleBackToMaps = () => {
+    disconnectSocket();
     sessionStorage.removeItem('ai-village-entered');
     sessionStorage.removeItem('ai-village-map');
     setEntered(false);
@@ -59,6 +51,7 @@ export const AppShell: React.FC = () => {
   };
 
   const handleChangeMap = () => {
+    disconnectSocket();
     sessionStorage.removeItem('ai-village-entered');
     sessionStorage.removeItem('ai-village-map');
     setEntered(false);
@@ -66,6 +59,7 @@ export const AppShell: React.FC = () => {
   };
 
   const handleLogout = () => {
+    disconnectSocket();
     clearToken();
     sessionStorage.removeItem('ai-village-entered');
     sessionStorage.removeItem('ai-village-map');
@@ -73,19 +67,11 @@ export const AppShell: React.FC = () => {
     setSelectedMap(null);
   };
 
-  // Reconnect socket + re-sync map config on refresh if already entered
+  // Reconnect socket on refresh if already entered. mapId is read from sessionStorage
+  // by the socket auth callback — no server-side sync needed (each engine is per-map).
   useEffect(() => {
     if (entered) {
       connectSocket();
-      // Re-sync server map config — on page refresh the server may have restarted
-      // and reverted to 'village' while sessionStorage still has the previous map.
-      if (selectedMap) {
-        fetch('/api/config/map', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mapId: selectedMap }),
-        }).catch(() => {});
-      }
     }
   }, []);
 

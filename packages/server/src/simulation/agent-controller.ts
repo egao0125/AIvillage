@@ -2,7 +2,6 @@ import type { Agent, BoardPost, DriveState, GameTime, Institution, MapConfig, Po
 import type { EventBus } from '@ai-village/shared';
 import { AgentCognition, SEASONS, SEASON_ORDER, SEASON_LENGTH, BUILDINGS, RESOURCES, RECIPES, getGatherOptions, getAvailableRecipes, parseIntent, executeAction, type AgentSituation, type AvailableAction, type AgentDecision, type AgentState, type WorldState, type ActionOutcome } from '@ai-village/ai-engine';
 import type { Item } from '@ai-village/shared';
-import { getAreaEntrance, getRandomPositionInArea, getAreaAt, getWalkable, getMapWidth, getMapHeight } from '../map/map-provider.js';
 import { findPath } from './pathfinding.js';
 import type { World } from './world.js';
 import type { EventBroadcaster } from './events.js';
@@ -386,7 +385,7 @@ export class AgentController {
     // Only log transitions that matter narratively — skip idle/moving/performing churn
     if (to !== 'sleeping' && to !== 'conversing') return;
 
-    const area = getAreaAt(this.agent.position);
+    const area = this.world.getAreaAt(this.agent.position);
     const location = area?.name ?? 'the village';
     const content = to === 'sleeping'
       ? `I went to sleep at ${location}.`
@@ -496,7 +495,7 @@ export class AgentController {
       if (!this.sleepTriggered && this.shouldSleep(time)) {
         this.sleepTriggered = true;
         // Record pre-sleep context for narrative bridge
-        const area = getAreaAt(this.agent.position);
+        const area = this.world.getAreaAt(this.agent.position);
         this.preSleepArea = area?.name ?? 'the village';
         this.preSleepActivity = this.state === 'conversing' ? 'having a conversation'
           : this.state === 'performing' ? this.currentPerformingActivity || 'an activity'
@@ -794,11 +793,11 @@ export class AgentController {
 
 
   startMoveTo(target: Position): void {
-    const path = findPath(this.agent.position, target, getWalkable, getMapWidth(), getMapHeight());
+    const path = findPath(this.agent.position, target, (x: number, y: number) => this.world.getWalkable(x, y), this.world.getMapWidth(), this.world.getMapHeight());
 
     if (path.length <= 1) {
       // Already there or no path found — go idle so decideAndAct picks up
-      const area = getAreaAt(this.agent.position);
+      const area = this.world.getAreaAt(this.agent.position);
       const areaName = area?.name ?? 'your destination';
       if (this.pendingArrivalIntent) {
         this.lastTrigger = `You arrived at ${areaName}. You came here because: ${this.pendingArrivalIntent}`;
@@ -838,7 +837,7 @@ export class AgentController {
         // Target moved — go idle and re-decide
         this.pendingConversationTarget = null;
         this.pendingConversationPurpose = null;
-        const area = getAreaAt(this.agent.position);
+        const area = this.world.getAreaAt(this.agent.position);
         this.lastTrigger = 'You arrived at ' + (area?.name ?? 'your destination') + ' but couldn\'t find who you were looking for.';
         this.state = 'idle';
         this.world.updateAgentState(this.agent.id, 'idle', '');
@@ -847,7 +846,7 @@ export class AgentController {
           void this.decideAndAct();
         }
       } else {
-        const area = getAreaAt(this.agent.position);
+        const area = this.world.getAreaAt(this.agent.position);
         const areaName = area?.name ?? 'your destination';
         if (this.pendingArrivalIntent) {
           this.lastTrigger = `You arrived at ${areaName}. You came here because: ${this.pendingArrivalIntent}`;
@@ -1384,7 +1383,7 @@ export class AgentController {
 
     // Deterministic sleep spot based on agent name (no randomness)
     const sleepArea = this.nameHash(AgentController.SLEEP_AREAS);
-    const sleepPos = getAreaEntrance(sleepArea);
+    const sleepPos = this.world.getAreaEntrance(sleepArea);
 
     const dist = Math.abs(this.agent.position.x - sleepPos.x) + Math.abs(this.agent.position.y - sleepPos.y);
     if (dist <= 1) {
@@ -1720,7 +1719,7 @@ export class AgentController {
     const wm = this.werewolfManager!;
     const phase = wm.phase;
     const role = this.agent.werewolfRole;
-    const area = getAreaAt(this.agent.position);
+    const area = this.world.getAreaAt(this.agent.position);
     const areaId = area?.id ?? 'plaza';
 
     // Map werewolf action categories to AvailableAction categories
@@ -1861,17 +1860,15 @@ export class AgentController {
 
       situationText = `VOTE: Who should the village exile today?
 
-ALIVE AGENTS:
+ALIVE AGENTS (you may ONLY vote for one of these people):
 ${aliveBlock}
-${dossiersBlock}${privateKnowledge}${ownVoteHistory}${deathsSummary}${beliefs}
-${aliveCount} villagers remain alive.
-
-Name your target and explain your reasoning. The person with the most votes will be exiled.
+${deathsSummary ? `\n${deathsSummary}\nThese people are DEAD. Do not vote for them. Do not be confused by memories that mention them — they happened before their death.\n` : ''}${dossiersBlock}${privateKnowledge}${ownVoteHistory}${beliefs}
+${aliveCount} villagers remain alive. You MUST vote for one of the alive agents listed above.
 
 ACTIONS:
 - vote [name] — vote to exile that person
 
-State your vote and explain your reasoning.`;
+Cast your vote NOW. Pick one living person and explain why.`;
     }
 
     // Build inventory as structured objects
@@ -2150,7 +2147,7 @@ State your vote and explain your reasoning.`;
           }
         } else {
           // Move to plaza as default gathering spot
-          const plaza = getAreaEntrance('plaza');
+          const plaza = this.world.getAreaEntrance('plaza');
           if (plaza) {
             this.startMoveTo(plaza);
           } else {
@@ -2199,15 +2196,8 @@ State your vote and explain your reasoning.`;
 
       case 'think': {
         // Reflect on evidence — triggers belief reconsideration on next decide cycle
-        void this.cognition.addMemory({
-          id: crypto.randomUUID(),
-          agentId: this.agent.id,
-          type: 'observation',
-          content: `You take a moment to think carefully about everything you know. Who has been acting suspicious? What patterns have you noticed?`,
-          importance: 4,
-          timestamp: Date.now(),
-          relatedAgentIds: [],
-        }).catch(() => {});
+        // No memory created: static text was #1 spam source (19% of all memories).
+        // The next decide() cycle already re-evaluates all evidence.
         this.state = 'performing';
         this.activityTimer = 5;
         this.world.updateAgentState(this.agent.id, 'active', 'thinking');
@@ -2233,7 +2223,7 @@ State your vote and explain your reasoning.`;
       return this.buildWerewolfSituation(trigger, recentOutcome);
     }
 
-    const area = getAreaAt(this.agent.position);
+    const area = this.world.getAreaAt(this.agent.position);
     const areaId = area?.id ?? 'plaza';
     const seasonIdx = Math.floor((this.world.time.day - 1) / SEASON_LENGTH) % SEASON_ORDER.length;
     const currentSeason = SEASON_ORDER[seasonIdx];
@@ -2334,7 +2324,7 @@ State your vote and explain your reasoning.`;
           ? (dy < 0 ? 'north' : 'south')
           : (dx < 0 ? 'west' : 'east'))
       );
-      const otherArea = getAreaAt(a.position);
+      const otherArea = this.world.getAreaAt(a.position);
       const spatialStr = dist < 2 ? '' : `, ${dist} tiles ${dir}${otherArea ? ' at ' + otherArea.name : ''}`;
 
       const occTag = a.config.occupation ? ` [${a.config.occupation}]` : '';
@@ -2641,7 +2631,7 @@ State your vote and explain your reasoning.`;
     for (const [id, agent] of this.world.agents) {
       if (id === this.agent.id) continue;
       if (agent.alive === false) continue;
-      const agentArea = getAreaAt(agent.position);
+      const agentArea = this.world.getAreaAt(agent.position);
       const loc = agent.state === 'sleeping'
         ? 'sleeping'
         : (agentArea?.name ?? 'somewhere');
@@ -2997,7 +2987,7 @@ State your vote and explain your reasoning.`;
     // --- Gather ---
     if (actionId.startsWith('gather_')) {
       const resource = actionId.replace('gather_', '');
-      const area = getAreaAt(this.agent.position);
+      const area = this.world.getAreaAt(this.agent.position);
       const areaId = area?.id ?? 'plaza';
 
       // Check area ownership — trespassing creates consequences but doesn't block
@@ -3055,7 +3045,7 @@ State your vote and explain your reasoning.`;
       const agentState: AgentState = {
         id: this.agent.id,
         name: this.agent.config.name,
-        location: getAreaAt(this.agent.position)?.id ?? 'plaza',
+        location: this.world.getAreaAt(this.agent.position)?.id ?? 'plaza',
         energy: this.agent.vitals?.energy ?? 100,
         hunger: this.agent.vitals?.hunger ?? 0,
         health: this.agent.vitals?.health ?? 100,
@@ -3092,7 +3082,7 @@ State your vote and explain your reasoning.`;
       const agentState: AgentState = {
         id: this.agent.id,
         name: this.agent.config.name,
-        location: getAreaAt(this.agent.position)?.id ?? 'plaza',
+        location: this.world.getAreaAt(this.agent.position)?.id ?? 'plaza',
         energy: this.agent.vitals?.energy ?? 100,
         hunger: this.agent.vitals?.hunger ?? 0,
         health: this.agent.vitals?.health ?? 100,
@@ -3119,7 +3109,7 @@ State your vote and explain your reasoning.`;
     // --- Movement ---
     if (actionId.startsWith('go_')) {
       const targetAreaId = actionId.replace('go_', '');
-      const targetPos = getRandomPositionInArea(targetAreaId);
+      const targetPos = this.world.getRandomPositionInArea(targetAreaId);
       this.startMoveTo(targetPos);
       // Store the reason for going — so the agent remembers WHY it went there when decide() fires on arrival
       this.pendingArrivalIntent = decision.reason;

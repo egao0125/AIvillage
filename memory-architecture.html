@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Werewolf Memory Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-deep: #06080d;
+    --bg-panel: rgba(12, 17, 28, 0.85);
+    --bg-panel-hover: rgba(18, 25, 42, 0.92);
+    --border-dim: rgba(80, 120, 200, 0.08);
+    --border-glow: rgba(80, 160, 255, 0.25);
+    --text-primary: #d8dce8;
+    --text-secondary: #7a8299;
+    --text-label: #4d5a75;
+    --accent-blue: #4d9fff;
+    --accent-cyan: #22d3ee;
+    --accent-amber: #f59e0b;
+    --accent-rose: #f43f5e;
+    --accent-emerald: #10b981;
+    --accent-violet: #8b5cf6;
+    --gate-red: #ef4444;
+    --gate-green: #22c55e;
+    --layer1: #4d9fff;
+    --layer2: #f59e0b;
+    --layer3: #8b5cf6;
+    --glow-blue: 0 0 30px rgba(77, 159, 255, 0.15);
+    --glow-amber: 0 0 30px rgba(245, 158, 11, 0.15);
+    --glow-violet: 0 0 30px rgba(139, 92, 246, 0.15);
+    --mono: 'DM Mono', 'SF Mono', monospace;
+    --serif: 'Instrument Serif', Georgia, serif;
+    --sans: 'IBM Plex Sans', -apple-system, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+
+  /* Grain overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* Ambient gradient orbs */
+  .ambient {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    overflow: hidden;
+  }
+  .ambient .orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.07;
+    animation: drift 20s ease-in-out infinite alternate;
+  }
+  .ambient .orb:nth-child(1) {
+    width: 600px; height: 600px;
+    background: var(--accent-blue);
+    top: -10%; left: -5%;
+  }
+  .ambient .orb:nth-child(2) {
+    width: 500px; height: 500px;
+    background: var(--accent-violet);
+    bottom: -15%; right: -5%;
+    animation-delay: -7s;
+  }
+  .ambient .orb:nth-child(3) {
+    width: 400px; height: 400px;
+    background: var(--accent-amber);
+    top: 40%; left: 50%;
+    animation-delay: -14s;
+  }
+  @keyframes drift {
+    to { transform: translate(40px, -30px) scale(1.1); }
+  }
+
+  /* Container */
+  .page {
+    position: relative;
+    z-index: 1;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 60px 40px 100px;
+  }
+
+  /* Header */
+  .header {
+    margin-bottom: 72px;
+    animation: fadeUp 0.8s ease-out both;
+  }
+  .header .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent-cyan);
+    margin-bottom: 16px;
+    opacity: 0.8;
+  }
+  .header h1 {
+    font-family: var(--serif);
+    font-size: clamp(36px, 5vw, 56px);
+    font-weight: 400;
+    line-height: 1.15;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+  }
+  .header h1 em {
+    font-style: italic;
+    color: var(--accent-blue);
+  }
+  .header .subtitle {
+    font-size: 15px;
+    color: var(--text-secondary);
+    max-width: 600px;
+    font-weight: 300;
+  }
+
+  /* Stat bar */
+  .stats-bar {
+    display: flex;
+    gap: 1px;
+    margin-bottom: 64px;
+    background: var(--border-dim);
+    border-radius: 12px;
+    overflow: hidden;
+    animation: fadeUp 0.8s ease-out 0.15s both;
+  }
+  .stat {
+    flex: 1;
+    padding: 20px 24px;
+    background: var(--bg-panel);
+    transition: background 0.3s;
+  }
+  .stat:hover { background: var(--bg-panel-hover); }
+  .stat .stat-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-label);
+    margin-bottom: 6px;
+  }
+  .stat .stat-value {
+    font-family: var(--serif);
+    font-size: 28px;
+    font-weight: 400;
+  }
+  .stat .stat-note {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+  .stat--fixed .stat-value { color: var(--accent-emerald); }
+  .stat--broken .stat-value { color: var(--gate-red); text-decoration: line-through; opacity: 0.5; }
+
+  /* Section title */
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--text-label);
+    margin-bottom: 32px;
+    padding-left: 2px;
+  }
+
+  /* Architecture diagram */
+  .arch {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2px;
+    margin-bottom: 80px;
+  }
+
+  .layer {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: 16px;
+    padding: 36px 40px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.4s, box-shadow 0.4s, transform 0.3s;
+    animation: fadeUp 0.8s ease-out both;
+  }
+  .layer:hover {
+    border-color: var(--border-glow);
+    transform: translateY(-2px);
+  }
+  .layer::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 4px;
+    height: 100%;
+    border-radius: 4px 0 0 4px;
+  }
+
+  .layer--working { animation-delay: 0.2s; }
+  .layer--working::before { background: var(--layer1); }
+  .layer--working:hover { box-shadow: var(--glow-blue); }
+
+  .layer--episodic { animation-delay: 0.35s; }
+  .layer--episodic::before { background: var(--layer2); }
+  .layer--episodic:hover { box-shadow: var(--glow-amber); }
+
+  .layer--social { animation-delay: 0.5s; }
+  .layer--social::before { background: var(--layer3); }
+  .layer--social:hover { box-shadow: var(--glow-violet); }
+
+  .layer-header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .layer-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-label);
+    letter-spacing: 1px;
+  }
+  .layer-name {
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: 400;
+  }
+  .layer--working .layer-name { color: var(--layer1); }
+  .layer--episodic .layer-name { color: var(--layer2); }
+  .layer--social .layer-name { color: var(--layer3); }
+
+  .layer-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 100px;
+    border: 1px solid;
+    margin-left: auto;
+  }
+  .badge--ephemeral { color: var(--layer1); border-color: rgba(77,159,255,0.25); background: rgba(77,159,255,0.06); }
+  .badge--bounded { color: var(--layer2); border-color: rgba(245,158,11,0.25); background: rgba(245,158,11,0.06); }
+  .badge--structured { color: var(--layer3); border-color: rgba(139,92,246,0.25); background: rgba(139,92,246,0.06); }
+
+  .layer-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+    max-width: 720px;
+    font-weight: 300;
+  }
+
+  .layer-items {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+  }
+  .layer-item {
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 10px;
+    font-size: 13px;
+    transition: background 0.2s, border-color 0.2s;
+  }
+  .layer-item:hover {
+    background: rgba(255,255,255,0.04);
+    border-color: rgba(255,255,255,0.08);
+  }
+  .layer-item .item-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-label);
+    margin-bottom: 4px;
+  }
+  .layer-item .item-value {
+    color: var(--text-primary);
+    font-weight: 400;
+  }
+
+  /* Flow connector between layers */
+  .flow-connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 0;
+    animation: fadeUp 0.8s ease-out 0.3s both;
+  }
+  .flow-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .flow-arrow .line {
+    width: 1px;
+    height: 20px;
+    background: linear-gradient(to bottom, var(--text-label), transparent);
+  }
+  .flow-arrow svg {
+    width: 12px;
+    height: 12px;
+    color: var(--text-label);
+  }
+  .flow-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-label);
+    letter-spacing: 1px;
+    margin-left: 16px;
+  }
+
+  /* Gates section */
+  .gates-section {
+    margin-bottom: 80px;
+    animation: fadeUp 0.8s ease-out 0.6s both;
+  }
+  .gates-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .gate-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: 14px;
+    padding: 28px 28px 24px;
+    position: relative;
+    transition: border-color 0.3s, box-shadow 0.3s, transform 0.3s;
+  }
+  .gate-card:hover {
+    border-color: var(--border-glow);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  }
+
+  .gate-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .gate-status .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+  .gate-status--active .dot { background: var(--gate-green); box-shadow: 0 0 8px var(--gate-green); }
+  .gate-status--active { color: var(--gate-green); }
+  .gate-status--removed .dot { background: var(--gate-red); box-shadow: 0 0 8px var(--gate-red); }
+  .gate-status--removed { color: var(--gate-red); }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .gate-title {
+    font-family: var(--serif);
+    font-size: 19px;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+  }
+  .gate-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.65;
+    font-weight: 300;
+  }
+  .gate-file {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-label);
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 6px;
+    display: inline-block;
+  }
+  .gate-file .line-num { color: var(--accent-cyan); }
+
+  /* Before / After */
+  .comparison {
+    margin-bottom: 80px;
+    animation: fadeUp 0.8s ease-out 0.7s both;
+  }
+  .comparison-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--border-dim);
+  }
+  .comp-panel {
+    background: var(--bg-panel);
+    padding: 32px 36px;
+  }
+  .comp-panel .comp-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+  .comp-panel--before .comp-label { color: var(--gate-red); }
+  .comp-panel--after .comp-label { color: var(--gate-green); }
+
+  .comp-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .comp-item:last-child { margin-bottom: 0; }
+  .comp-icon {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    margin-top: 2px;
+  }
+  .comp-panel--before .comp-icon {
+    background: rgba(239,68,68,0.12);
+    color: var(--gate-red);
+    border: 1px solid rgba(239,68,68,0.2);
+  }
+  .comp-panel--after .comp-icon {
+    background: rgba(34,197,94,0.12);
+    color: var(--gate-green);
+    border: 1px solid rgba(34,197,94,0.2);
+  }
+  .comp-text { color: var(--text-secondary); font-weight: 300; }
+  .comp-text strong { color: var(--text-primary); font-weight: 500; }
+
+  /* Data flow diagram */
+  .flow-section {
+    margin-bottom: 80px;
+    animation: fadeUp 0.8s ease-out 0.55s both;
+  }
+  .flow-diagram {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: 16px;
+    padding: 48px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .flow-pipeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
+  .flow-node {
+    flex-shrink: 0;
+    padding: 16px 22px;
+    border-radius: 10px;
+    text-align: center;
+    position: relative;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  .flow-node:hover {
+    transform: scale(1.05);
+  }
+  .flow-node .fn-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .flow-node .fn-name {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .flow-node .fn-detail {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    font-weight: 300;
+  }
+
+  .fn--source {
+    background: rgba(34,211,238,0.08);
+    border: 1px solid rgba(34,211,238,0.2);
+  }
+  .fn--source .fn-label { color: var(--accent-cyan); }
+  .fn--source .fn-name { color: var(--accent-cyan); }
+
+  .fn--gate {
+    background: rgba(239,68,68,0.06);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-style: dashed;
+  }
+  .fn--gate .fn-label { color: var(--gate-red); }
+  .fn--gate .fn-name { color: var(--gate-red); }
+
+  .fn--store {
+    background: rgba(245,158,11,0.08);
+    border: 1px solid rgba(245,158,11,0.2);
+  }
+  .fn--store .fn-label { color: var(--accent-amber); }
+  .fn--store .fn-name { color: var(--accent-amber); }
+
+  .fn--evict {
+    background: rgba(139,92,246,0.08);
+    border: 1px solid rgba(139,92,246,0.2);
+  }
+  .fn--evict .fn-label { color: var(--accent-violet); }
+  .fn--evict .fn-name { color: var(--accent-violet); }
+
+  .flow-edge {
+    flex-shrink: 0;
+    width: 40px;
+    height: 2px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .flow-edge::before {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 1px;
+    background: linear-gradient(90deg, var(--text-label), transparent 30%, transparent 70%, var(--text-label));
+  }
+  .flow-edge::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    width: 0;
+    height: 0;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 6px solid var(--text-label);
+  }
+  /* Animated particle on edges */
+  .flow-edge .particle {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--accent-cyan);
+    box-shadow: 0 0 6px var(--accent-cyan);
+    animation: flow-particle 2s linear infinite;
+  }
+  @keyframes flow-particle {
+    0% { left: 0; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { left: calc(100% - 4px); opacity: 0; }
+  }
+  .flow-edge:nth-of-type(2) .particle { animation-delay: 0.5s; }
+  .flow-edge:nth-of-type(3) .particle { animation-delay: 1s; }
+  .flow-edge:nth-of-type(4) .particle { animation-delay: 1.5s; }
+
+  /* Files list */
+  .files-section {
+    animation: fadeUp 0.8s ease-out 0.8s both;
+  }
+  .files-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .files-table th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-label);
+    text-align: left;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border-dim);
+    font-weight: 400;
+  }
+  .files-table td {
+    padding: 14px 24px;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(255,255,255,0.02);
+    vertical-align: top;
+  }
+  .files-table tr:last-child td { border-bottom: none; }
+  .files-table tr:hover td { background: rgba(255,255,255,0.015); }
+  .files-table .file-path {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent-cyan);
+  }
+  .files-table .file-change { color: var(--text-secondary); font-weight: 300; }
+  .files-table .file-lines {
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .lines-add { color: var(--gate-green); }
+  .lines-remove { color: var(--gate-red); }
+
+  /* Footer */
+  .footer {
+    margin-top: 80px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border-dim);
+    display: flex;
+    justify-content: space-between;
+    animation: fadeUp 0.8s ease-out 0.9s both;
+  }
+  .footer-text {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-label);
+    letter-spacing: 1px;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .page { padding: 32px 20px 60px; }
+    .stats-bar { flex-direction: column; }
+    .comparison-grid { grid-template-columns: 1fr; }
+    .flow-pipeline { flex-wrap: wrap; justify-content: center; gap: 8px; }
+    .flow-edge { width: 24px; }
+    .layer { padding: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="ambient">
+  <div class="orb"></div>
+  <div class="orb"></div>
+  <div class="orb"></div>
+</div>
+
+<div class="page">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="eyebrow">AI Village &mdash; Werewolf Mode</div>
+    <h1>Memory <em>Architecture</em></h1>
+    <p class="subtitle">Three-layer memory system for autonomous agents in social deduction games. Fixes 4 corruption bugs found in production data analysis.</p>
+  </header>
+
+  <!-- Stats bar -->
+  <div class="stats-bar">
+    <div class="stat stat--broken">
+      <div class="stat-label">Spam Rate</div>
+      <div class="stat-value">19%</div>
+      <div class="stat-note">Identical "think carefully" observations</div>
+    </div>
+    <div class="stat stat--fixed">
+      <div class="stat-value">0%</div>
+      <div class="stat-note">After think spam removal</div>
+    </div>
+    <div class="stat stat--broken">
+      <div class="stat-label">Dead Agent Leaks</div>
+      <div class="stat-value">Active</div>
+      <div class="stat-note">Eliminated agents receive memories</div>
+    </div>
+    <div class="stat stat--fixed">
+      <div class="stat-value">Blocked</div>
+      <div class="stat-note">Alive guard on bystander notify</div>
+    </div>
+    <div class="stat stat--broken">
+      <div class="stat-label">Cross-Game</div>
+      <div class="stat-value">Leaking</div>
+      <div class="stat-note">DB not wiped on game start</div>
+    </div>
+    <div class="stat stat--fixed">
+      <div class="stat-value">Isolated</div>
+      <div class="stat-note">clearByAgent() on reset</div>
+    </div>
+  </div>
+
+  <!-- Three layers -->
+  <div class="section-label">Architecture Layers</div>
+  <div class="arch">
+
+    <!-- Layer 1: Working Memory -->
+    <div class="layer layer--working">
+      <div class="layer-header">
+        <span class="layer-num">01</span>
+        <span class="layer-name">Working Memory</span>
+        <span class="layer-badge badge--ephemeral">Ephemeral</span>
+      </div>
+      <p class="layer-desc">
+        Rebuilt from scratch every <code>decide()</code> call via <code>buildWerewolfSituation()</code>.
+        Never persisted. The agent's immediate awareness of the world.
+      </p>
+      <div class="layer-items">
+        <div class="layer-item">
+          <div class="item-label">Phase</div>
+          <div class="item-value">Night / Dawn / Day / Meeting / Vote</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Role</div>
+          <div class="item-value">Villager / Werewolf / Healer / Sheriff</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Alive Status</div>
+          <div class="item-value">Boolean from state.alive set</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Nearby Agents</div>
+          <div class="item-value">Positions within 3-tile radius</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Available Actions</div>
+          <div class="item-value">Phase-gated action menu</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Game Clock</div>
+          <div class="item-value">Current game hour + day number</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-connector">
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <svg viewBox="0 0 12 12"><path d="M6 0v10M2 6l4 5 4-5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </div>
+      <span class="flow-label">Events persist downward</span>
+    </div>
+
+    <!-- Layer 2: Episodic Memory -->
+    <div class="layer layer--episodic">
+      <div class="layer-header">
+        <span class="layer-num">02</span>
+        <span class="layer-name">Episodic Memory</span>
+        <span class="layer-badge badge--bounded">Per-Game &middot; Bounded</span>
+      </div>
+      <p class="layer-desc">
+        FourStreamMemory timeline &mdash; capped at <code>TIMELINE_MAX</code>.
+        All events pass through injection gates before storage. Wiped on each game start.
+        Smart eviction removes lowest-importance non-core item when full.
+      </p>
+      <div class="layer-items">
+        <div class="layer-item">
+          <div class="item-label">action_outcome</div>
+          <div class="item-value">Results of agent decisions</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">conversation</div>
+          <div class="item-value">Dialogue transcripts</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">observation</div>
+          <div class="item-value">Overheard speech, phase events (imp &ge; 7)</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">thought</div>
+          <div class="item-value">Internal reflections from cognition</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Eviction</div>
+          <div class="item-value">Lowest-importance first, core items protected</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">DB Backing</div>
+          <div class="item-value">RDS memories table + TF-IDF embeddings</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-connector">
+      <div class="flow-arrow">
+        <div class="line"></div>
+        <svg viewBox="0 0 12 12"><path d="M6 0v10M2 6l4 5 4-5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      </div>
+      <span class="flow-label">Patterns crystallize downward</span>
+    </div>
+
+    <!-- Layer 3: Social Model -->
+    <div class="layer layer--social">
+      <div class="layer-header">
+        <span class="layer-num">03</span>
+        <span class="layer-name">Social Model</span>
+        <span class="layer-badge badge--structured">Structured</span>
+      </div>
+      <p class="layer-desc">
+        Structured per-agent knowledge built from episodic evidence.
+        Dossiers track relationships, beliefs encode suspicions, concerns drive goals.
+        Updated via reflection cycles after every 10 new memories.
+      </p>
+      <div class="layer-items">
+        <div class="layer-item">
+          <div class="item-label">Dossiers</div>
+          <div class="item-value">Per-agent trust, suspicion, vote patterns</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Beliefs</div>
+          <div class="item-value">"I think X is werewolf because&hellip;"</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Concerns</div>
+          <div class="item-value">Active goals and worries</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Learned Strategies</div>
+          <div class="item-value">Successful patterns from past rounds</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Learned Aversions</div>
+          <div class="item-value">Failed strategies to avoid</div>
+        </div>
+        <div class="layer-item">
+          <div class="item-label">Reflection Trigger</div>
+          <div class="item-value">Every 10 new memories &rarr; synthesis</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data Flow Pipeline -->
+  <div class="flow-section">
+    <div class="section-label">Memory Injection Pipeline</div>
+    <div class="flow-diagram">
+      <div class="flow-pipeline">
+        <div class="flow-node fn--source">
+          <div class="fn-label">Source</div>
+          <div class="fn-name">Event</div>
+          <div class="fn-detail">action / convo / observe</div>
+        </div>
+        <div class="flow-edge"><span class="particle"></span></div>
+        <div class="flow-node fn--gate">
+          <div class="fn-label">Gate 1</div>
+          <div class="fn-name">Dead Agent</div>
+          <div class="fn-detail">alive === false &rarr; drop</div>
+        </div>
+        <div class="flow-edge"><span class="particle"></span></div>
+        <div class="flow-node fn--gate">
+          <div class="fn-label">Gate 2</div>
+          <div class="fn-name">Spam Filter</div>
+          <div class="fn-detail">static "think" text removed</div>
+        </div>
+        <div class="flow-edge"><span class="particle"></span></div>
+        <div class="flow-node fn--gate">
+          <div class="fn-label">Gate 3</div>
+          <div class="fn-name">Dedup</div>
+          <div class="fn-detail">all types &middot; last 10 &middot; 5-word match</div>
+        </div>
+        <div class="flow-edge"><span class="particle"></span></div>
+        <div class="flow-node fn--store">
+          <div class="fn-label">Store</div>
+          <div class="fn-name">Timeline</div>
+          <div class="fn-detail">DB + in-memory</div>
+        </div>
+        <div class="flow-edge"><span class="particle"></span></div>
+        <div class="flow-node fn--evict">
+          <div class="fn-label">Eviction</div>
+          <div class="fn-name">Smart Prune</div>
+          <div class="fn-detail">lowest importance first</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gates Detail -->
+  <div class="gates-section">
+    <div class="section-label">Implemented Gates</div>
+    <div class="gates-grid">
+
+      <div class="gate-card">
+        <div class="gate-status gate-status--active"><span class="dot"></span> New Gate</div>
+        <div class="gate-title">Dead Agent Guard</div>
+        <div class="gate-desc">Eliminated agents no longer accumulate overhearing memories. Single line check on <code>bystander.alive</code> in the notification loop.</div>
+        <div class="gate-file">engine.ts<span class="line-num">:1860</span></div>
+      </div>
+
+      <div class="gate-card">
+        <div class="gate-status gate-status--removed"><span class="dot"></span> Removed</div>
+        <div class="gate-title">Think Spam Source</div>
+        <div class="gate-desc">Static "think carefully" observation was the #1 spam source at 19% of all memories. The <code>addMemory</code> call is removed entirely &mdash; the decide cycle already re-evaluates evidence.</div>
+        <div class="gate-file">agent-controller.ts<span class="line-num">:2199</span></div>
+      </div>
+
+      <div class="gate-card">
+        <div class="gate-status gate-status--active"><span class="dot"></span> Upgraded</div>
+        <div class="gate-title">Universal Dedup</div>
+        <div class="gate-desc">Previously only checked <code>action_outcome</code> in last 3. Now checks all memory types in last 10 items, matching on first 5 words. Catches observation and conversation spam.</div>
+        <div class="gate-file">four-stream.ts<span class="line-num">:326</span></div>
+      </div>
+
+      <div class="gate-card">
+        <div class="gate-status gate-status--active"><span class="dot"></span> New Gate</div>
+        <div class="gate-title">Game-Scoped DB Wipe</div>
+        <div class="gate-desc"><code>reset()</code> now calls <code>clearByAgent()</code> on the backing store, issuing <code>DELETE FROM memories</code>. Prevents cross-game role contamination on server restart.</div>
+        <div class="gate-file">four-stream.ts<span class="line-num">:191</span></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Before / After -->
+  <div class="comparison">
+    <div class="section-label">Before &amp; After</div>
+    <div class="comparison-grid">
+
+      <div class="comp-panel comp-panel--before">
+        <div class="comp-label">Before</div>
+        <div class="comp-item">
+          <span class="comp-icon">&times;</span>
+          <span class="comp-text">19% of memories are <strong>identical "think carefully"</strong> spam</span>
+        </div>
+        <div class="comp-item">
+          <span class="comp-icon">&times;</span>
+          <span class="comp-text">Dead agents <strong>accumulate overhearing memories</strong> they can never act on</span>
+        </div>
+        <div class="comp-item">
+          <span class="comp-icon">&times;</span>
+          <span class="comp-text">Server restart <strong>reloads memories from previous games</strong> &mdash; agents "remember" who was wolf</span>
+        </div>
+        <div class="comp-item">
+          <span class="comp-icon">&times;</span>
+          <span class="comp-text">Dedup only catches <strong>action_outcome duplicates in last 3 items</strong></span>
+        </div>
+      </div>
+
+      <div class="comp-panel comp-panel--after">
+        <div class="comp-label">After</div>
+        <div class="comp-item">
+          <span class="comp-icon">&check;</span>
+          <span class="comp-text">Think action triggers <strong>zero memory writes</strong> &mdash; decide cycle handles evidence</span>
+        </div>
+        <div class="comp-item">
+          <span class="comp-icon">&check;</span>
+          <span class="comp-text">Dead agents are <strong>skipped in bystander notification</strong> loop</span>
+        </div>
+        <div class="comp-item">
+          <span class="comp-icon">&check;</span>
+          <span class="comp-text"><code>clearByAgent()</code> <strong>wipes DB on game start</strong> &mdash; clean slate every round</span>
+        </div>
+        <div class="comp-item">
+          <span class="comp-icon">&check;</span>
+          <span class="comp-text">All types deduped in <strong>last 10 items, 5-word prefix match</strong></span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Files Modified -->
+  <div class="files-section">
+    <div class="section-label">Files Modified</div>
+    <table class="files-table">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Change</th>
+          <th>Delta</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="file-path">agent-controller.ts</span></td>
+          <td class="file-change">Remove think spam memory call</td>
+          <td class="file-lines"><span class="lines-remove">&minus;8</span></td>
+        </tr>
+        <tr>
+          <td><span class="file-path">engine.ts</span></td>
+          <td class="file-change">Dead agent guard in notifyConversationBystanders</td>
+          <td class="file-lines"><span class="lines-add">+1</span></td>
+        </tr>
+        <tr>
+          <td><span class="file-path">four-stream.ts</span></td>
+          <td class="file-change">Widen dedup to all types + DB wipe in reset()</td>
+          <td class="file-lines"><span class="lines-add">+6</span> <span class="lines-remove">&minus;4</span></td>
+        </tr>
+        <tr>
+          <td><span class="file-path">ai-engine/index.ts</span></td>
+          <td class="file-change">clearByAgent on MemoryStore interface</td>
+          <td class="file-lines"><span class="lines-add">+1</span></td>
+        </tr>
+        <tr>
+          <td><span class="file-path">rds-store.ts</span></td>
+          <td class="file-change">Implement clearByAgent (DELETE FROM memories)</td>
+          <td class="file-lines"><span class="lines-add">+9</span></td>
+        </tr>
+        <tr>
+          <td><span class="file-path">in-memory.ts</span></td>
+          <td class="file-change">Implement clearByAgent (filter + embedder reset)</td>
+          <td class="file-lines"><span class="lines-add">+5</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer class="footer">
+    <span class="footer-text">AI Village &mdash; Werewolf Memory Architecture v2</span>
+    <span class="footer-text">2026-04-15</span>
+  </footer>
+
+</div>
+
+</body>
+</html>

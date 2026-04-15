@@ -1,11 +1,11 @@
 import type { Server } from 'socket.io';
 import type { Agent, AgentConfig, BoardPost, BoardPostType, WorldSnapshot, Weather, Building, Technology, WorldObject } from '@ai-village/shared';
 import { EventBus, deriveRewardWeights, DEFAULT_REWARD_WEIGHTS } from '@ai-village/shared';
-import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, VoyageEmbeddingProvider, OpenAIEmbeddingProvider, SEASONS, getMapConfig, buildWerewolfRules } from '@ai-village/ai-engine';
+import { AgentCognition, InMemoryStore, RdsMemoryStore, AnthropicProvider, ThrottledProvider, TieredMemory, FourStreamMemory, VoyageEmbeddingProvider, OpenAIEmbeddingProvider, SEASONS, buildWerewolfRules } from '@ai-village/ai-engine';
 import type { EmbeddingProvider } from '@ai-village/ai-engine';
 import type { WorldViewParts } from '@ai-village/ai-engine';
 import type { MapConfig } from '@ai-village/shared';
-import { getAreaEntrance, setActiveMap } from '../map/map-provider.js';
+import type { MapFunctions } from '../map/map-provider.js';
 import { buildStartingWorldViewParts } from '../map/starting-knowledge.js';
 import { World } from './world.js';
 import { EventBroadcaster } from './events.js';
@@ -13,7 +13,6 @@ import { ConversationManager } from './conversation/index.js';
 import { AgentController } from './agent-controller.js';
 import { DecisionQueue } from './decision-queue.js';
 import { ViewportManager } from './viewport-manager.js';
-import { getAreas } from '../map/map-provider.js';
 import { RdsPersistence, type ControllerData, VersionConflictError } from '../persistence/rds.js';
 import type { ControllerState } from './agent-controller.js';
 import { VillageNarrator } from './narrator.js';
@@ -29,7 +28,6 @@ export class SimulationEngine {
   private static readonly SPAWN_AREAS = ['plaza', 'cafe', 'park', 'market', 'garden', 'tavern', 'bakery'];
 
   private world: World;
-  private mapConfig: MapConfig = getMapConfig('village');
   readonly bus: EventBus = new EventBus();
   private controllers: Map<string, AgentController> = new Map();
   private conversationManager!: ConversationManager;
@@ -72,9 +70,9 @@ export class SimulationEngine {
   private static readonly DB_HEALTH_CIRCUIT_THRESHOLD = 3;   // open after 3 consecutive failures
   private static readonly DB_HEALTH_CIRCUIT_RESET_MS = 30_000; // re-try after 30 s
 
-  // Distributed leader election — only the leader Pod runs the simulation tick loop.
-  // Followers serve HTTP/WS reads from Redis snapshot. No-Redis fallback: always leader.
-  private readonly leaderElection: LeaderElection = new LeaderElection();
+  // Distributed leader election — one leader per Pod (process-level), shared across
+  // all engines in the EngineRegistry. Injected so multiple maps in one process
+  // don't each create a competing lock.
   // Optimistic lock version for world_state row — incremented on each successful save.
   private worldStateVersion: number = 0;
   // Guard: true while loadFromRds() is in flight after a VersionConflictError.
@@ -85,9 +83,17 @@ export class SimulationEngine {
   // instead of starting a second parallel load that could corrupt world state.
   private _loadFromRdsInFlight: Promise<void> | null = null;
 
-  constructor(private io: Server) {
-    this.world = new World();
+  constructor(
+    private io: Server,
+    private mapConfig: MapConfig,
+    private map: MapFunctions,
+    private readonly leaderElection: LeaderElection,
+  ) {
+    this.world = new World(this.map);
     this.decisionQueue = new DecisionQueue(SimulationEngine.MAX_CONCURRENT_LLM);
+    // Werewolf manager must be wired up at construction time for maps with the
+    // werewolf system enabled, so that the first tick sees the manager in place.
+    // (Previously this happened inside setMapConfig on every switch.)
 
     const dbHost = process.env.DB_HOST;
     const dbUser = process.env.DB_USER;
@@ -113,64 +119,8 @@ export class SimulationEngine {
 
   private cachedGameRules: string | null = null;
 
-  async setMapConfig(mapId: string): Promise<void> {
-    const oldMapId = this.mapConfig.id;
-    if (mapId === oldMapId) return;
-
-    const wasRunning = this.isRunning;
-    this.pause();
-
-    // 1. Save current map's state to DB
-    if (this.persistence && this.leaderElection.isLeader) {
-      try {
-        const newVersion = await this.persistence.saveAll(
-          this.world, this.controllers, this.agentApiKeys, oldMapId,
-        );
-        this.worldStateVersion = newVersion;
-        console.log(`[Engine] Saved ${oldMapId} state before switching`);
-      } catch (err) {
-        console.error(`[Engine] Failed to save ${oldMapId} state:`, (err as Error).message);
-      }
-    }
-
-    // 2. Clear in-memory state
-    this.controllers.clear();
-    this.cognitions.clear();
-    this.throttles.clear();
-    if (this.decisionQueue) this.decisionQueue.clear();
-    this.world.agents.clear();
-    this.world.conversations.clear();
-    this.lastConversationPair.clear();
-    this.worldStateVersion = 0;
-
-    // 3. Switch map config + provider
-    this.mapConfig = getMapConfig(mapId);
-    this.cachedGameRules = null;
-    setActiveMap(mapId);
-
-    // 3b. Werewolf — instantiate or dispose phase manager
-    if (this.werewolfManager) {
-      this.werewolfManager.dispose();
-      this.werewolfManager = null;
-    }
-    if (this.mapConfig.systems?.werewolf) {
-      this.werewolfManager = new WerewolfPhaseManager(
-        this.bus, this.world, this.broadcaster,
-        this.controllers, this.cognitions, this.conversationManager,
-      );
-    }
-
-    console.log(`[Engine] Map set to: ${this.mapConfig.name} (${this.mapConfig.id})`);
-
-    // 4. Load new map's state from DB
-    if (this.persistence) {
-      await this.loadFromRds();
-    }
-
-    // 5. Resume if was running
-    if (wasRunning) {
-      this.start();
-    }
+  get mapId(): string {
+    return this.mapConfig.id;
   }
 
   private getGameRules(): string {
@@ -235,10 +185,19 @@ export class SimulationEngine {
       if (ctrl) ctrl.state = 'idle';
     }
 
-    const agentIds = Array.from(this.world.agents.values())
-      .filter(a => a.state !== 'away')
-      .map(a => a.id);
-    this.werewolfManager.startGame(agentIds);
+    // Position all agents in a circle around campfire before starting
+    const activeAgents = Array.from(this.world.agents.values()).filter(a => a.state !== 'away');
+    const campX = 15, campY = 15, radius = 3;
+    activeAgents.forEach((agent, i) => {
+      const angle = (i / activeAgents.length) * Math.PI * 2;
+      const pos = {
+        x: Math.round(campX + Math.cos(angle) * radius),
+        y: Math.round(campY + Math.sin(angle) * radius),
+      };
+      this.world.updateAgentPosition(agent.id, pos);
+    });
+
+    this.werewolfManager.startGame(activeAgents.map(a => a.id));
   }
 
   /**
@@ -284,15 +243,41 @@ export class SimulationEngine {
       ctrl.werewolfManager = this.werewolfManager;
     }
 
-    // 5. Broadcast new game — client revives sprites and clears state
+    // 4. Reset world clock to Day 1, 21:00 — first night starts immediately
+    this.world.time = { day: 1, hour: 21, minute: 0, totalMinutes: 21 * 60 };
+    this.broadcaster.worldTime(this.world.time);
+
+    // 5. Broadcast new game BEFORE startGame — clears client state so role reveals aren't wiped
     this.broadcaster.werewolfNewGame();
 
-    console.log('[Engine] Werewolf game reset — waiting for Start Game');
+    // 6. Reposition agents in a circle around campfire + broadcast revive
+    const aliveAgents = Array.from(this.world.agents.values()).filter(a => a.state !== 'away');
+    const campX = 15, campY = 15, radius = 3;
+    aliveAgents.forEach((agent, i) => {
+      const angle = (i / aliveAgents.length) * Math.PI * 2;
+      const pos = {
+        x: Math.round(campX + Math.cos(angle) * radius),
+        y: Math.round(campY + Math.sin(angle) * radius),
+      };
+      this.world.updateAgentPosition(agent.id, pos);
+      this.broadcaster.agentRevive(agent.id);
+    });
+
+    // 7. Start fresh game — filter out away agents (same as startWerewolfGame)
+    const agentIds = Array.from(this.world.agents.values())
+      .filter(a => a.state !== 'away')
+      .map(a => a.id);
+    this.werewolfManager.startGame(agentIds);
+
+    console.log('[Engine] Werewolf game reset — new game started');
   }
 
   async initialize(): Promise<void> {
     // Create broadcaster with viewport-aware filtering
-    this.broadcaster = new EventBroadcaster(this.io);
+    // Scope every broadcaster emit to this map's Socket.IO room. The room name
+    // matches the one sockets join in index.ts (`map:<id>`), so events can't
+    // leak to spectators of other maps running in the same process.
+    this.broadcaster = new EventBroadcaster(this.io, `map:${this.mapConfig.id}`);
     this.broadcaster.setViewportManager(this.viewportManager);
     this.broadcaster.setPositionLookup((agentId) => this.world.getAgent(agentId)?.position);
 
@@ -341,42 +326,20 @@ export class SimulationEngine {
     // Wire bystander notification when conversations end
     this.conversationManager.onConversationEnd = (conv) => this.notifyConversationBystanders(conv);
 
-    // Distributed leader election: only one Pod runs the simulation tick loop.
-    // Followers serve HTTP/WS reads; the leader writes state to Redis for them.
-    const leaderAcquired = await this.leaderElection.tryAcquire();
-    console.log(`[Engine] ${leaderAcquired ? 'Leadership acquired' : 'Running as follower'} (podId=${this.leaderElection.podId})`);
-
-    // Callback invoked when heartbeat renewal fails (e.g. Redis TTL expired or evicted).
-    // Pause the simulation immediately so the stale leader doesn't overwrite new state.
-    this.leaderElection.onLeadershipLost = () => {
-      console.error('[Engine] Leadership lost — pausing simulation tick');
-      this.pause();
-      this.isReloadingState = true; // prevent stale saves while state is being refreshed
-      // Poll until we re-acquire; another Pod may already be the leader by then.
-      this.leaderElection.startRetrying(() => {
-        console.log('[Engine] Leadership re-acquired — restarting simulation tick');
-        this.loadFromRds()
-          .then(() => { this.isReloadingState = false; this.start(); })
-          .catch((err: unknown) => {
-            console.error('[Engine] Re-acquire reload failed:', (err as Error).message);
-            this.isReloadingState = false;
-          });
-      });
-    };
-
-    // Non-leader follower: keep polling so it can promote if the leader dies.
-    if (!leaderAcquired) {
-      this.isReloadingState = true; // follower starts in reload-pending state
-      this.leaderElection.startRetrying(() => {
-        console.log('[Engine] Follower promoted to leader — starting simulation tick');
-        this.loadFromRds()
-          .then(() => { this.isReloadingState = false; this.start(); })
-          .catch((err: unknown) => {
-            console.error('[Engine] Follower promotion reload failed:', (err as Error).message);
-            this.isReloadingState = false;
-          });
-      });
+    // Werewolf phase manager — created once per engine lifetime for maps with
+    // the werewolf system enabled. Previously re-created on every setMapConfig()
+    // swap; now engines are pinned to one map, so one-shot wiring is sufficient.
+    if (this.mapConfig.systems?.werewolf) {
+      this.werewolfManager = new WerewolfPhaseManager(
+        this.bus, this.world, this.broadcaster,
+        this.controllers, this.cognitions, this.conversationManager,
+      );
     }
+
+    // Leader election is owned by the EngineRegistry at the process level — all
+    // engines in one process share a single Redis lock, so this engine only reads
+    // `leaderElection.isLeader` to gate writes. Acquisition, onLeadershipLost, and
+    // follower retry are wired once in EngineRegistry.initializeAll().
 
     // Restore from RDS if persistence is enabled
     if (this.persistence) {
@@ -711,6 +674,27 @@ export class SimulationEngine {
     });
 
     console.log(`[Engine] AI Village initialized (no starter agents — users create agents via UI)`);
+  }
+
+  /**
+   * Mark the engine as in a "reloading" state. Called by the registry when the
+   * process loses or is waiting on leadership — blocks save_requested so stale
+   * in-memory state can't clobber authoritative RDS rows before reload completes.
+   */
+  markReloading(): void {
+    this.isReloadingState = true;
+  }
+
+  /**
+   * Reload world state from RDS and clear the reloading flag. Called by the
+   * registry after the process (re-)acquires leadership, before restarting ticks.
+   */
+  async reloadFromPersistence(): Promise<void> {
+    try {
+      await this.loadFromRds();
+    } finally {
+      this.isReloadingState = false;
+    }
   }
 
   /**
@@ -1062,21 +1046,22 @@ export class SimulationEngine {
   addAgent(config: AgentConfig, wakeHour: number = 7, sleepHour: number = 23, startingCurrency: number = 0, apiKey?: string, model?: string, ownerId?: string): Agent {
     const id = crypto.randomUUID();
 
-    // Pick spawn position — werewolf: clustered around campfire; village: random area
+    // Pick spawn position — werewolf: evenly spaced circle around campfire; village: random area
     let spawnArea: string;
     let spawnPos: { x: number; y: number };
     if (this.mapConfig.systems?.werewolf) {
       spawnArea = 'clearing';
-      // Spread agents in a ring around campfire center (15,15)
-      const angle = Math.random() * Math.PI * 2;
-      const radius = 2 + Math.random() * 2; // 2-4 tiles from center
+      // Count existing agents to compute even spacing around campfire (15,15)
+      const existingCount = this.world.agents.size;
+      const angle = (existingCount / Math.max(existingCount + 1, 8)) * Math.PI * 2;
+      const radius = 3;
       spawnPos = {
         x: Math.round(15 + Math.cos(angle) * radius),
         y: Math.round(15 + Math.sin(angle) * radius),
       };
     } else {
       spawnArea = this.mapConfig.spawnAreas[Math.floor(Math.random() * this.mapConfig.spawnAreas.length)];
-      spawnPos = getAreaEntrance(spawnArea);
+      spawnPos = this.map.getAreaEntrance(spawnArea);
     }
 
     const agent: Agent = {
@@ -1353,7 +1338,7 @@ export class SimulationEngine {
     agent.currentAction = 'returning to village';
     this.world.updateAgentState(id, 'idle', 'returning to village');
 
-    const spawnPos = getAreaEntrance('plaza');
+    const spawnPos = this.map.getAreaEntrance('plaza');
     this.world.updateAgentPosition(id, spawnPos);
     agent.position = { ...spawnPos };
 
@@ -1484,7 +1469,7 @@ export class SimulationEngine {
     });
 
     // Place at plaza
-    const spawnPos = getAreaEntrance('plaza');
+    const spawnPos = this.map.getAreaEntrance('plaza');
     this.world.updateAgentPosition(id, spawnPos);
     agent.position = { ...spawnPos };
     agent.currentAction = 'resurrected';
@@ -1555,7 +1540,7 @@ export class SimulationEngine {
       } catch (err) {
         console.error('[Engine] CRITICAL: tick() threw — simulation paused to prevent corrupt state:', err);
         this.pause();
-        this.io.emit('engine:error', { message: 'Simulation tick failed', error: String(err) });
+        this.broadcaster.raw('engine:error', { message: 'Simulation tick failed', error: String(err) });
       }
     }, 83); // 12x speed: 1 game minute = 83ms real time (~3x previous)
 
@@ -1608,15 +1593,10 @@ export class SimulationEngine {
       this.decisionInterval = null;
     }
 
-    // Capture leadership status BEFORE release() sets _isLeader=false.
     // Follower Pods must NOT write world state — they hold a stale in-memory copy and
-    // would silently overwrite the leader's authoritative state.
+    // would silently overwrite the leader's authoritative state. Leader lock release
+    // is the registry's responsibility (all engines share one lock).
     const wasLeader = this.leaderElection.isLeader;
-
-    // Release leader lock before closing DB so the next Pod can acquire immediately.
-    // destroy() also stops heartbeat + retry timers.
-    await this.leaderElection.release();
-    this.leaderElection.destroy();
 
     if (this.persistence) {
       if (wasLeader) {
@@ -1692,7 +1672,7 @@ export class SimulationEngine {
           if (summary) {
             this.cachedWeeklySummary = summary;
             this.lastWeeklySummaryDay = time.day;
-            this.io.emit('weekly-summary:ready', { summary });
+            this.broadcaster.raw('weekly-summary:ready', { summary });
             console.log(`[WeeklySummary] Generated for Day ${time.day} (${summary.length} chars)`);
           } else {
             console.log(`[WeeklySummary] Returned null — no API key or empty response`);
@@ -1735,7 +1715,7 @@ export class SimulationEngine {
 
       const nearby = this.world.getNearbyAgents(agent.position, 5)
         .filter(a => a.id !== agentId);
-      const nearbyAreas = getAreas().filter(area => {
+      const nearbyAreas = this.map.getAreas().filter(area => {
         const cx = area.bounds.x + area.bounds.width / 2;
         const cy = area.bounds.y + area.bounds.height / 2;
         const dx = agent.position.x - cx;
@@ -1877,6 +1857,7 @@ export class SimulationEngine {
     for (const bystander of nearbyAgents) {
       if (conv.participants.includes(bystander.id)) continue;
       if (bystander.state === 'sleeping') continue;
+      if (bystander.alive === false) continue; // dead agents don't overhear
       const participantNames = conv.participants
         .map(id => this.world.getAgent(id)?.config.name)
         .filter(Boolean).join(' and ');
@@ -2172,6 +2153,11 @@ export class SimulationEngine {
 
   getCharacterTimeline(agentId: string, limit?: number) {
     return this.characterTimeline.getTimeline(agentId, limit);
+  }
+
+  /** O(1) membership check used by EngineRegistry.findByAgentId(). */
+  hasAgent(agentId: string): boolean {
+    return this.world.agents.has(agentId);
   }
 
   async generateThoughtFor(agentId: string): Promise<string | null> {
@@ -3114,14 +3100,14 @@ Answer with ONLY one word: "support" or "oppose".`,
     // 2. Wipe RDS data (agents, memories, world_state, agent_controllers)
     if (this.persistence) {
       try {
-        await this.persistence.deleteAllAgents();
-        console.log('[FreshStart] All agents deleted');
+        await this.persistence.deleteAllAgents(this.mapConfig.id);
+        console.log(`[FreshStart] All agents deleted for map=${this.mapConfig.id}`);
       } catch (err) {
         console.error('[FreshStart] Failed to delete agents:', err);
       }
       try {
-        await this.persistence.deleteAllMemories();
-        console.log('[FreshStart] All memories deleted');
+        await this.persistence.deleteAllMemories(this.mapConfig.id);
+        console.log(`[FreshStart] All memories deleted for map=${this.mapConfig.id}`);
       } catch (err) {
         console.error('[FreshStart] Failed to delete memories:', err);
       }
@@ -3183,7 +3169,7 @@ Answer with ONLY one word: "support" or "oppose".`,
       const spawnArea = this.mapConfig.spawnAreas[
         Math.floor(Math.random() * this.mapConfig.spawnAreas.length)
       ];
-      const spawnPos = getAreaEntrance(spawnArea);
+      const spawnPos = this.map.getAreaEntrance(spawnArea);
       agent.position = { ...spawnPos };
       agent.state = 'idle';
       agent.currentAction = 'arriving';
@@ -3286,7 +3272,7 @@ Answer with ONLY one word: "support" or "oppose".`,
     // 5. Final cleanup — delete any stale memories that landed after first wipe, then re-seed
     if (this.persistence) {
       // Nuke everything
-      await this.persistence.deleteAllMemories();
+      await this.persistence.deleteAllMemories(this.mapConfig.id);
       // Re-seed identity memories for all agents
       for (const [agentId, cognition] of this.cognitions.entries()) {
         const agent = this.world.getAgent(agentId);
